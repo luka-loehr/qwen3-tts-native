@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
-use memmap2::Mmap;
+use memmap2::{Mmap, UncheckedAdvice};
 use safetensors::tensor::{View, serialize_to_file};
 use safetensors::{Dtype, SafeTensors};
 use serde_json::{Map, Value, json};
@@ -258,6 +258,9 @@ pub fn pack_artifact(options: &PackOptions) -> Result<Value> {
         options.codec_dtype,
         &packed_codec,
     )?;
+    drop(codec_tensors);
+    release_all_mapping_pages(&codec_mapping, "source speech tokenizer")?;
+    drop(codec_mapping);
     let packed_codec_file = File::open(&packed_codec)
         .with_context(|| format!("failed to open {}", packed_codec.display()))?;
     // SAFETY: The newly written checkpoint is immutable during this read-only
@@ -267,8 +270,12 @@ pub fn pack_artifact(options: &PackOptions) -> Result<Value> {
     let packed_codec_tensors = SafeTensors::deserialize(&packed_codec_mapping)
         .with_context(|| format!("invalid packed checkpoint {}", packed_codec.display()))?;
     validate_tensors(&packed_codec_tensors, &decoder_contract)?;
-    let voice_tensor_index = build_tensor_index(&voice_tensors, &voice_contract)?;
-    let decoder_tensor_index = build_tensor_index(&packed_codec_tensors, &decoder_contract)?;
+    drop(packed_codec_tensors);
+    drop(voice_tensors);
+    let voice_tensor_index = build_tensor_index(&voice_mapping, &voice_contract)?;
+    let decoder_tensor_index = build_tensor_index(&packed_codec_mapping, &decoder_contract)?;
+    drop(voice_mapping);
+    drop(packed_codec_mapping);
 
     let codec_record = hash_regular_file(
         &packed_codec,
@@ -515,20 +522,30 @@ fn snapshot_revision(source: &Path) -> Result<String> {
     Ok(revision.to_ascii_lowercase())
 }
 
-fn build_tensor_index(tensors: &SafeTensors<'_>, contract: &TensorContract) -> Result<Vec<Value>> {
+fn build_tensor_index(mapping: &Mmap, contract: &TensorContract) -> Result<Vec<Value>> {
     let mut offset_bytes = 0_u64;
     let mut index = Vec::with_capacity(contract.tensor_count);
     for (name, spec) in &contract.tensors {
-        let tensor = tensors
-            .tensor(name)
-            .with_context(|| format!("{} is missing tensor {name}", contract.label))?;
-        if tensor.dtype() != spec.dtype
-            || tensor.shape() != spec.shape
-            || tensor.data().len() as u64 != spec.bytes
-        {
-            bail!("{} tensor {name} changed after validation", contract.label);
-        }
-        let sha256 = to_hex(&digest_bytes(tensor.data()));
+        let (sha256, mapping_offset, mapped_bytes) = {
+            let tensors = SafeTensors::deserialize(mapping)
+                .with_context(|| format!("{} metadata became invalid", contract.label))?;
+            let tensor = tensors
+                .tensor(name)
+                .with_context(|| format!("{} is missing tensor {name}", contract.label))?;
+            if tensor.dtype() != spec.dtype
+                || tensor.shape() != spec.shape
+                || tensor.data().len() as u64 != spec.bytes
+            {
+                bail!("{} tensor {name} changed after validation", contract.label);
+            }
+            let data = tensor.data();
+            let mapping_offset = (data.as_ptr() as usize)
+                .checked_sub(mapping.as_ptr() as usize)
+                .context("tensor payload is outside its memory mapping")?;
+            let mapped_bytes = data.len();
+            let sha256 = to_hex(&digest_bytes(data));
+            (sha256, mapping_offset, mapped_bytes)
+        };
         index.push(json!({
             "name": name,
             "component": tensor_component(name),
@@ -539,6 +556,7 @@ fn build_tensor_index(tensors: &SafeTensors<'_>, contract: &TensorContract) -> R
             "bytes": spec.bytes,
             "sha256": sha256,
         }));
+        release_mapping_range(mapping, mapping_offset, mapped_bytes, name)?;
         offset_bytes = offset_bytes
             .checked_add(spec.bytes)
             .context("tensor arena offset overflowed")?;
@@ -551,6 +569,38 @@ fn build_tensor_index(tensors: &SafeTensors<'_>, contract: &TensorContract) -> R
         );
     }
     Ok(index)
+}
+
+fn release_mapping_range(mapping: &Mmap, offset: usize, bytes: usize, label: &str) -> Result<()> {
+    let end = offset
+        .checked_add(bytes)
+        .context("mapped tensor range overflowed")?;
+    if end > mapping.len() {
+        bail!(
+            "mapped tensor {label} ends at byte {end}, beyond mapping size {}",
+            mapping.len()
+        );
+    }
+    // SAFETY: Every SafeTensors view was dropped before this call. The map is
+    // read-only, backed by an immutable regular artifact file, and no other
+    // thread can mutate it. A later access therefore faults in identical data.
+    unsafe {
+        mapping
+            .unchecked_advise_range(UncheckedAdvice::DontNeed, offset, bytes)
+            .with_context(|| format!("failed to release mapped pages for tensor {label}"))?;
+    }
+    Ok(())
+}
+
+fn release_all_mapping_pages(mapping: &Mmap, label: &str) -> Result<()> {
+    // SAFETY: The last SafeTensors view was explicitly dropped by the caller;
+    // the read-only source file is immutable for this pack operation.
+    unsafe {
+        mapping
+            .unchecked_advise(UncheckedAdvice::DontNeed)
+            .with_context(|| format!("failed to release mapped pages for {label}"))?;
+    }
+    Ok(())
 }
 
 fn tensor_component(name: &str) -> &'static str {
