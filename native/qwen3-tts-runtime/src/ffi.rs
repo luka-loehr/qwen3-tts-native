@@ -323,7 +323,7 @@ unsafe fn prepare_value_output<T: Default>(
 }
 
 unsafe fn borrow_handle<'a, T>(pointer: *mut T, message: &'static str) -> Result<&'a T, CallError> {
-    validate_mut_handle(pointer, message)?;
+    unsafe { validate_mut_handle(pointer, message)? };
     Ok(unsafe { &*pointer })
 }
 
