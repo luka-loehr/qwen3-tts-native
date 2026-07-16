@@ -1,8 +1,7 @@
-mod ffi;
-mod model;
 mod reference;
 
 use ffi::{Api, CODEBOOKS, MAX_PACKET_FRAMES, MAX_PACKET_SAMPLES, STATUS_STATE};
+use qwen3_tts_native_codec::{ffi, model};
 use reference::ReferenceState;
 use serde_json::{Value, json};
 use std::error::Error;

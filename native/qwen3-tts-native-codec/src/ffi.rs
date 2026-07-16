@@ -27,7 +27,7 @@ pub struct Config {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct StateInfo {
     pub frame_position: u64,
     pub emitted_samples: u64,
@@ -44,7 +44,7 @@ pub struct StateInfo {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct PacketResult {
     pub first_frame_position: u64,
     pub first_sample_position: u64,

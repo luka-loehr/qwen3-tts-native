@@ -271,4 +271,26 @@ mod tests {
         assert_eq!(payload.len(), 8);
         assert_eq!(model.decoder_tensor_count(), 1);
     }
+
+    #[test]
+    fn parses_minimal_bf16_file() {
+        let header = r#"{"decoder.test":{"dtype":"BF16","shape":[2],"data_offsets":[0,4]}}"#;
+        let padded = format!("{header:<128}");
+        let mut bytes = (padded.len() as u64).to_le_bytes().to_vec();
+        bytes.extend_from_slice(padded.as_bytes());
+        bytes.extend_from_slice(&[0x80, 0x3f, 0x00, 0x40]);
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock is after epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("qwen3-tts-codec-bf16-{nonce}.safetensors"));
+        fs::write(&path, bytes).expect("write fixture");
+        let model = SafetensorsFile::open(&path).expect("parse fixture");
+        fs::remove_file(path).expect("remove fixture");
+        let (entry, payload) = model.tensor("decoder.test").expect("tensor exists");
+        assert_eq!(entry.dtype, TensorDType::Bf16);
+        assert_eq!(entry.shape, [2]);
+        assert_eq!(payload, [0x80, 0x3f, 0x00, 0x40]);
+        assert_eq!(model.decoder_dtype_counts(), (0, 1));
+    }
 }
