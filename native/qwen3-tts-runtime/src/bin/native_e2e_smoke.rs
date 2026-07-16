@@ -3,6 +3,7 @@ use std::error::Error;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Instant;
 
 use qwen3_tts_native::native_talker::{
@@ -52,27 +53,23 @@ fn main() {
 fn run() -> Result<(), Box<dyn Error>> {
     let arguments = parse_arguments()?;
     let talker_load_started = Instant::now();
-    let mut talker = NativeTalker::load(
-        &arguments.talker_library,
-        &arguments.model_root,
-        0,
-        arguments.max_sequence,
-        arguments.seed,
-    )?;
+    let talker = NativeTalker::load(&arguments.talker_library, &arguments.model_root, 0)?;
     let talker_load_milliseconds = talker_load_started.elapsed().as_secs_f64() * 1_000.0;
 
     let codec_load_started = Instant::now();
-    let codec_library = NativeCodecLibrary::load(&arguments.codec_library)?;
+    let codec_library = Arc::new(NativeCodecLibrary::load(&arguments.codec_library)?);
     let decoder_weights = DecoderWeights::open(
         &arguments
             .model_root
             .join("speech_tokenizer/model.safetensors"),
     )?;
-    let mut codec = codec_library.create_codec(0).map_err(io::Error::other)?;
-    let codec_model = codec
-        .load_model(&decoder_weights)
+    let codec_model = codec_library
+        .load_shared_model(0, &decoder_weights)
         .map_err(io::Error::other)?;
-    codec.warmup().map_err(io::Error::other)?;
+    let codec_model_info = codec_model.model_info().map_err(io::Error::other)?;
+    let codec_model_memory = codec_model.memory_info().map_err(io::Error::other)?;
+    let mut codec = codec_model.start_session().map_err(io::Error::other)?;
+    let codec_session_memory = codec.memory_info().map_err(io::Error::other)?;
     let codec_load_and_warmup_milliseconds = codec_load_started.elapsed().as_secs_f64() * 1_000.0;
 
     let mut request = VoiceDesignRequest::new(
@@ -81,18 +78,20 @@ fn run() -> Result<(), Box<dyn Error>> {
         arguments.language.clone(),
     );
     request.max_frames = arguments.max_frames;
+    request.max_sequence_length = arguments.max_sequence;
     request.random_seed = arguments.seed;
     if arguments.greedy {
         request.talker_sampling = SamplingConfig::greedy();
         request.predictor_sampling = SamplingConfig::greedy();
     }
 
-    let talker_memory = talker.memory_usage();
+    let talker_shared_memory = talker.shared_memory();
     let pipeline_started = Instant::now();
     let prefill_started = Instant::now();
     let mut session = talker.start(request)?;
     let prefill_wall_milliseconds = prefill_started.elapsed().as_secs_f64() * 1_000.0;
     let prefill = session.prefill_result();
+    let talker_session_memory = session.memory_usage();
 
     let mut pcm = Vec::with_capacity(arguments.max_frames * SAMPLES_PER_FRAME);
     let mut pending_frames = Vec::<[u16; CODEBOOKS]>::with_capacity(arguments.packet_frames);
@@ -222,14 +221,23 @@ fn run() -> Result<(), Box<dyn Error>> {
             "final_semantic_token": final_semantic_token,
             "prefill_gpu_milliseconds": prefill.talker_gpu_milliseconds,
             "frames": frame_reports,
-            "memory": talker_memory,
+            "memory": {
+                "shared_model": talker_shared_memory,
+                "session": talker_session_memory,
+            },
         },
         "decoder": {
             "load_and_warmup_milliseconds": codec_load_and_warmup_milliseconds,
             "wall_milliseconds": decoder_wall_milliseconds,
-            "source_bytes": codec_model.source_bytes,
-            "device_bytes": codec_model.device_bytes,
-            "tensor_count": codec_model.tensor_count,
+            "source_bytes": codec_model_info.source_bytes,
+            "device_bytes": codec_model_info.device_bytes,
+            "tensor_count": codec_model_info.tensor_count,
+            "memory": {
+                "shared_weight_device_bytes": codec_model_memory.shared_weight_device_bytes,
+                "transient_upload_device_bytes": codec_model_memory.transient_upload_device_bytes,
+                "session_device_bytes": codec_session_memory.device_bytes,
+                "session_host_pinned_bytes": codec_session_memory.host_pinned_bytes,
+            },
             "packets": packet_reports,
         },
         "audio": {
