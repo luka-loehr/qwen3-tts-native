@@ -15,7 +15,7 @@ use crate::contract::{
     CodecWeightDtype, TensorContract, speech_decoder_contract, speech_tokenizer_contract,
     validate_tensors, voice_design_contract,
 };
-use crate::sha256::{digest_reader, to_hex};
+use crate::sha256::{digest_bytes, digest_reader, to_hex};
 
 const MODEL_ID: &str = "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign";
 const VOICE_PATH: &str = "model.safetensors";
@@ -64,6 +64,16 @@ struct FileRecord {
     role: String,
     bytes: u64,
     sha256: String,
+}
+
+struct ManifestInput<'data> {
+    voice: &'data TensorContract,
+    source_tokenizer: &'data TensorContract,
+    decoder: &'data TensorContract,
+    source_codec_sha256: &'data str,
+    records: &'data BTreeMap<String, FileRecord>,
+    voice_tensor_index: &'data [Value],
+    decoder_tensor_index: &'data [Value],
 }
 
 impl FileRecord {
@@ -257,6 +267,8 @@ pub fn pack_artifact(options: &PackOptions) -> Result<Value> {
     let packed_codec_tensors = SafeTensors::deserialize(&packed_codec_mapping)
         .with_context(|| format!("invalid packed checkpoint {}", packed_codec.display()))?;
     validate_tensors(&packed_codec_tensors, &decoder_contract)?;
+    let voice_tensor_index = build_tensor_index(&voice_tensors, &voice_contract)?;
+    let decoder_tensor_index = build_tensor_index(&packed_codec_tensors, &decoder_contract)?;
 
     let codec_record = hash_regular_file(
         &packed_codec,
@@ -276,11 +288,15 @@ pub fn pack_artifact(options: &PackOptions) -> Result<Value> {
     let manifest = build_manifest(
         &revision,
         options.codec_dtype,
-        &voice_contract,
-        &tokenizer_contract,
-        &decoder_contract,
-        &source_codec_sha256,
-        &records,
+        ManifestInput {
+            voice: &voice_contract,
+            source_tokenizer: &tokenizer_contract,
+            decoder: &decoder_contract,
+            source_codec_sha256: &source_codec_sha256,
+            records: &records,
+            voice_tensor_index: &voice_tensor_index,
+            decoder_tensor_index: &decoder_tensor_index,
+        },
     );
     write_json_file(&staging.path.join("manifest.json"), &manifest)?;
     assert_flat_regular_tree(&staging.path)?;
@@ -499,16 +515,61 @@ fn snapshot_revision(source: &Path) -> Result<String> {
     Ok(revision.to_ascii_lowercase())
 }
 
+fn build_tensor_index(tensors: &SafeTensors<'_>, contract: &TensorContract) -> Result<Vec<Value>> {
+    let mut offset_bytes = 0_u64;
+    let mut index = Vec::with_capacity(contract.tensor_count);
+    for (name, spec) in &contract.tensors {
+        let tensor = tensors
+            .tensor(name)
+            .with_context(|| format!("{} is missing tensor {name}", contract.label))?;
+        if tensor.dtype() != spec.dtype
+            || tensor.shape() != spec.shape
+            || tensor.data().len() as u64 != spec.bytes
+        {
+            bail!("{} tensor {name} changed after validation", contract.label);
+        }
+        let sha256 = to_hex(&digest_bytes(tensor.data()));
+        index.push(json!({
+            "name": name,
+            "component": tensor_component(name),
+            "dtype": format!("{:?}", spec.dtype),
+            "shape": spec.shape,
+            "parameters": spec.parameters,
+            "arena_offset_bytes": offset_bytes,
+            "bytes": spec.bytes,
+            "sha256": sha256,
+        }));
+        offset_bytes = offset_bytes
+            .checked_add(spec.bytes)
+            .context("tensor arena offset overflowed")?;
+    }
+    if offset_bytes != contract.payload_bytes {
+        bail!(
+            "{} tensor index covers {offset_bytes} bytes, expected {}",
+            contract.label,
+            contract.payload_bytes
+        );
+    }
+    Ok(index)
+}
+
+fn tensor_component(name: &str) -> &'static str {
+    if name.starts_with("talker.code_predictor.") {
+        "code-predictor"
+    } else if name.starts_with("talker.") {
+        "talker"
+    } else {
+        "speech-decoder"
+    }
+}
+
 fn build_manifest(
     revision: &str,
     codec_dtype: CodecWeightDtype,
-    voice: &TensorContract,
-    source_tokenizer: &TensorContract,
-    decoder: &TensorContract,
-    source_codec_sha256: &str,
-    records: &BTreeMap<String, FileRecord>,
+    input: ManifestInput<'_>,
 ) -> Value {
-    let files = records
+    let files = input
+        .records
         .iter()
         .map(|(path, record)| (path.clone(), record.as_json()))
         .collect::<Map<String, Value>>();
@@ -528,33 +589,34 @@ fn build_manifest(
         "source_contract": {
             "voice_design": {
                 "dtype": "BF16",
-                "tensor_count": voice.tensor_count,
-                "parameter_count": voice.parameter_count,
-                "payload_bytes": voice.payload_bytes,
+                "tensor_count": input.voice.tensor_count,
+                "parameter_count": input.voice.parameter_count,
+                "payload_bytes": input.voice.payload_bytes,
             },
             "speech_tokenizer": {
                 "dtype": "F32",
-                "sha256": source_codec_sha256,
-                "tensor_count": source_tokenizer.tensor_count,
-                "parameter_count": source_tokenizer.parameter_count,
-                "payload_bytes": source_tokenizer.payload_bytes,
+                "sha256": input.source_codec_sha256,
+                "tensor_count": input.source_tokenizer.tensor_count,
+                "parameter_count": input.source_tokenizer.parameter_count,
+                "payload_bytes": input.source_tokenizer.payload_bytes,
             },
         },
         "weights": {
             "voice_design": {
                 "path": VOICE_PATH,
                 "dtype": "BF16",
-                "tensor_count": voice.tensor_count,
-                "parameter_count": voice.parameter_count,
-                "payload_bytes": voice.payload_bytes,
+                "tensor_count": input.voice.tensor_count,
+                "parameter_count": input.voice.parameter_count,
+                "payload_bytes": input.voice.payload_bytes,
+                "tensors": input.voice_tensor_index,
             },
             "speech_decoder": {
                 "path": CODEC_PATH,
                 "source_dtype": "F32",
                 "dtype": codec_dtype.label(),
-                "tensor_count": decoder.tensor_count,
-                "parameter_count": decoder.parameter_count,
-                "payload_bytes": decoder.payload_bytes,
+                "tensor_count": input.decoder.tensor_count,
+                "parameter_count": input.decoder.parameter_count,
+                "payload_bytes": input.decoder.payload_bytes,
                 "encoder_included": false,
                 "tensor_name_prefix": "decoder.",
                 "conversion": if codec_dtype == CodecWeightDtype::Bf16 {
@@ -562,6 +624,7 @@ fn build_manifest(
                 } else {
                     "none"
                 },
+                "tensors": input.decoder_tensor_index,
             },
         },
     })
@@ -666,5 +729,24 @@ mod tests {
         assert_eq!(f32.data_len(), 16);
         assert_eq!(bf16.data_len(), 8);
         assert_eq!(bf16.data().len(), 8);
+    }
+
+    #[test]
+    fn staging_refuses_to_replace_existing_output() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+
+        let sequence = NEXT.fetch_add(1, Ordering::Relaxed);
+        let output = std::env::temp_dir().join(format!(
+            "qwen3-tts-native-existing-output-{}-{sequence}",
+            std::process::id()
+        ));
+        fs::create_dir(&output).unwrap();
+        let error = match StagingDirectory::create(&output) {
+            Ok(_) => panic!("existing output must be rejected"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("output already exists"));
+        fs::remove_dir(&output).unwrap();
     }
 }
