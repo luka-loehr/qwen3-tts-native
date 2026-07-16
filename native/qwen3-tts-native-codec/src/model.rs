@@ -211,6 +211,10 @@ impl SafetensorsFile {
         self.tensors.len()
     }
 
+    pub fn tensor_names(&self) -> impl Iterator<Item = &str> {
+        self.tensors.keys().map(String::as_str)
+    }
+
     pub fn decoder_tensor_count(&self) -> usize {
         self.tensors
             .keys()

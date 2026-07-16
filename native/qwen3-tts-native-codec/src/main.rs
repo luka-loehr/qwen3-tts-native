@@ -30,14 +30,54 @@ fn main() -> Result<(), Box<dyn Error>> {
             let model = required_argument(&arguments, 2, "speech tokenizer safetensors path")?;
             inspect_model(Path::new(model))
         }
+        "load-model" => {
+            let library = required_argument(&arguments, 2, "shared library path")?;
+            let model = required_argument(&arguments, 3, "speech tokenizer safetensors path")?;
+            load_model(Path::new(library), Path::new(model))
+        }
         _ => {
             eprintln!(
                 "usage: qwen3-tts-native-codec <parity|benchmark> <library> [iterations]\n\
-                 or: qwen3-tts-native-codec inspect-model <speech-tokenizer.safetensors>"
+                 or: qwen3-tts-native-codec inspect-model <speech-tokenizer.safetensors>\n\
+                 or: qwen3-tts-native-codec load-model <library> <speech-tokenizer.safetensors>"
             );
             Ok(())
         }
     }
+}
+
+fn load_model(library_path: &Path, model_path: &Path) -> Result<(), Box<dyn Error>> {
+    let api = Api::load(library_path)?;
+    let model = model::SafetensorsFile::open(model_path)?;
+    let mut codec = api.create_codec(0).map_err(io::Error::other)?;
+    let loaded = codec.load_model(&model).map_err(io::Error::other)?;
+    let queried = codec.model_info().map_err(io::Error::other)?;
+    if loaded.tensor_count != 271
+        || loaded.parameter_count != 114_323_137
+        || loaded.loaded != 1
+        || loaded.source_bytes != queried.source_bytes
+        || loaded.device_bytes != queried.device_bytes
+    {
+        return Err(io::Error::other("native model info does not match decoder contract").into());
+    }
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "schema_version": 1,
+            "loaded": loaded.loaded == 1,
+            "tensor_count": loaded.tensor_count,
+            "parameter_count": loaded.parameter_count,
+            "source_bytes": loaded.source_bytes,
+            "device_bytes": loaded.device_bytes,
+            "source_dtype_counts": {
+                "F32": loaded.source_dtype_f32_count,
+                "BF16": loaded.source_dtype_bf16_count
+            },
+            "ownership": "all decoder tensors copied into native CUDA allocations",
+            "runtime_dependency": "CUDA runtime and Rust host; no Python or Node.js"
+        }))?
+    );
+    Ok(())
 }
 
 fn inspect_model(path: &Path) -> Result<(), Box<dyn Error>> {

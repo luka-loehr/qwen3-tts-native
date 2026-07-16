@@ -32,6 +32,13 @@ enum {
     QWEN3_TTS_CODEC_STATUS_CUDA = -2,
     QWEN3_TTS_CODEC_STATUS_STATE = -3,
     QWEN3_TTS_CODEC_STATUS_ALLOCATION = -4,
+    QWEN3_TTS_CODEC_STATUS_MODEL = -5,
+};
+
+enum {
+    QWEN3_TTS_CODEC_TENSOR_F32 = 1,
+    QWEN3_TTS_CODEC_TENSOR_BF16 = 2,
+    QWEN3_TTS_CODEC_MAX_TENSOR_RANK = 4,
 };
 
 typedef struct Qwen3TtsCodecContextV1 Qwen3TtsCodecContextV1;
@@ -69,6 +76,41 @@ typedef struct Qwen3TtsCodecPacketResultV1 {
     float end_to_end_microseconds;
 } Qwen3TtsCodecPacketResultV1;
 
+typedef struct Qwen3TtsCodecTensorViewV1 {
+    const void* data;
+    uint64_t byte_length;
+    uint64_t shape[QWEN3_TTS_CODEC_MAX_TENSOR_RANK];
+    uint32_t rank;
+    uint32_t dtype;
+} Qwen3TtsCodecTensorViewV1;
+
+typedef int32_t (*Qwen3TtsCodecTensorAtV1)(
+    void* user_data,
+    uint64_t index,
+    const char** name,
+    Qwen3TtsCodecTensorViewV1* tensor,
+    char* error,
+    size_t error_capacity
+);
+
+typedef struct Qwen3TtsCodecWeightProviderV1 {
+    uint32_t abi_version;
+    uint32_t reserved;
+    uint64_t tensor_count;
+    void* user_data;
+    Qwen3TtsCodecTensorAtV1 tensor_at;
+} Qwen3TtsCodecWeightProviderV1;
+
+typedef struct Qwen3TtsCodecModelInfoV1 {
+    uint64_t source_bytes;
+    uint64_t device_bytes;
+    uint64_t parameter_count;
+    uint32_t tensor_count;
+    uint32_t source_dtype_f32_count;
+    uint32_t source_dtype_bf16_count;
+    uint32_t loaded;
+} Qwen3TtsCodecModelInfoV1;
+
 QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_abi_version_v1(void);
 
 QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_create_v1(
@@ -93,6 +135,21 @@ QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_reset_v1(
 QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_state_info_v1(
     const Qwen3TtsCodecContextV1* context,
     Qwen3TtsCodecStateInfoV1* output,
+    char* error,
+    size_t error_capacity
+);
+
+QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_load_model_v1(
+    Qwen3TtsCodecContextV1* context,
+    const Qwen3TtsCodecWeightProviderV1* provider,
+    Qwen3TtsCodecModelInfoV1* output,
+    char* error,
+    size_t error_capacity
+);
+
+QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_model_info_v1(
+    const Qwen3TtsCodecContextV1* context,
+    Qwen3TtsCodecModelInfoV1* output,
     char* error,
     size_t error_capacity
 );
