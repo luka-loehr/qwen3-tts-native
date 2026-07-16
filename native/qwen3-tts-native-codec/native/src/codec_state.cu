@@ -2,6 +2,7 @@
 
 #include <cuda_bf16.h>
 #include <cuda_runtime.h>
+#include <cublas_v2.h>
 
 #include <chrono>
 #include <cstdio>
@@ -67,6 +68,17 @@ constexpr size_t kScratchBytes =
      kScratch3Elements + kScratch4Elements + kScratch5Elements +
      kScratch6Elements) *
     sizeof(int32_t);
+constexpr size_t kFrontendQuantizedElements =
+    QWEN3_TTS_CODEC_MAX_PACKET_FRAMES * 512;
+constexpr size_t kFrontendRvqElements =
+    QWEN3_TTS_CODEC_MAX_PACKET_FRAMES * 512;
+constexpr size_t kFrontendPreconvElements =
+    QWEN3_TTS_CODEC_MAX_PACKET_FRAMES * 1024;
+constexpr size_t kFrontendHistoryElements = 2 * 512;
+constexpr size_t kFrontendDeviceBytes =
+    (kFrontendQuantizedElements + kFrontendRvqElements +
+     kFrontendPreconvElements + kFrontendHistoryElements) *
+    sizeof(float);
 
 constexpr int32_t kStatusOk = QWEN3_TTS_CODEC_STATUS_OK;
 constexpr int32_t kStatusInvalidArgument =
@@ -104,6 +116,19 @@ int32_t cuda_error(
             operation,
             cudaGetErrorString(status)
         );
+        error[capacity - 1] = '\0';
+    }
+    return kStatusCuda;
+}
+
+int32_t cublas_error(
+    char* error,
+    size_t capacity,
+    const char* operation,
+    cublasStatus_t status
+) noexcept {
+    if (error != nullptr && capacity > 0) {
+        std::snprintf(error, capacity, "%s: cuBLAS status %d", operation, status);
         error[capacity - 1] = '\0';
     }
     return kStatusCuda;
@@ -246,6 +271,91 @@ __global__ void convert_pcm_kernel(
     output[item] = static_cast<int16_t>(value);
 }
 
+__global__ void gather_codebook_kernel(
+    const uint16_t* codes,
+    uint32_t frame_count,
+    uint32_t codebook,
+    const float* embedding_sum,
+    const float* cluster_usage,
+    float* output,
+    int32_t add
+) {
+    const size_t item = blockIdx.x * blockDim.x + threadIdx.x;
+    const size_t total = static_cast<size_t>(frame_count) * 256;
+    if (item >= total) {
+        return;
+    }
+    const size_t frame = item / 256;
+    const size_t dimension = item % 256;
+    const uint16_t code = codes[frame * QWEN3_TTS_CODEC_CODEBOOKS + codebook];
+    const float usage = fmaxf(cluster_usage[code], 1.0e-5F);
+    const float value = embedding_sum[static_cast<size_t>(code) * 256 + dimension] / usage;
+    output[item] = add != 0 ? output[item] + value : value;
+}
+
+__global__ void add_rvq_projection_kernel(
+    const float* acoustic,
+    uint32_t frame_count,
+    float* semantic
+) {
+    const size_t item = blockIdx.x * blockDim.x + threadIdx.x;
+    const size_t total = static_cast<size_t>(frame_count) * 512;
+    if (item < total) {
+        semantic[item] += acoustic[item];
+    }
+}
+
+__global__ void causal_preconv_kernel(
+    const float* input,
+    const float* history,
+    uint32_t frame_count,
+    const float* weight,
+    const float* bias,
+    float* output
+) {
+    const size_t item = blockIdx.x * blockDim.x + threadIdx.x;
+    const size_t total = static_cast<size_t>(frame_count) * 1024;
+    if (item >= total) {
+        return;
+    }
+    const int32_t frame = static_cast<int32_t>(item / 1024);
+    const size_t output_channel = item % 1024;
+    float value = bias[output_channel];
+    for (size_t input_channel = 0; input_channel < 512; ++input_channel) {
+        for (int32_t kernel = 0; kernel < 3; ++kernel) {
+            const int32_t source_frame = frame - (2 - kernel);
+            const float source = source_frame >= 0
+                                     ? input[static_cast<size_t>(source_frame) * 512 + input_channel]
+                                     : history[static_cast<size_t>(2 + source_frame) * 512 + input_channel];
+            const size_t weight_index =
+                (output_channel * 512 + input_channel) * 3 + kernel;
+            value = fmaf(weight[weight_index], source, value);
+        }
+    }
+    output[static_cast<size_t>(frame) * 1024 + output_channel] = value;
+}
+
+__global__ void update_frontend_history_kernel(
+    const float* input,
+    uint32_t frame_count,
+    float* history
+) {
+    const size_t channel = blockIdx.x * blockDim.x + threadIdx.x;
+    if (channel >= 512) {
+        return;
+    }
+    if (frame_count == 1) {
+        const float prior = history[512 + channel];
+        history[channel] = prior;
+        history[512 + channel] = input[channel];
+    } else {
+        history[channel] =
+            input[(static_cast<size_t>(frame_count) - 2) * 512 + channel];
+        history[512 + channel] =
+            input[(static_cast<size_t>(frame_count) - 1) * 512 + channel];
+    }
+}
+
 template <typename T>
 cudaError_t allocate_device(T** pointer, size_t elements) noexcept {
     return cudaMalloc(reinterpret_cast<void**>(pointer), elements * sizeof(T));
@@ -270,6 +380,7 @@ struct Qwen3TtsCodecContextV1 {
     uint32_t ring_slots = QWEN3_TTS_CODEC_RING_SLOTS;
     uint32_t max_packet_frames = QWEN3_TTS_CODEC_MAX_PACKET_FRAMES;
     cudaStream_t stream = nullptr;
+    cublasHandle_t cublas = nullptr;
     cudaEvent_t start_event = nullptr;
     cudaEvent_t stop_event = nullptr;
     uint16_t* codec_ring = nullptr;
@@ -285,6 +396,10 @@ struct Qwen3TtsCodecContextV1 {
     int32_t* scratch4 = nullptr;
     int32_t* scratch5 = nullptr;
     int32_t* scratch6 = nullptr;
+    float* frontend_quantized = nullptr;
+    float* frontend_rvq = nullptr;
+    float* frontend_preconv = nullptr;
+    float* frontend_history = nullptr;
     uint64_t frame_position = 0;
     uint64_t emitted_samples = 0;
     uint32_t next_ring_slot = 0;
@@ -295,6 +410,36 @@ struct Qwen3TtsCodecContextV1 {
 };
 
 namespace {
+
+const DeviceTensor* find_weight(
+    const Qwen3TtsCodecContextV1* context,
+    const char* name
+) noexcept {
+    const auto position = context->weights.find(name);
+    return position == context->weights.end() ? nullptr : &position->second;
+}
+
+const float* require_f32_weight(
+    const Qwen3TtsCodecContextV1* context,
+    const char* name,
+    char* error,
+    size_t error_capacity
+) noexcept {
+    const DeviceTensor* tensor = find_weight(context, name);
+    if (tensor == nullptr) {
+        write_error(error, error_capacity, "required decoder weight is missing");
+        return nullptr;
+    }
+    if (tensor->dtype != QWEN3_TTS_CODEC_TENSOR_F32) {
+        write_error(
+            error,
+            error_capacity,
+            "neural kernels currently require F32 decoder weights"
+        );
+        return nullptr;
+    }
+    return static_cast<const float*>(tensor->data);
+}
 
 void release_model(Qwen3TtsCodecContextV1* context) noexcept {
     if (context == nullptr) {
@@ -327,6 +472,10 @@ void release_context(Qwen3TtsCodecContextV1* context) noexcept {
     cudaFree(context->scratch2);
     cudaFree(context->scratch1);
     cudaFree(context->scratch0);
+    cudaFree(context->frontend_history);
+    cudaFree(context->frontend_preconv);
+    cudaFree(context->frontend_rvq);
+    cudaFree(context->frontend_quantized);
     cudaFree(context->fixture_history);
     cudaFree(context->convolution_history);
     cudaFree(context->transformer_kv);
@@ -340,6 +489,9 @@ void release_context(Qwen3TtsCodecContextV1* context) noexcept {
     }
     if (context->stop_event != nullptr) {
         cudaEventDestroy(context->stop_event);
+    }
+    if (context->cublas != nullptr) {
+        cublasDestroy(context->cublas);
     }
     if (context->stream != nullptr) {
         cudaStreamDestroy(context->stream);
@@ -386,6 +538,15 @@ int32_t reset_device_state(
     );
     if (status != cudaSuccess) {
         return cuda_error(error, error_capacity, "clear fixture history", status);
+    }
+    status = cudaMemsetAsync(
+        context->frontend_history,
+        0,
+        kFrontendHistoryElements * sizeof(float),
+        context->stream
+    );
+    if (status != cudaSuccess) {
+        return cuda_error(error, error_capacity, "clear neural frontend history", status);
     }
     status = cudaStreamSynchronize(context->stream);
     if (status != cudaSuccess) {
@@ -499,6 +660,13 @@ extern "C" QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_create_v1(
     context->device_index = config->device_index;
 
     status = cudaStreamCreateWithFlags(&context->stream, cudaStreamNonBlocking);
+    if (status == cudaSuccess && cublasCreate(&context->cublas) != CUBLAS_STATUS_SUCCESS) {
+        status = cudaErrorInitializationError;
+    }
+    if (status == cudaSuccess &&
+        cublasSetStream(context->cublas, context->stream) != CUBLAS_STATUS_SUCCESS) {
+        status = cudaErrorInitializationError;
+    }
     if (status == cudaSuccess) {
         status = cudaEventCreate(&context->start_event);
     }
@@ -553,6 +721,24 @@ extern "C" QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_create_v1(
     }
     if (status == cudaSuccess) {
         status = allocate_device(&context->scratch6, kScratch6Elements);
+    }
+    if (status == cudaSuccess) {
+        status = allocate_device(
+            &context->frontend_quantized, kFrontendQuantizedElements
+        );
+    }
+    if (status == cudaSuccess) {
+        status = allocate_device(&context->frontend_rvq, kFrontendRvqElements);
+    }
+    if (status == cudaSuccess) {
+        status = allocate_device(
+            &context->frontend_preconv, kFrontendPreconvElements
+        );
+    }
+    if (status == cudaSuccess) {
+        status = allocate_device(
+            &context->frontend_history, kFrontendHistoryElements
+        );
     }
     if (status != cudaSuccess) {
         const int32_t result =
@@ -612,7 +798,7 @@ extern "C" QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_state_info_v1(
     const uint64_t device_bytes =
         kTransformerKvBytes + kConvolutionHistoryBytes + kCodecRingBytes +
         kPcmRingBytes + kFixtureHistoryBytes + kScratchBytes +
-        context->model_info.device_bytes;
+        kFrontendDeviceBytes + context->model_info.device_bytes;
     *output = Qwen3TtsCodecStateInfoV1{
         context->frame_position,
         context->emitted_samples,
@@ -788,6 +974,255 @@ extern "C" QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_model_info_v1(
         return kStatusInvalidArgument;
     }
     *output = context->model_info;
+    return kStatusOk;
+}
+
+extern "C" QWEN3_TTS_CODEC_API int32_t
+qwen3_tts_codec_debug_frontend_packet_v1(
+    Qwen3TtsCodecContextV1* context,
+    const uint16_t* codec_frames,
+    uint32_t frame_count,
+    float* rvq_output,
+    size_t rvq_capacity,
+    float* preconv_output,
+    size_t preconv_capacity,
+    char* error,
+    size_t error_capacity
+) {
+    clear_error(error, error_capacity);
+    if (context == nullptr || codec_frames == nullptr || rvq_output == nullptr ||
+        preconv_output == nullptr) {
+        write_error(error, error_capacity, "context, codes, and checkpoint outputs are required");
+        return kStatusInvalidArgument;
+    }
+    if (frame_count == 0 || frame_count > QWEN3_TTS_CODEC_MAX_PACKET_FRAMES ||
+        rvq_capacity < static_cast<size_t>(frame_count) * 512 ||
+        preconv_capacity < static_cast<size_t>(frame_count) * 1024) {
+        write_error(error, error_capacity, "invalid frontend packet or output capacity");
+        return kStatusInvalidArgument;
+    }
+    if (context->model_info.loaded == 0) {
+        write_error(error, error_capacity, "decoder model is not loaded");
+        return kStatusState;
+    }
+    cudaError_t status = cudaSetDevice(context->device_index);
+    if (status != cudaSuccess) {
+        return cuda_error(error, error_capacity, "select CUDA device", status);
+    }
+    uint16_t* device_codes = context->codec_ring;
+    status = cudaMemcpyAsync(
+        device_codes,
+        codec_frames,
+        static_cast<size_t>(frame_count) * QWEN3_TTS_CODEC_CODEBOOKS * sizeof(uint16_t),
+        cudaMemcpyHostToDevice,
+        context->stream
+    );
+    if (status != cudaSuccess) {
+        return cuda_error(error, error_capacity, "upload frontend codes", status);
+    }
+
+    float* semantic = context->frontend_quantized;
+    float* acoustic = context->frontend_quantized +
+                      QWEN3_TTS_CODEC_MAX_PACKET_FRAMES * 256;
+    const float* first_embedding = require_f32_weight(
+        context,
+        "decoder.quantizer.rvq_first.vq.layers.0._codebook.embedding_sum",
+        error,
+        error_capacity
+    );
+    const float* first_usage = require_f32_weight(
+        context,
+        "decoder.quantizer.rvq_first.vq.layers.0._codebook.cluster_usage",
+        error,
+        error_capacity
+    );
+    const float* first_projection = require_f32_weight(
+        context,
+        "decoder.quantizer.rvq_first.output_proj.weight",
+        error,
+        error_capacity
+    );
+    const float* rest_projection = require_f32_weight(
+        context,
+        "decoder.quantizer.rvq_rest.output_proj.weight",
+        error,
+        error_capacity
+    );
+    if (first_embedding == nullptr || first_usage == nullptr ||
+        first_projection == nullptr || rest_projection == nullptr) {
+        return kStatusModel;
+    }
+    gather_codebook_kernel<<<
+        blocks_for(static_cast<size_t>(frame_count) * 256),
+        256,
+        0,
+        context->stream>>>(
+        device_codes,
+        frame_count,
+        0,
+        first_embedding,
+        first_usage,
+        semantic,
+        0
+    );
+    status = cudaGetLastError();
+    if (status != cudaSuccess) {
+        return cuda_error(error, error_capacity, "launch semantic codebook", status);
+    }
+    for (uint32_t codebook = 1; codebook < QWEN3_TTS_CODEC_CODEBOOKS; ++codebook) {
+        char embedding_name[128];
+        char usage_name[128];
+        std::snprintf(
+            embedding_name,
+            sizeof(embedding_name),
+            "decoder.quantizer.rvq_rest.vq.layers.%u._codebook.embedding_sum",
+            codebook - 1
+        );
+        std::snprintf(
+            usage_name,
+            sizeof(usage_name),
+            "decoder.quantizer.rvq_rest.vq.layers.%u._codebook.cluster_usage",
+            codebook - 1
+        );
+        const float* embedding = require_f32_weight(
+            context, embedding_name, error, error_capacity
+        );
+        const float* usage = require_f32_weight(
+            context, usage_name, error, error_capacity
+        );
+        if (embedding == nullptr || usage == nullptr) {
+            return kStatusModel;
+        }
+        gather_codebook_kernel<<<
+            blocks_for(static_cast<size_t>(frame_count) * 256),
+            256,
+            0,
+            context->stream>>>(
+            device_codes,
+            frame_count,
+            codebook,
+            embedding,
+            usage,
+            acoustic,
+            codebook == 1 ? 0 : 1
+        );
+        status = cudaGetLastError();
+        if (status != cudaSuccess) {
+            return cuda_error(error, error_capacity, "launch acoustic codebook", status);
+        }
+    }
+    constexpr float kOne = 1.0F;
+    constexpr float kZero = 0.0F;
+    cublasStatus_t cublas_status = cublasSgemm(
+        context->cublas,
+        CUBLAS_OP_T,
+        CUBLAS_OP_N,
+        512,
+        static_cast<int>(frame_count),
+        256,
+        &kOne,
+        first_projection,
+        256,
+        semantic,
+        256,
+        &kZero,
+        context->frontend_rvq,
+        512
+    );
+    float* rest_projected = context->frontend_preconv;
+    if (cublas_status == CUBLAS_STATUS_SUCCESS) {
+        cublas_status = cublasSgemm(
+            context->cublas,
+            CUBLAS_OP_T,
+            CUBLAS_OP_N,
+            512,
+            static_cast<int>(frame_count),
+            256,
+            &kOne,
+            rest_projection,
+            256,
+            acoustic,
+            256,
+            &kZero,
+            rest_projected,
+            512
+        );
+    }
+    if (cublas_status != CUBLAS_STATUS_SUCCESS) {
+        return cublas_error(
+            error, error_capacity, "project split RVQ", cublas_status
+        );
+    }
+    add_rvq_projection_kernel<<<
+        blocks_for(static_cast<size_t>(frame_count) * 512),
+        256,
+        0,
+        context->stream>>>(rest_projected, frame_count, context->frontend_rvq);
+    status = cudaGetLastError();
+    if (status != cudaSuccess) {
+        return cuda_error(error, error_capacity, "combine split RVQ", status);
+    }
+    const float* preconv_weight = require_f32_weight(
+        context, "decoder.pre_conv.conv.weight", error, error_capacity
+    );
+    const float* preconv_bias = require_f32_weight(
+        context, "decoder.pre_conv.conv.bias", error, error_capacity
+    );
+    if (preconv_weight == nullptr || preconv_bias == nullptr) {
+        return kStatusModel;
+    }
+    causal_preconv_kernel<<<
+        blocks_for(static_cast<size_t>(frame_count) * 1024),
+        256,
+        0,
+        context->stream>>>(
+        context->frontend_rvq,
+        context->frontend_history,
+        frame_count,
+        preconv_weight,
+        preconv_bias,
+        context->frontend_preconv
+    );
+    status = cudaGetLastError();
+    if (status == cudaSuccess) {
+        update_frontend_history_kernel<<<2, 256, 0, context->stream>>>(
+            context->frontend_rvq, frame_count, context->frontend_history
+        );
+        status = cudaGetLastError();
+    }
+    if (status != cudaSuccess) {
+        return cuda_error(error, error_capacity, "launch causal pre-convolution", status);
+    }
+
+    std::vector<float> rvq_row_major(static_cast<size_t>(frame_count) * 512);
+    status = cudaMemcpyAsync(
+        rvq_row_major.data(),
+        context->frontend_rvq,
+        rvq_row_major.size() * sizeof(float),
+        cudaMemcpyDeviceToHost,
+        context->stream
+    );
+    if (status == cudaSuccess) {
+        status = cudaMemcpyAsync(
+            preconv_output,
+            context->frontend_preconv,
+            static_cast<size_t>(frame_count) * 1024 * sizeof(float),
+            cudaMemcpyDeviceToHost,
+            context->stream
+        );
+    }
+    if (status == cudaSuccess) {
+        status = cudaStreamSynchronize(context->stream);
+    }
+    if (status != cudaSuccess) {
+        return cuda_error(error, error_capacity, "copy neural frontend checkpoints", status);
+    }
+    for (size_t channel = 0; channel < 512; ++channel) {
+        for (size_t frame = 0; frame < frame_count; ++frame) {
+            rvq_output[channel * frame_count + frame] =
+                rvq_row_major[frame * 512 + channel];
+        }
+    }
     return kStatusOk;
 }
 

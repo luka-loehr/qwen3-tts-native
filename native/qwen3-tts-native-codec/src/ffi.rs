@@ -119,6 +119,17 @@ type LoadModelFn = unsafe extern "C" fn(
     usize,
 ) -> i32;
 type ModelInfoFn = unsafe extern "C" fn(*const Context, *mut ModelInfo, *mut c_char, usize) -> i32;
+type FrontendFn = unsafe extern "C" fn(
+    *mut Context,
+    *const u16,
+    u32,
+    *mut f32,
+    usize,
+    *mut f32,
+    usize,
+    *mut c_char,
+    usize,
+) -> i32;
 
 pub struct Api {
     _library: Library,
@@ -129,6 +140,7 @@ pub struct Api {
     state_info: StateInfoFn,
     load_model: LoadModelFn,
     model_info: ModelInfoFn,
+    frontend: FrontendFn,
     process: ProcessFn,
 }
 
@@ -147,6 +159,8 @@ impl Api {
         let state_info = unsafe { load_symbol(&library, b"qwen3_tts_codec_state_info_v1\0")? };
         let load_model = unsafe { load_symbol(&library, b"qwen3_tts_codec_load_model_v1\0")? };
         let model_info = unsafe { load_symbol(&library, b"qwen3_tts_codec_model_info_v1\0")? };
+        let frontend =
+            unsafe { load_symbol(&library, b"qwen3_tts_codec_debug_frontend_packet_v1\0")? };
         let process =
             unsafe { load_symbol(&library, b"qwen3_tts_codec_process_fixture_packet_v1\0")? };
         Ok(Self {
@@ -158,6 +172,7 @@ impl Api {
             state_info,
             load_model,
             model_info,
+            frontend,
             process,
         })
     }
@@ -223,6 +238,30 @@ impl Codec<'_> {
         };
         status_result(status, &error)?;
         Ok(output)
+    }
+
+    pub fn debug_frontend(
+        &mut self,
+        frames: &[[u16; CODEBOOKS]],
+    ) -> Result<(Vec<f32>, Vec<f32>), String> {
+        let mut rvq = vec![0.0_f32; frames.len() * 512];
+        let mut preconv = vec![0.0_f32; frames.len() * 1024];
+        let mut error = [0 as c_char; 512];
+        let status = unsafe {
+            (self.api.frontend)(
+                self.context,
+                frames.as_ptr().cast::<u16>(),
+                frames.len() as u32,
+                rvq.as_mut_ptr(),
+                rvq.len(),
+                preconv.as_mut_ptr(),
+                preconv.len(),
+                error.as_mut_ptr(),
+                error.len(),
+            )
+        };
+        status_result(status, &error)?;
+        Ok((rvq, preconv))
     }
 
     pub fn reset(&mut self) -> Result<(), String> {
