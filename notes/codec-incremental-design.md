@@ -130,18 +130,19 @@ weight execution and must not be used as a Qwen3-TTS RTF or first-audio result.
 
 ## Remaining neural work
 
-Before this can replace the existing tokenizer decoder, the native path still
-needs:
+The separate artifact-loader milestone now supplies immutable, shape-validated
+decoder weights, a BF16 offline conversion, bounded CUDA upload, and explicit
+device ownership. Before the codec path can replace the existing tokenizer
+decoder, it still needs:
 
-1. immutable tokenizer-decoder weight loading with tensor-shape validation;
-2. the real RVQ projection, causal convolutions, transformer, ConvNeXt blocks,
+1. the real RVQ projection, causal convolutions, transformer, ConvNeXt blocks,
    residual units, and output convolution;
-3. native BF16/FP32 numerical parity against a trusted full-prefix decoder;
-4. real-audio seam validation with at least 50 dB SNR where deterministic
+2. native BF16/FP32 numerical parity against a trusted full-prefix decoder;
+3. real-audio seam validation with at least 50 dB SNR where deterministic
    numerical parity is expected;
-5. CUDA graph capture and packet-latency measurement for the complete decoder;
-6. cancellation, multi-request contention, and memory-pressure tests;
-7. backend integration only after the native decoder passes those gates.
+4. CUDA graph capture and packet-latency measurement for the complete decoder;
+5. cancellation, multi-request contention, and memory-pressure tests;
+6. backend integration only after the native decoder passes those gates.
 
 Until then, the correct claim is that the persistent-state ABI, memory layout,
 packet accounting, overlap semantics, and deterministic parity harness are

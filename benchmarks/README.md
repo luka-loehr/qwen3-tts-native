@@ -19,6 +19,37 @@ check without changing the GPU execution shape.
 The reported cold latency includes the first cuBLAS call and therefore exposes
 lazy library initialization. It is a startup cost, not a per-request target.
 
+## Native artifact and weight-loader protocol
+
+Artifact evidence uses the exact audited VoiceDesign snapshot revision
+`5ecdb67327fd37bb2e042aab12ff7391903235d3`. A valid final run must demonstrate:
+
+- a flat regular-file artifact with no symlinks or special files;
+- all 404 VoiceDesign tensors and exactly 271 `decoder.*` speech-tokenizer
+  tensors;
+- no encoder tensor and no copy of the complete source tokenizer checkpoint;
+- offline BF16 round-to-nearest-even conversion, plus an independently tested
+  F32 validation path;
+- canonical per-tensor name, component, dtype, shape, parameters, contiguous
+  arena offset, byte count, and SHA-256;
+- byte-identical output from two independent BF16 pack runs;
+- contract-only and full whole-file SHA-256 loader modes;
+- mapped file, owned host-copy, runtime-conversion, pinned staging, and device
+  allocation bytes reported separately;
+- bounded device upload with exact readback after all source mappings are
+  released;
+- a clean NVIDIA Compute Sanitizer result.
+
+The canonical summary is
+`results/native-artifact-loader-summary.json`. Files with `indexed` in their
+name are the final tensor-index implementation. Temporary F32 and repeat
+artifacts are deleted after validation; their small JSON and `time -v` reports
+remain as provenance.
+
+Weight loading is not neural inference. Artifact pack, mmap-open, file-hash, and
+host-to-device copy timings must never be described as TTFA, RTF, streaming, or
+audio-quality results.
+
 ## End-to-end candidate protocol
 
 A final candidate requires:
