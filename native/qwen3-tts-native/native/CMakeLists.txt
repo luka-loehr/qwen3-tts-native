@@ -7,6 +7,7 @@ find_package(CUDAToolkit 13.0 REQUIRED)
 add_library(qwen3_tts_cuda SHARED
     src/gemv.cu
     src/runtime.cu
+    src/weights.cu
 )
 
 target_include_directories(qwen3_tts_cuda
