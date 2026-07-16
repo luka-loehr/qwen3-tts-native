@@ -47,6 +47,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 original F32 speech-tokenizer checkpoint. The native execution layer reports
 source and device bytes independently.
 
+An indexed or mmap-backed runtime loader does not need to construct
+`DecoderWeights`. Implement the public object-safe provider instead:
+
+```rust
+use qwen3_tts_native_codec::{DecoderWeightProvider, DecoderWeightTensor};
+
+struct NativeArtifact {
+    // mmap arena and verified tensor index
+}
+
+impl DecoderWeightProvider for NativeArtifact {
+    fn decoder_tensor_names(&self) -> Box<dyn Iterator<Item = &str> + '_> {
+        // Return canonical decoder.* names from the verified index.
+        todo!()
+    }
+
+    fn decoder_tensor(&self, name: &str) -> Option<DecoderWeightTensor<'_>> {
+        // Return dtype, shape, and an arena slice valid through load_model.
+        todo!("lookup {name}")
+    }
+}
+```
+
+`NativeCodec::load_model(&artifact)` then uses the same C callback path. The
+provider view is borrowed only for the duration of the call; the native layer
+owns its CUDA copy afterward.
+
 ## Decode independent streams through the batch API
 
 The batch method accepts mutable references to distinct state handles, packet

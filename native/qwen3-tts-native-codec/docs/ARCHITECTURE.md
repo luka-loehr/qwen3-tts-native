@@ -66,6 +66,11 @@ The loader accepts exactly 271 canonical `decoder.*` tensors. It validates
 rank, shape products, byte length, dtype, required names, duplicate names, and
 the final tensor count.
 
+The Rust library exposes this boundary as the object-safe
+`DecoderWeightProvider` trait. The built-in `DecoderWeights` safetensors reader
+implements it, and a separate mmap/indexed artifact type can implement the same
+trait without routing through the built-in reader.
+
 F32 sources are copied directly. BF16 sources are copied through one reusable
 8 MiB device staging buffer and converted to F32 by a CUDA kernel. Conversion
 is stream ordered, works for tensors larger than the staging buffer, and does
@@ -131,4 +136,3 @@ the ABI without modifying frame order, tool schemas, prompts, or frontend
 protocols. This playground contains no backend adapter and makes no network
 calls. Promotion should happen only after the separate talker/code-predictor
 runtime supplies real frames and end-to-end audio quality is evaluated.
-

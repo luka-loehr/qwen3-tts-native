@@ -36,6 +36,6 @@ pub use ffi::{
     STATUS_MODEL, STATUS_STATE, StateInfo,
 };
 pub use model::{
-    SafetensorsFile as DecoderWeights, TensorDType as DecoderTensorDType,
-    TensorEntry as DecoderTensorEntry,
+    DecoderWeightProvider, DecoderWeightTensor, SafetensorsFile as DecoderWeights,
+    TensorDType as DecoderTensorDType, TensorEntry as DecoderTensorEntry,
 };
