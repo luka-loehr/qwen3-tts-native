@@ -54,6 +54,8 @@ enum {
 };
 
 typedef struct Qwen3TtsCodecContextV1 Qwen3TtsCodecContextV1;
+typedef struct Qwen3TtsCodecModelV1 Qwen3TtsCodecModelV1;
+typedef Qwen3TtsCodecContextV1 Qwen3TtsCodecSessionV1;
 
 typedef struct Qwen3TtsCodecConfigV1 {
     int32_t device_index;
@@ -132,6 +134,41 @@ typedef struct Qwen3TtsCodecModelInfoV1 {
     uint32_t source_dtype_bf16_count;
     uint32_t loaded;
 } Qwen3TtsCodecModelInfoV1;
+
+/* Shared immutable device-weight ownership. A loaded model may be used to
+ * create independent sessions from multiple host threads. */
+typedef struct Qwen3TtsCodecModelMemoryInfoV1 {
+    uint64_t source_bytes;
+    uint64_t shared_weight_device_bytes;
+    uint64_t parameter_count;
+    uint64_t transient_upload_device_bytes;
+    uint32_t tensor_count;
+    uint32_t warmup_completed;
+    uint32_t active_session_count;
+    uint32_t reserved;
+} Qwen3TtsCodecModelMemoryInfoV1;
+
+/* Per-session state only. Shared model weights are deliberately excluded. */
+typedef struct Qwen3TtsCodecSessionMemoryInfoV1 {
+    uint64_t device_bytes;
+    uint64_t host_pinned_bytes;
+    uint64_t transformer_kv_bytes;
+    uint64_t convolution_history_bytes;
+    uint64_t codec_ring_bytes;
+    uint64_t pcm_ring_bytes;
+    uint64_t workspace_device_bytes;
+    uint64_t reserved;
+} Qwen3TtsCodecSessionMemoryInfoV1;
+
+typedef struct Qwen3TtsCodecSessionBatchItemV1 {
+    Qwen3TtsCodecSessionV1* session;
+    const uint16_t* codec_frames;
+    uint32_t frame_count;
+    int32_t is_final;
+    int16_t* pcm_output;
+    size_t pcm_capacity_samples;
+    Qwen3TtsCodecPacketResultV1* result;
+} Qwen3TtsCodecSessionBatchItemV1;
 
 QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_abi_version_v1(void);
 
@@ -270,6 +307,109 @@ QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_process_fixture_packet_v1(
     int16_t* pcm_output,
     size_t pcm_capacity_samples,
     Qwen3TtsCodecPacketResultV1* result,
+    char* error,
+    size_t error_capacity
+);
+
+/* Additive shared-model API. Model weights are uploaded and warmed once;
+ * sessions retain the model and own all mutable CUDA execution state. */
+QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_shared_model_create_v1(
+    int32_t device_index,
+    Qwen3TtsCodecModelV1** output,
+    char* error,
+    size_t error_capacity
+);
+
+QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_shared_model_destroy_v1(
+    Qwen3TtsCodecModelV1* model,
+    char* error,
+    size_t error_capacity
+);
+
+QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_shared_model_load_v1(
+    Qwen3TtsCodecModelV1* model,
+    const Qwen3TtsCodecWeightProviderV1* provider,
+    Qwen3TtsCodecModelInfoV1* output,
+    char* error,
+    size_t error_capacity
+);
+
+QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_shared_model_warmup_v1(
+    Qwen3TtsCodecModelV1* model,
+    char* error,
+    size_t error_capacity
+);
+
+QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_shared_model_info_v1(
+    const Qwen3TtsCodecModelV1* model,
+    Qwen3TtsCodecModelInfoV1* output,
+    char* error,
+    size_t error_capacity
+);
+
+QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_shared_model_memory_info_v1(
+    const Qwen3TtsCodecModelV1* model,
+    Qwen3TtsCodecModelMemoryInfoV1* output,
+    char* error,
+    size_t error_capacity
+);
+
+QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_session_create_v1(
+    Qwen3TtsCodecModelV1* model,
+    Qwen3TtsCodecSessionV1** output,
+    char* error,
+    size_t error_capacity
+);
+
+QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_session_destroy_v1(
+    Qwen3TtsCodecSessionV1* session,
+    char* error,
+    size_t error_capacity
+);
+
+QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_session_reset_v1(
+    Qwen3TtsCodecSessionV1* session,
+    char* error,
+    size_t error_capacity
+);
+
+QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_session_cancel_v1(
+    Qwen3TtsCodecSessionV1* session,
+    char* error,
+    size_t error_capacity
+);
+
+QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_session_state_info_v1(
+    const Qwen3TtsCodecSessionV1* session,
+    Qwen3TtsCodecStateInfoV1* output,
+    char* error,
+    size_t error_capacity
+);
+
+QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_session_memory_info_v1(
+    const Qwen3TtsCodecSessionV1* session,
+    Qwen3TtsCodecSessionMemoryInfoV1* output,
+    char* error,
+    size_t error_capacity
+);
+
+QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_session_process_packet_v1(
+    Qwen3TtsCodecSessionV1* session,
+    const uint16_t* codec_frames,
+    uint32_t frame_count,
+    int32_t is_final,
+    int16_t* pcm_output,
+    size_t pcm_capacity_samples,
+    Qwen3TtsCodecPacketResultV1* result,
+    char* error,
+    size_t error_capacity
+);
+
+/* Dispatches in array order for ABI convenience. True host-thread
+ * concurrency is provided by independent session handles and Rust workers. */
+QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_session_process_batch_v1(
+    Qwen3TtsCodecSessionBatchItemV1* items,
+    uint32_t item_count,
     char* error,
     size_t error_capacity
 );

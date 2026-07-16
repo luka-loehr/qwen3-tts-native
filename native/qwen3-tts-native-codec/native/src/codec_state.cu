@@ -5,10 +5,12 @@
 #include <cublas_v2.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <new>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -873,6 +875,16 @@ struct DeviceTensor {
     uint32_t dtype = 0;
 };
 
+struct Qwen3TtsCodecModelV1 {
+    int32_t device_index = 0;
+    std::atomic<uint32_t> reference_count{1};
+    std::atomic<uint32_t> active_session_count{0};
+    std::atomic<bool> warmup_completed{false};
+    std::mutex lifecycle_mutex;
+    std::unordered_map<std::string, DeviceTensor> weights;
+    Qwen3TtsCodecModelInfoV1 model_info{};
+};
+
 struct Qwen3TtsCodecContextV1 {
     int32_t device_index = 0;
     uint32_t ring_slots = QWEN3_TTS_CODEC_RING_SLOTS;
@@ -915,8 +927,9 @@ struct Qwen3TtsCodecContextV1 {
     uint32_t next_ring_slot = 0;
     uint32_t kv_ring_head = 0;
     bool finalized = false;
-    std::unordered_map<std::string, DeviceTensor> weights;
-    Qwen3TtsCodecModelInfoV1 model_info{};
+    bool cancelled = false;
+    bool counts_as_shared_session = false;
+    Qwen3TtsCodecModelV1* model = nullptr;
 };
 
 namespace {
@@ -925,8 +938,11 @@ const DeviceTensor* find_weight(
     const Qwen3TtsCodecContextV1* context,
     const char* name
 ) noexcept {
-    const auto position = context->weights.find(name);
-    return position == context->weights.end() ? nullptr : &position->second;
+    if (context == nullptr || context->model == nullptr) {
+        return nullptr;
+    }
+    const auto position = context->model->weights.find(name);
+    return position == context->model->weights.end() ? nullptr : &position->second;
 }
 
 const float* require_f32_weight(
@@ -2139,17 +2155,52 @@ int32_t run_transformer_frame(
     );
 }
 
-void release_model(Qwen3TtsCodecContextV1* context) noexcept {
-    if (context == nullptr) {
+Qwen3TtsCodecModelV1* allocate_model(int32_t device_index) noexcept {
+    auto* model = new (std::nothrow) Qwen3TtsCodecModelV1{};
+    if (model != nullptr) {
+        model->device_index = device_index;
+    }
+    return model;
+}
+
+void retain_model(Qwen3TtsCodecModelV1* model) noexcept {
+    if (model != nullptr) {
+        model->reference_count.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+void clear_model_weights(Qwen3TtsCodecModelV1* model) noexcept {
+    if (model == nullptr) {
         return;
     }
-    for (auto& [name, tensor] : context->weights) {
+    if (model->device_index >= 0) {
+        cudaSetDevice(model->device_index);
+    }
+    for (auto& [name, tensor] : model->weights) {
         (void)name;
         cudaFree(tensor.data);
         tensor.data = nullptr;
     }
-    context->weights.clear();
-    context->model_info = Qwen3TtsCodecModelInfoV1{};
+    model->weights.clear();
+    model->model_info = Qwen3TtsCodecModelInfoV1{};
+    model->warmup_completed.store(false, std::memory_order_release);
+}
+
+void release_model(Qwen3TtsCodecContextV1* context) noexcept {
+    if (context != nullptr) {
+        clear_model_weights(context->model);
+    }
+}
+
+void release_model_reference(Qwen3TtsCodecModelV1* model) noexcept {
+    if (model == nullptr) {
+        return;
+    }
+    if (model->reference_count.fetch_sub(1, std::memory_order_acq_rel) != 1) {
+        return;
+    }
+    clear_model_weights(model);
+    delete model;
 }
 
 void release_context(Qwen3TtsCodecContextV1* context) noexcept {
@@ -2162,7 +2213,6 @@ void release_context(Qwen3TtsCodecContextV1* context) noexcept {
     if (context->stream != nullptr) {
         cudaStreamSynchronize(context->stream);
     }
-    release_model(context);
     cudaFree(context->scratch6);
     cudaFree(context->scratch5);
     cudaFree(context->scratch4);
@@ -2205,6 +2255,11 @@ void release_context(Qwen3TtsCodecContextV1* context) noexcept {
     if (context->stream != nullptr) {
         cudaStreamDestroy(context->stream);
     }
+    if (context->counts_as_shared_session && context->model != nullptr) {
+        context->model->active_session_count.fetch_sub(1, std::memory_order_acq_rel);
+    }
+    release_model_reference(context->model);
+    context->model = nullptr;
     delete context;
 }
 
@@ -2292,6 +2347,7 @@ int32_t reset_device_state(
     context->next_ring_slot = 0;
     context->kv_ring_head = 0;
     context->finalized = false;
+    context->cancelled = false;
     return kStatusOk;
 }
 
@@ -2392,6 +2448,12 @@ extern "C" QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_create_v1(
         return kStatusAllocation;
     }
     context->device_index = config->device_index;
+    context->model = allocate_model(config->device_index);
+    if (context->model == nullptr) {
+        write_error(error, error_capacity, "allocate codec model");
+        delete context;
+        return kStatusAllocation;
+    }
 
     status = cudaStreamCreateWithFlags(&context->stream, cudaStreamNonBlocking);
     if (status == cudaSuccess && cublasCreate(&context->cublas) != CUBLAS_STATUS_SUCCESS) {
@@ -2581,7 +2643,7 @@ extern "C" QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_state_info_v1(
         kPcmRingBytes + kFixtureHistoryBytes + kScratchBytes +
         kFrontendDeviceBytes + kTransformerDeviceBytes +
         kLatentDeviceBytes + kDecoderDeviceBytes +
-        context->model_info.device_bytes;
+        context->model->model_info.device_bytes;
     *output = Qwen3TtsCodecStateInfoV1{
         context->frame_position,
         context->emitted_samples,
@@ -2621,7 +2683,7 @@ extern "C" QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_load_model_v1(
         write_error(error, error_capacity, "unsupported weight-provider ABI");
         return kStatusInvalidArgument;
     }
-    if (!context->weights.empty()) {
+    if (!context->model->weights.empty()) {
         write_error(error, error_capacity, "model is already loaded");
         return kStatusState;
     }
@@ -2750,7 +2812,7 @@ extern "C" QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_load_model_v1(
             return cuda_error(error, error_capacity, "upload decoder tensor", cuda_status);
         }
         const auto [position, inserted] =
-            context->weights.emplace(std::string(name), tensor);
+            context->model->weights.emplace(std::string(name), tensor);
         (void)position;
         if (!inserted) {
             cudaFree(tensor.data);
@@ -2784,14 +2846,14 @@ extern "C" QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_load_model_v1(
         "decoder.decoder.6.conv.weight",
     };
     for (const char* name : required) {
-        if (context->weights.find(name) == context->weights.end()) {
+        if (context->model->weights.find(name) == context->model->weights.end()) {
             release_model(context);
             write_error(error, error_capacity, "model is missing a required decoder tensor");
             return kStatusModel;
         }
     }
     info.loaded = 1;
-    context->model_info = info;
+    context->model->model_info = info;
     *output = info;
     return kStatusOk;
 }
@@ -2807,7 +2869,7 @@ extern "C" QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_model_info_v1(
         write_error(error, error_capacity, "context and output are required");
         return kStatusInvalidArgument;
     }
-    *output = context->model_info;
+    *output = context->model->model_info;
     return kStatusOk;
 }
 
@@ -3032,7 +3094,7 @@ qwen3_tts_codec_debug_frontend_packet_v1(
         write_error(error, error_capacity, "invalid frontend packet or output capacity");
         return kStatusInvalidArgument;
     }
-    if (context->model_info.loaded == 0) {
+    if (context->model->model_info.loaded == 0) {
         write_error(error, error_capacity, "decoder model is not loaded");
         return kStatusState;
     }
@@ -3489,11 +3551,11 @@ qwen3_tts_codec_process_packet_v1(
         write_error(error, error_capacity, "PCM output capacity is too small");
         return kStatusInvalidArgument;
     }
-    if (context->model_info.loaded == 0) {
+    if (context->model->model_info.loaded == 0) {
         write_error(error, error_capacity, "decoder model is not loaded");
         return kStatusState;
     }
-    if (context->finalized) {
+    if (context->finalized || context->cancelled) {
         write_error(error, error_capacity, "stream is finalized; reset is required");
         return kStatusState;
     }
@@ -3652,7 +3714,7 @@ extern "C" QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_warmup_v1(
         write_error(error, error_capacity, "context is required");
         return kStatusInvalidArgument;
     }
-    if (context->model_info.loaded == 0) {
+    if (context->model->model_info.loaded == 0) {
         write_error(error, error_capacity, "decoder model is not loaded");
         return kStatusState;
     }
@@ -3970,4 +4032,357 @@ qwen3_tts_codec_process_fixture_packet_v1(
         end_to_end_microseconds,
     };
     return kStatusOk;
+}
+
+namespace {
+
+constexpr uint64_t session_device_bytes() noexcept {
+    return kTransformerKvBytes + kConvolutionHistoryBytes + kCodecRingBytes +
+           kPcmRingBytes + kFixtureHistoryBytes + kScratchBytes +
+           kFrontendDeviceBytes + kTransformerDeviceBytes +
+           kLatentDeviceBytes + kDecoderDeviceBytes;
+}
+
+int32_t create_bound_context(
+    Qwen3TtsCodecModelV1* model,
+    bool counts_as_shared_session,
+    Qwen3TtsCodecContextV1** output,
+    char* error,
+    size_t error_capacity
+) {
+    if (model == nullptr || output == nullptr) {
+        write_error(error, error_capacity, "model and session output are required");
+        return kStatusInvalidArgument;
+    }
+    const Qwen3TtsCodecConfigV1 config{
+        model->device_index,
+        QWEN3_TTS_CODEC_RING_SLOTS,
+        QWEN3_TTS_CODEC_MAX_PACKET_FRAMES,
+        0,
+    };
+    Qwen3TtsCodecContextV1* context = nullptr;
+    const int32_t status = qwen3_tts_codec_create_v1(
+        &config, &context, error, error_capacity
+    );
+    if (status != kStatusOk) {
+        return status;
+    }
+    release_model_reference(context->model);
+    context->model = model;
+    retain_model(model);
+    context->counts_as_shared_session = counts_as_shared_session;
+    if (counts_as_shared_session) {
+        model->active_session_count.fetch_add(1, std::memory_order_acq_rel);
+    }
+    *output = context;
+    return kStatusOk;
+}
+
+}  // namespace
+
+extern "C" QWEN3_TTS_CODEC_API int32_t
+qwen3_tts_codec_shared_model_create_v1(
+    int32_t device_index,
+    Qwen3TtsCodecModelV1** output,
+    char* error,
+    size_t error_capacity
+) {
+    clear_error(error, error_capacity);
+    if (output == nullptr || device_index < 0) {
+        write_error(error, error_capacity, "non-negative device index and output are required");
+        return kStatusInvalidArgument;
+    }
+    *output = nullptr;
+    int32_t device_count = 0;
+    cudaError_t status = cudaGetDeviceCount(&device_count);
+    if (status != cudaSuccess) {
+        return cuda_error(error, error_capacity, "query CUDA devices", status);
+    }
+    if (device_index >= device_count) {
+        write_error(error, error_capacity, "CUDA device index is out of range");
+        return kStatusInvalidArgument;
+    }
+    status = cudaSetDevice(device_index);
+    if (status != cudaSuccess) {
+        return cuda_error(error, error_capacity, "select CUDA device", status);
+    }
+    auto* model = allocate_model(device_index);
+    if (model == nullptr) {
+        write_error(error, error_capacity, "allocate shared codec model");
+        return kStatusAllocation;
+    }
+    *output = model;
+    return kStatusOk;
+}
+
+extern "C" QWEN3_TTS_CODEC_API int32_t
+qwen3_tts_codec_shared_model_destroy_v1(
+    Qwen3TtsCodecModelV1* model,
+    char* error,
+    size_t error_capacity
+) {
+    clear_error(error, error_capacity);
+    release_model_reference(model);
+    return kStatusOk;
+}
+
+extern "C" QWEN3_TTS_CODEC_API int32_t
+qwen3_tts_codec_shared_model_load_v1(
+    Qwen3TtsCodecModelV1* model,
+    const Qwen3TtsCodecWeightProviderV1* provider,
+    Qwen3TtsCodecModelInfoV1* output,
+    char* error,
+    size_t error_capacity
+) {
+    clear_error(error, error_capacity);
+    if (model == nullptr || provider == nullptr || output == nullptr) {
+        write_error(error, error_capacity, "model, weight provider, and output are required");
+        return kStatusInvalidArgument;
+    }
+    std::lock_guard<std::mutex> guard(model->lifecycle_mutex);
+    if (model->active_session_count.load(std::memory_order_acquire) != 0) {
+        write_error(error, error_capacity, "cannot load a model with active sessions");
+        return kStatusState;
+    }
+    if (model->model_info.loaded != 0 || !model->weights.empty()) {
+        write_error(error, error_capacity, "model is already loaded");
+        return kStatusState;
+    }
+    Qwen3TtsCodecContextV1* loader = nullptr;
+    int32_t status = create_bound_context(
+        model, false, &loader, error, error_capacity
+    );
+    if (status == kStatusOk) {
+        status = qwen3_tts_codec_load_model_v1(
+            loader, provider, output, error, error_capacity
+        );
+    }
+    qwen3_tts_codec_destroy_v1(loader, nullptr, 0);
+    return status;
+}
+
+extern "C" QWEN3_TTS_CODEC_API int32_t
+qwen3_tts_codec_shared_model_warmup_v1(
+    Qwen3TtsCodecModelV1* model,
+    char* error,
+    size_t error_capacity
+) {
+    clear_error(error, error_capacity);
+    if (model == nullptr) {
+        write_error(error, error_capacity, "model is required");
+        return kStatusInvalidArgument;
+    }
+    std::lock_guard<std::mutex> guard(model->lifecycle_mutex);
+    if (model->model_info.loaded == 0) {
+        write_error(error, error_capacity, "decoder model is not loaded");
+        return kStatusState;
+    }
+    if (model->warmup_completed.load(std::memory_order_acquire)) {
+        return kStatusOk;
+    }
+    if (model->active_session_count.load(std::memory_order_acquire) != 0) {
+        write_error(error, error_capacity, "warmup must finish before sessions are created");
+        return kStatusState;
+    }
+    Qwen3TtsCodecContextV1* warmup = nullptr;
+    int32_t status = create_bound_context(
+        model, false, &warmup, error, error_capacity
+    );
+    if (status == kStatusOk) {
+        status = qwen3_tts_codec_warmup_v1(warmup, error, error_capacity);
+    }
+    qwen3_tts_codec_destroy_v1(warmup, nullptr, 0);
+    if (status == kStatusOk) {
+        model->warmup_completed.store(true, std::memory_order_release);
+    }
+    return status;
+}
+
+extern "C" QWEN3_TTS_CODEC_API int32_t
+qwen3_tts_codec_shared_model_info_v1(
+    const Qwen3TtsCodecModelV1* model,
+    Qwen3TtsCodecModelInfoV1* output,
+    char* error,
+    size_t error_capacity
+) {
+    clear_error(error, error_capacity);
+    if (model == nullptr || output == nullptr) {
+        write_error(error, error_capacity, "model and output are required");
+        return kStatusInvalidArgument;
+    }
+    *output = model->model_info;
+    return kStatusOk;
+}
+
+extern "C" QWEN3_TTS_CODEC_API int32_t
+qwen3_tts_codec_shared_model_memory_info_v1(
+    const Qwen3TtsCodecModelV1* model,
+    Qwen3TtsCodecModelMemoryInfoV1* output,
+    char* error,
+    size_t error_capacity
+) {
+    clear_error(error, error_capacity);
+    if (model == nullptr || output == nullptr) {
+        write_error(error, error_capacity, "model and memory output are required");
+        return kStatusInvalidArgument;
+    }
+    *output = Qwen3TtsCodecModelMemoryInfoV1{
+        model->model_info.source_bytes,
+        model->model_info.device_bytes,
+        model->model_info.parameter_count,
+        kBf16UploadStagingBytes,
+        model->model_info.tensor_count,
+        static_cast<uint32_t>(
+            model->warmup_completed.load(std::memory_order_acquire)
+        ),
+        model->active_session_count.load(std::memory_order_acquire),
+        0,
+    };
+    return kStatusOk;
+}
+
+extern "C" QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_session_create_v1(
+    Qwen3TtsCodecModelV1* model,
+    Qwen3TtsCodecSessionV1** output,
+    char* error,
+    size_t error_capacity
+) {
+    clear_error(error, error_capacity);
+    if (model == nullptr || output == nullptr) {
+        write_error(error, error_capacity, "model and session output are required");
+        return kStatusInvalidArgument;
+    }
+    std::lock_guard<std::mutex> guard(model->lifecycle_mutex);
+    if (model->model_info.loaded == 0 ||
+        !model->warmup_completed.load(std::memory_order_acquire)) {
+        write_error(error, error_capacity, "model must be loaded and warmed before session start");
+        return kStatusState;
+    }
+    return create_bound_context(model, true, output, error, error_capacity);
+}
+
+extern "C" QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_session_destroy_v1(
+    Qwen3TtsCodecSessionV1* session,
+    char* error,
+    size_t error_capacity
+) {
+    return qwen3_tts_codec_destroy_v1(session, error, error_capacity);
+}
+
+extern "C" QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_session_reset_v1(
+    Qwen3TtsCodecSessionV1* session,
+    char* error,
+    size_t error_capacity
+) {
+    return qwen3_tts_codec_reset_v1(session, error, error_capacity);
+}
+
+extern "C" QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_session_cancel_v1(
+    Qwen3TtsCodecSessionV1* session,
+    char* error,
+    size_t error_capacity
+) {
+    clear_error(error, error_capacity);
+    if (session == nullptr) {
+        write_error(error, error_capacity, "session is required");
+        return kStatusInvalidArgument;
+    }
+    cudaError_t status = cudaSetDevice(session->device_index);
+    if (status == cudaSuccess) {
+        status = cudaStreamSynchronize(session->stream);
+    }
+    if (status != cudaSuccess) {
+        return cuda_error(error, error_capacity, "cancel decoder session", status);
+    }
+    session->cancelled = true;
+    return kStatusOk;
+}
+
+extern "C" QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_session_state_info_v1(
+    const Qwen3TtsCodecSessionV1* session,
+    Qwen3TtsCodecStateInfoV1* output,
+    char* error,
+    size_t error_capacity
+) {
+    const int32_t status = qwen3_tts_codec_state_info_v1(
+        session, output, error, error_capacity
+    );
+    if (status == kStatusOk) {
+        output->device_bytes = session_device_bytes();
+    }
+    return status;
+}
+
+extern "C" QWEN3_TTS_CODEC_API int32_t
+qwen3_tts_codec_session_memory_info_v1(
+    const Qwen3TtsCodecSessionV1* session,
+    Qwen3TtsCodecSessionMemoryInfoV1* output,
+    char* error,
+    size_t error_capacity
+) {
+    clear_error(error, error_capacity);
+    if (session == nullptr || output == nullptr) {
+        write_error(error, error_capacity, "session and memory output are required");
+        return kStatusInvalidArgument;
+    }
+    constexpr uint64_t transformer_bytes =
+        kTransformerKvBytes + kNeuralTransformerKvBytes;
+    constexpr uint64_t convolution_bytes =
+        kConvolutionHistoryBytes + kNeuralConvolutionHistoryBytes;
+    constexpr uint64_t ring_bytes = kCodecRingBytes + kPcmRingBytes;
+    *output = Qwen3TtsCodecSessionMemoryInfoV1{
+        session_device_bytes(),
+        kPcmRingBytes,
+        transformer_bytes,
+        convolution_bytes,
+        kCodecRingBytes,
+        kPcmRingBytes,
+        session_device_bytes() - transformer_bytes - convolution_bytes - ring_bytes,
+        0,
+    };
+    return kStatusOk;
+}
+
+extern "C" QWEN3_TTS_CODEC_API int32_t
+qwen3_tts_codec_session_process_packet_v1(
+    Qwen3TtsCodecSessionV1* session,
+    const uint16_t* codec_frames,
+    uint32_t frame_count,
+    int32_t is_final,
+    int16_t* pcm_output,
+    size_t pcm_capacity_samples,
+    Qwen3TtsCodecPacketResultV1* result,
+    char* error,
+    size_t error_capacity
+) {
+    return qwen3_tts_codec_process_packet_v1(
+        session,
+        codec_frames,
+        frame_count,
+        is_final,
+        pcm_output,
+        pcm_capacity_samples,
+        result,
+        error,
+        error_capacity
+    );
+}
+
+extern "C" QWEN3_TTS_CODEC_API int32_t
+qwen3_tts_codec_session_process_batch_v1(
+    Qwen3TtsCodecSessionBatchItemV1* items,
+    uint32_t item_count,
+    char* error,
+    size_t error_capacity
+) {
+    static_assert(
+        sizeof(Qwen3TtsCodecSessionBatchItemV1) ==
+        sizeof(Qwen3TtsCodecBatchItemV1)
+    );
+    return qwen3_tts_codec_process_batch_v1(
+        reinterpret_cast<Qwen3TtsCodecBatchItemV1*>(items),
+        item_count,
+        error,
+        error_capacity
+    );
 }
