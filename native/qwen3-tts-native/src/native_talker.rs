@@ -1,4 +1,5 @@
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
+use std::fmt;
 use std::path::Path;
 use std::ptr;
 use std::sync::{Arc, Mutex};
@@ -15,10 +16,43 @@ use crate::tokenizer::Qwen2Tokenizer;
 use crate::weights::{SafeTensorProvider, WeightProvider};
 
 const ERROR_CAPACITY: usize = 1_024;
+pub const STATUS_INVALID_ARGUMENT: i32 = -1;
+pub const STATUS_CUDA: i32 = -2;
+pub const STATUS_STATE: i32 = -3;
+pub const STATUS_ALLOCATION: i32 = -4;
+pub const STATUS_MODEL: i32 = -5;
 const CODEBOOKS: usize = 16;
 const MIN_SESSION_CAPACITY: usize = 16;
 const SESSION_CAPACITY_BLOCK: usize = 32;
 const MAX_POOLED_SESSIONS: usize = 8;
+
+#[derive(Debug)]
+pub struct NativeTalkerStatusError {
+    status: i32,
+    message: String,
+}
+
+impl NativeTalkerStatusError {
+    pub fn status(&self) -> i32 {
+        self.status
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+impl fmt::Display for NativeTalkerStatusError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "native talker failed with status {}: {}",
+            self.status, self.message
+        )
+    }
+}
+
+impl std::error::Error for NativeTalkerStatusError {}
 
 type ModelHandle = *mut c_void;
 type SessionHandle = *mut c_void;
@@ -1029,8 +1063,10 @@ fn ensure_native_success(status: i32, error: &[c_char]) -> Result<()> {
     if status == 0 {
         return Ok(());
     }
-    let message = unsafe { CStr::from_ptr(error.as_ptr()) }.to_string_lossy();
-    bail!("native talker failed with status {status}: {message}")
+    let message = unsafe { CStr::from_ptr(error.as_ptr()) }
+        .to_string_lossy()
+        .into_owned();
+    Err(NativeTalkerStatusError { status, message }.into())
 }
 
 #[cfg(test)]
@@ -1045,6 +1081,20 @@ mod tests {
         assert_eq!(std::mem::size_of::<NativeModelMemory>(), 16);
         assert_eq!(std::mem::size_of::<NativeSessionMemory>(), 32);
         assert_eq!(std::mem::size_of::<NativeStateInfo>(), 40);
+    }
+
+    #[test]
+    fn native_status_errors_remain_typed_through_anyhow() {
+        let mut message = [0 as c_char; ERROR_CAPACITY];
+        for (destination, source) in message.iter_mut().zip(b"CUDA launch failed\0") {
+            *destination = *source as c_char;
+        }
+        let error = ensure_native_success(STATUS_CUDA, &message).unwrap_err();
+        let native = error
+            .downcast_ref::<NativeTalkerStatusError>()
+            .expect("native status error must remain downcastable");
+        assert_eq!(native.status(), STATUS_CUDA);
+        assert_eq!(native.message(), "CUDA launch failed");
     }
 
     #[test]
