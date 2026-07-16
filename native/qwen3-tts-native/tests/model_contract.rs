@@ -5,6 +5,19 @@ use qwen3_tts_native::prompt::{CodecFrame, TextMode, TextSource, VoiceDesignProm
 use qwen3_tts_native::tokenizer::Qwen2Tokenizer;
 use qwen3_tts_native::weights::{SafeTensorProvider, WeightProvider};
 
+const OFFICIAL_LANGUAGES: [(&str, u32); 10] = [
+    ("Chinese", 2_055),
+    ("English", 2_050),
+    ("German", 2_053),
+    ("Italian", 2_070),
+    ("Portuguese", 2_071),
+    ("Spanish", 2_054),
+    ("Japanese", 2_058),
+    ("Korean", 2_064),
+    ("French", 2_061),
+    ("Russian", 2_069),
+];
+
 fn model_directory() -> Option<PathBuf> {
     std::env::var_os("QWEN3_TTS_MODEL_DIR").map(PathBuf::from)
 }
@@ -21,8 +34,75 @@ fn pinned_voice_design_config_is_typed_and_validated() {
         config.talker_config.code_predictor_config.num_hidden_layers,
         5
     );
-    assert_eq!(config.language_id("German").unwrap(), Some(2_053));
+    assert_eq!(
+        config.talker_config.codec_language_id.len(),
+        OFFICIAL_LANGUAGES.len()
+    );
+    for (language, expected_id) in OFFICIAL_LANGUAGES {
+        assert_eq!(config.language_id(language).unwrap(), Some(expected_id));
+        assert_eq!(
+            config.language_id(&language.to_ascii_uppercase()).unwrap(),
+            Some(expected_id)
+        );
+    }
+    assert_eq!(config.language_id("Auto").unwrap(), None);
+    assert_eq!(config.language_id("AUTO").unwrap(), None);
     assert!(config.language_id("Turkish").is_err());
+}
+
+#[test]
+fn official_language_and_auto_prefixes_are_exact() {
+    let Some(directory) = model_directory() else {
+        eprintln!("skipping real model test because QWEN3_TTS_MODEL_DIR is unset");
+        return;
+    };
+    let config = ModelConfig::load(&directory.join("config.json")).unwrap();
+    let assistant_ids = vec![101, 102, 103, 104, 105, 106, 107, 108, 109];
+
+    for (language, language_id) in OFFICIAL_LANGUAGES {
+        let prompt = VoiceDesignPrompt::from_token_ids(
+            &config,
+            vec![11, 12],
+            assistant_ids.clone(),
+            language,
+            TextMode::Streaming,
+        )
+        .unwrap();
+        let codec = prompt
+            .prefill
+            .iter()
+            .filter_map(|step| step.codec)
+            .collect::<Vec<_>>();
+        assert_eq!(codec, [2_154, 2_156, language_id, 2_157, 2_148, 2_149]);
+        assert_eq!(
+            &prompt.prefill[..2],
+            [
+                qwen3_tts_native::prompt::EmbeddingStep {
+                    text: Some(TextSource::Token(11)),
+                    codec: None,
+                },
+                qwen3_tts_native::prompt::EmbeddingStep {
+                    text: Some(TextSource::Token(12)),
+                    codec: None,
+                },
+            ]
+        );
+    }
+
+    let automatic = VoiceDesignPrompt::from_token_ids(
+        &config,
+        vec![11, 12],
+        assistant_ids,
+        "Auto",
+        TextMode::Streaming,
+    )
+    .unwrap();
+    let codec = automatic
+        .prefill
+        .iter()
+        .filter_map(|step| step.codec)
+        .collect::<Vec<_>>();
+    assert_eq!(codec, [2_155, 2_156, 2_157, 2_148, 2_149]);
 }
 
 #[test]
