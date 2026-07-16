@@ -3579,6 +3579,50 @@ qwen3_tts_codec_process_packet_v1(
 }
 
 extern "C" QWEN3_TTS_CODEC_API int32_t
+qwen3_tts_codec_process_batch_v1(
+    Qwen3TtsCodecBatchItemV1* items,
+    uint32_t item_count,
+    char* error,
+    size_t error_capacity
+) {
+    clear_error(error, error_capacity);
+    if (items == nullptr || item_count == 0 ||
+        item_count > QWEN3_TTS_CODEC_MAX_BATCH_STREAMS) {
+        write_error(error, error_capacity, "batch must contain 1-6 stream items");
+        return kStatusInvalidArgument;
+    }
+    for (uint32_t item = 0; item < item_count; ++item) {
+        if (items[item].context == nullptr) {
+            write_error(error, error_capacity, "batch item context is required");
+            return kStatusInvalidArgument;
+        }
+        for (uint32_t prior = 0; prior < item; ++prior) {
+            if (items[item].context == items[prior].context) {
+                write_error(error, error_capacity, "batch state handles must be independent");
+                return kStatusInvalidArgument;
+            }
+        }
+    }
+    for (uint32_t item = 0; item < item_count; ++item) {
+        const int32_t status = qwen3_tts_codec_process_packet_v1(
+            items[item].context,
+            items[item].codec_frames,
+            items[item].frame_count,
+            items[item].is_final,
+            items[item].pcm_output,
+            items[item].pcm_capacity_samples,
+            items[item].result,
+            error,
+            error_capacity
+        );
+        if (status != kStatusOk) {
+            return status;
+        }
+    }
+    return kStatusOk;
+}
+
+extern "C" QWEN3_TTS_CODEC_API int32_t
 qwen3_tts_codec_process_fixture_packet_v1(
     Qwen3TtsCodecContextV1* context,
     const uint16_t* codec_frames,
