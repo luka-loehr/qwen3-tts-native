@@ -143,6 +143,16 @@ type LatentFn = unsafe extern "C" fn(
     *mut c_char,
     usize,
 ) -> i32;
+type DecoderCheckpointFn = unsafe extern "C" fn(
+    *mut Context,
+    *const u16,
+    u32,
+    u32,
+    *mut f32,
+    usize,
+    *mut c_char,
+    usize,
+) -> i32;
 
 pub struct Api {
     _library: Library,
@@ -156,6 +166,7 @@ pub struct Api {
     frontend: FrontendFn,
     transformer: TransformerFn,
     latent: LatentFn,
+    decoder_checkpoint: DecoderCheckpointFn,
     process: ProcessFn,
 }
 
@@ -179,6 +190,8 @@ impl Api {
         let transformer =
             unsafe { load_symbol(&library, b"qwen3_tts_codec_debug_transformer_packet_v1\0")? };
         let latent = unsafe { load_symbol(&library, b"qwen3_tts_codec_debug_latent_packet_v1\0")? };
+        let decoder_checkpoint =
+            unsafe { load_symbol(&library, b"qwen3_tts_codec_debug_decoder_checkpoint_v1\0")? };
         let process =
             unsafe { load_symbol(&library, b"qwen3_tts_codec_process_fixture_packet_v1\0")? };
         Ok(Self {
@@ -193,6 +206,7 @@ impl Api {
             frontend,
             transformer,
             latent,
+            decoder_checkpoint,
             process,
         })
     }
@@ -324,6 +338,30 @@ impl Codec<'_> {
         };
         status_result(status, &error)?;
         Ok((stage_one, stage_two))
+    }
+
+    pub fn debug_decoder_checkpoint(
+        &mut self,
+        frames: &[[u16; CODEBOOKS]],
+        checkpoint: u32,
+        output_elements: usize,
+    ) -> Result<Vec<f32>, String> {
+        let mut output = vec![0.0_f32; output_elements];
+        let mut error = [0 as c_char; 512];
+        let status = unsafe {
+            (self.api.decoder_checkpoint)(
+                self.context,
+                frames.as_ptr().cast::<u16>(),
+                frames.len() as u32,
+                checkpoint,
+                output.as_mut_ptr(),
+                output.len(),
+                error.as_mut_ptr(),
+                error.len(),
+            )
+        };
+        status_result(status, &error)?;
+        Ok(output)
     }
 
     pub fn reset(&mut self) -> Result<(), String> {
