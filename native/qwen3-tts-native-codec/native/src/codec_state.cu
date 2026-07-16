@@ -89,6 +89,15 @@ constexpr size_t kTransformerDeviceBytes =
     (kNeuralKvElements + kTransformerPacketElements +
      kTransformerScratchElements) *
     sizeof(float);
+constexpr size_t kLatentMaxPositions =
+    QWEN3_TTS_CODEC_MAX_PACKET_FRAMES * 4;
+constexpr size_t kLatentElements = kLatentMaxPositions * 1024;
+constexpr size_t kLatentExpandedElements = kLatentMaxPositions * 4096;
+constexpr size_t kLatentHistoryElements = 2 * 6 * 1024;
+constexpr size_t kLatentDeviceBytes =
+    (2 * kLatentElements + kLatentExpandedElements +
+     kLatentHistoryElements) *
+    sizeof(float);
 
 constexpr int32_t kStatusOk = QWEN3_TTS_CODEC_STATUS_OK;
 constexpr int32_t kStatusInvalidArgument =
@@ -521,6 +530,137 @@ __global__ void silu_product_kernel(
     }
 }
 
+__global__ void latent_transpose_kernel(
+    const float* input,
+    size_t input_positions,
+    const float* weight,
+    const float* bias,
+    float* output
+) {
+    const size_t item = blockIdx.x * blockDim.x + threadIdx.x;
+    const size_t output_positions = input_positions * 2;
+    const size_t total = output_positions * 1024;
+    if (item >= total) {
+        return;
+    }
+    const size_t output_position = item / 1024;
+    const size_t output_channel = item % 1024;
+    const size_t input_position = output_position / 2;
+    const size_t phase = output_position % 2;
+    float value = bias[output_channel];
+    for (size_t input_channel = 0; input_channel < 1024; ++input_channel) {
+        const size_t weight_index =
+            (input_channel * 1024 + output_channel) * 2 + phase;
+        value = fmaf(
+            input[input_position * 1024 + input_channel],
+            weight[weight_index],
+            value
+        );
+    }
+    output[item] = value;
+}
+
+__global__ void depthwise_causal_kernel(
+    const float* input,
+    size_t positions,
+    size_t channels,
+    const float* history,
+    size_t history_positions,
+    const float* weight,
+    const float* bias,
+    float* output
+) {
+    const size_t item = blockIdx.x * blockDim.x + threadIdx.x;
+    const size_t total = positions * channels;
+    if (item >= total) {
+        return;
+    }
+    const int32_t position = static_cast<int32_t>(item / channels);
+    const size_t channel = item % channels;
+    float result = bias[channel];
+    for (int32_t kernel = 0; kernel < 7; ++kernel) {
+        const int32_t source_position = position - (6 - kernel);
+        const float source = source_position >= 0
+                                 ? input[static_cast<size_t>(source_position) * channels + channel]
+                                 : history[(history_positions + source_position) * channels + channel];
+        result = fmaf(weight[channel * 7 + kernel], source, result);
+    }
+    output[item] = result;
+}
+
+__global__ void update_causal_history_kernel(
+    const float* input,
+    size_t positions,
+    size_t channels,
+    size_t history_positions,
+    float* history
+) {
+    const size_t channel = blockIdx.x * blockDim.x + threadIdx.x;
+    if (channel >= channels) {
+        return;
+    }
+    for (size_t history_position = 0; history_position < history_positions; ++history_position) {
+        const size_t combined_position = history_position + positions;
+        history[history_position * channels + channel] =
+            combined_position < history_positions
+                ? history[combined_position * channels + channel]
+                : input[(combined_position - history_positions) * channels + channel];
+    }
+}
+
+__global__ void layer_norm_kernel(
+    const float* input,
+    size_t positions,
+    size_t channels,
+    const float* weight,
+    const float* bias,
+    float epsilon,
+    float* output
+) {
+    const size_t position = blockIdx.x * blockDim.x + threadIdx.x;
+    if (position >= positions) {
+        return;
+    }
+    const float* row = input + position * channels;
+    float mean = 0.0F;
+    for (size_t channel = 0; channel < channels; ++channel) {
+        mean += row[channel];
+    }
+    mean /= static_cast<float>(channels);
+    float variance = 0.0F;
+    for (size_t channel = 0; channel < channels; ++channel) {
+        const float centered = row[channel] - mean;
+        variance = fmaf(centered, centered, variance);
+    }
+    const float scale = rsqrtf(variance / static_cast<float>(channels) + epsilon);
+    for (size_t channel = 0; channel < channels; ++channel) {
+        output[position * channels + channel] =
+            (row[channel] - mean) * scale * weight[channel] + bias[channel];
+    }
+}
+
+__global__ void gelu_kernel(float* values, size_t count) {
+    const size_t item = blockIdx.x * blockDim.x + threadIdx.x;
+    if (item < count) {
+        const float value = values[item];
+        values[item] = 0.5F * value * (1.0F + erff(value * 0.7071067811865475F));
+    }
+}
+
+__global__ void gamma_residual_kernel(
+    const float* residual,
+    const float* update,
+    const float* gamma,
+    size_t count,
+    size_t channels,
+    float* output
+) {
+    const size_t item = blockIdx.x * blockDim.x + threadIdx.x;
+    if (item < count) {
+        output[item] = residual[item] + update[item] * gamma[item % channels];
+    }
+}
+
 template <typename T>
 cudaError_t allocate_device(T** pointer, size_t elements) noexcept {
     return cudaMalloc(reinterpret_cast<void**>(pointer), elements * sizeof(T));
@@ -568,6 +708,10 @@ struct Qwen3TtsCodecContextV1 {
     float* neural_kv = nullptr;
     float* transformer_packet = nullptr;
     float* transformer_scratch = nullptr;
+    float* latent_a = nullptr;
+    float* latent_b = nullptr;
+    float* latent_expanded = nullptr;
+    float* latent_history = nullptr;
     uint64_t frame_position = 0;
     uint64_t emitted_samples = 0;
     uint64_t neural_frame_position = 0;
@@ -661,6 +805,301 @@ int32_t launch_linear_vector(
             return cuda_error(error, error_capacity, "launch linear bias", status);
         }
     }
+    return kStatusOk;
+}
+
+int32_t launch_linear_matrix(
+    Qwen3TtsCodecContextV1* context,
+    const float* input,
+    size_t positions,
+    size_t input_width,
+    const char* weight_name,
+    const char* bias_name,
+    size_t output_width,
+    float* output,
+    char* error,
+    size_t error_capacity
+) noexcept {
+    const float* weight = require_f32_weight(
+        context, weight_name, error, error_capacity
+    );
+    if (weight == nullptr) {
+        return kStatusModel;
+    }
+    constexpr float kOne = 1.0F;
+    constexpr float kZero = 0.0F;
+    const cublasStatus_t cublas_status = cublasSgemm(
+        context->cublas,
+        CUBLAS_OP_T,
+        CUBLAS_OP_N,
+        static_cast<int>(output_width),
+        static_cast<int>(positions),
+        static_cast<int>(input_width),
+        &kOne,
+        weight,
+        static_cast<int>(input_width),
+        input,
+        static_cast<int>(input_width),
+        &kZero,
+        output,
+        static_cast<int>(output_width)
+    );
+    if (cublas_status != CUBLAS_STATUS_SUCCESS) {
+        return cublas_error(error, error_capacity, "execute matrix projection", cublas_status);
+    }
+    if (bias_name != nullptr) {
+        const float* bias = require_f32_weight(
+            context, bias_name, error, error_capacity
+        );
+        if (bias == nullptr) {
+            return kStatusModel;
+        }
+        const size_t count = positions * output_width;
+        add_bias_kernel<<<blocks_for(count), 256, 0, context->stream>>>(
+            output, bias, count, output_width
+        );
+        const cudaError_t status = cudaGetLastError();
+        if (status != cudaSuccess) {
+            return cuda_error(error, error_capacity, "launch matrix bias", status);
+        }
+    }
+    return kStatusOk;
+}
+
+int32_t run_convnext_stage(
+    Qwen3TtsCodecContextV1* context,
+    uint32_t stage,
+    const float* input,
+    size_t positions,
+    float* output,
+    char* error,
+    size_t error_capacity
+) noexcept {
+    char name[128];
+    std::snprintf(
+        name,
+        sizeof(name),
+        "decoder.upsample.%u.1.dwconv.conv.weight",
+        stage
+    );
+    const float* depthwise_weight = require_f32_weight(
+        context, name, error, error_capacity
+    );
+    std::snprintf(
+        name,
+        sizeof(name),
+        "decoder.upsample.%u.1.dwconv.conv.bias",
+        stage
+    );
+    const float* depthwise_bias = require_f32_weight(
+        context, name, error, error_capacity
+    );
+    if (depthwise_weight == nullptr || depthwise_bias == nullptr) {
+        return kStatusModel;
+    }
+    float* history = context->latent_history + static_cast<size_t>(stage) * 6 * 1024;
+    depthwise_causal_kernel<<<blocks_for(positions * 1024), 256, 0, context->stream>>>(
+        input,
+        positions,
+        1024,
+        history,
+        6,
+        depthwise_weight,
+        depthwise_bias,
+        output
+    );
+    cudaError_t status = cudaGetLastError();
+    if (status == cudaSuccess) {
+        update_causal_history_kernel<<<4, 256, 0, context->stream>>>(
+            input, positions, 1024, 6, history
+        );
+        status = cudaGetLastError();
+    }
+    if (status != cudaSuccess) {
+        return cuda_error(error, error_capacity, "launch ConvNeXt depthwise convolution", status);
+    }
+    std::snprintf(
+        name, sizeof(name), "decoder.upsample.%u.1.norm.weight", stage
+    );
+    const float* norm_weight = require_f32_weight(
+        context, name, error, error_capacity
+    );
+    std::snprintf(
+        name, sizeof(name), "decoder.upsample.%u.1.norm.bias", stage
+    );
+    const float* norm_bias = require_f32_weight(
+        context, name, error, error_capacity
+    );
+    if (norm_weight == nullptr || norm_bias == nullptr) {
+        return kStatusModel;
+    }
+    layer_norm_kernel<<<blocks_for(positions), 256, 0, context->stream>>>(
+        output, positions, 1024, norm_weight, norm_bias, 1.0e-6F, output
+    );
+    status = cudaGetLastError();
+    if (status != cudaSuccess) {
+        return cuda_error(error, error_capacity, "launch ConvNeXt layer norm", status);
+    }
+    char weight_name[128];
+    char bias_name[128];
+    std::snprintf(
+        weight_name,
+        sizeof(weight_name),
+        "decoder.upsample.%u.1.pwconv1.weight",
+        stage
+    );
+    std::snprintf(
+        bias_name,
+        sizeof(bias_name),
+        "decoder.upsample.%u.1.pwconv1.bias",
+        stage
+    );
+    int32_t result = launch_linear_matrix(
+        context,
+        output,
+        positions,
+        1024,
+        weight_name,
+        bias_name,
+        4096,
+        context->latent_expanded,
+        error,
+        error_capacity
+    );
+    if (result != kStatusOk) {
+        return result;
+    }
+    gelu_kernel<<<blocks_for(positions * 4096), 256, 0, context->stream>>>(
+        context->latent_expanded, positions * 4096
+    );
+    status = cudaGetLastError();
+    if (status != cudaSuccess) {
+        return cuda_error(error, error_capacity, "launch ConvNeXt GELU", status);
+    }
+    std::snprintf(
+        weight_name,
+        sizeof(weight_name),
+        "decoder.upsample.%u.1.pwconv2.weight",
+        stage
+    );
+    std::snprintf(
+        bias_name,
+        sizeof(bias_name),
+        "decoder.upsample.%u.1.pwconv2.bias",
+        stage
+    );
+    result = launch_linear_matrix(
+        context,
+        context->latent_expanded,
+        positions,
+        4096,
+        weight_name,
+        bias_name,
+        1024,
+        output,
+        error,
+        error_capacity
+    );
+    if (result != kStatusOk) {
+        return result;
+    }
+    std::snprintf(
+        name, sizeof(name), "decoder.upsample.%u.1.gamma", stage
+    );
+    const float* gamma = require_f32_weight(
+        context, name, error, error_capacity
+    );
+    if (gamma == nullptr) {
+        return kStatusModel;
+    }
+    gamma_residual_kernel<<<blocks_for(positions * 1024), 256, 0, context->stream>>>(
+        input, output, gamma, positions * 1024, 1024, output
+    );
+    status = cudaGetLastError();
+    return status == cudaSuccess
+               ? kStatusOk
+               : cuda_error(error, error_capacity, "launch ConvNeXt residual", status);
+}
+
+int32_t run_latent_upsampling(
+    Qwen3TtsCodecContextV1* context,
+    const float* transformer,
+    size_t frames,
+    float* stage_one_host,
+    float** output,
+    size_t* output_positions,
+    char* error,
+    size_t error_capacity
+) noexcept {
+    const float* input = transformer;
+    size_t positions = frames;
+    for (uint32_t stage = 0; stage < 2; ++stage) {
+        char weight_name[128];
+        char bias_name[128];
+        std::snprintf(
+            weight_name,
+            sizeof(weight_name),
+            "decoder.upsample.%u.0.conv.weight",
+            stage
+        );
+        std::snprintf(
+            bias_name,
+            sizeof(bias_name),
+            "decoder.upsample.%u.0.conv.bias",
+            stage
+        );
+        const float* weight = require_f32_weight(
+            context, weight_name, error, error_capacity
+        );
+        const float* bias = require_f32_weight(
+            context, bias_name, error, error_capacity
+        );
+        if (weight == nullptr || bias == nullptr) {
+            return kStatusModel;
+        }
+        latent_transpose_kernel<<<
+            blocks_for(positions * 2 * 1024),
+            256,
+            0,
+            context->stream>>>(
+            input, positions, weight, bias, context->latent_a
+        );
+        cudaError_t status = cudaGetLastError();
+        if (status != cudaSuccess) {
+            return cuda_error(error, error_capacity, "launch latent transposed convolution", status);
+        }
+        positions *= 2;
+        const int32_t result = run_convnext_stage(
+            context,
+            stage,
+            context->latent_a,
+            positions,
+            context->latent_b,
+            error,
+            error_capacity
+        );
+        if (result != kStatusOk) {
+            return result;
+        }
+        if (stage == 0 && stage_one_host != nullptr) {
+            status = cudaMemcpyAsync(
+                stage_one_host,
+                context->latent_b,
+                positions * 1024 * sizeof(float),
+                cudaMemcpyDeviceToHost,
+                context->stream
+            );
+            if (status == cudaSuccess) {
+                status = cudaStreamSynchronize(context->stream);
+            }
+            if (status != cudaSuccess) {
+                return cuda_error(error, error_capacity, "copy latent stage one", status);
+            }
+        }
+        input = context->latent_b;
+    }
+    *output = context->latent_b;
+    *output_positions = positions;
     return kStatusOk;
 }
 
@@ -957,6 +1396,10 @@ void release_context(Qwen3TtsCodecContextV1* context) noexcept {
     cudaFree(context->transformer_scratch);
     cudaFree(context->transformer_packet);
     cudaFree(context->neural_kv);
+    cudaFree(context->latent_history);
+    cudaFree(context->latent_expanded);
+    cudaFree(context->latent_b);
+    cudaFree(context->latent_a);
     cudaFree(context->fixture_history);
     cudaFree(context->convolution_history);
     cudaFree(context->transformer_kv);
@@ -1034,6 +1477,15 @@ int32_t reset_device_state(
     );
     if (status != cudaSuccess) {
         return cuda_error(error, error_capacity, "clear neural transformer KV", status);
+    }
+    status = cudaMemsetAsync(
+        context->latent_history,
+        0,
+        kLatentHistoryElements * sizeof(float),
+        context->stream
+    );
+    if (status != cudaSuccess) {
+        return cuda_error(error, error_capacity, "clear latent ConvNeXt history", status);
     }
     status = cudaStreamSynchronize(context->stream);
     if (status != cudaSuccess) {
@@ -1241,6 +1693,20 @@ extern "C" QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_create_v1(
             &context->transformer_scratch, kTransformerScratchElements
         );
     }
+    if (status == cudaSuccess) {
+        status = allocate_device(&context->latent_a, kLatentElements);
+    }
+    if (status == cudaSuccess) {
+        status = allocate_device(&context->latent_b, kLatentElements);
+    }
+    if (status == cudaSuccess) {
+        status = allocate_device(
+            &context->latent_expanded, kLatentExpandedElements
+        );
+    }
+    if (status == cudaSuccess) {
+        status = allocate_device(&context->latent_history, kLatentHistoryElements);
+    }
     if (status != cudaSuccess) {
         const int32_t result =
             cuda_error(error, error_capacity, "allocate codec state", status);
@@ -1300,7 +1766,7 @@ extern "C" QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_state_info_v1(
         kTransformerKvBytes + kConvolutionHistoryBytes + kCodecRingBytes +
         kPcmRingBytes + kFixtureHistoryBytes + kScratchBytes +
         kFrontendDeviceBytes + kTransformerDeviceBytes +
-        context->model_info.device_bytes;
+        kLatentDeviceBytes + context->model_info.device_bytes;
     *output = Qwen3TtsCodecStateInfoV1{
         context->frame_position,
         context->emitted_samples,
@@ -1788,6 +2254,89 @@ qwen3_tts_codec_debug_transformer_packet_v1(
     }
     if (status != cudaSuccess) {
         return cuda_error(error, error_capacity, "copy transformer checkpoint", status);
+    }
+    return kStatusOk;
+}
+
+extern "C" QWEN3_TTS_CODEC_API int32_t
+qwen3_tts_codec_debug_latent_packet_v1(
+    Qwen3TtsCodecContextV1* context,
+    const uint16_t* codec_frames,
+    uint32_t frame_count,
+    float* stage_one_output,
+    size_t stage_one_capacity,
+    float* stage_two_output,
+    size_t stage_two_capacity,
+    char* error,
+    size_t error_capacity
+) {
+    clear_error(error, error_capacity);
+    const size_t stage_one_positions = static_cast<size_t>(frame_count) * 2;
+    const size_t stage_two_positions = static_cast<size_t>(frame_count) * 4;
+    if (context == nullptr || codec_frames == nullptr ||
+        stage_one_output == nullptr || stage_two_output == nullptr ||
+        frame_count == 0 || frame_count > QWEN3_TTS_CODEC_MAX_PACKET_FRAMES ||
+        stage_one_capacity < stage_one_positions * 1024 ||
+        stage_two_capacity < stage_two_positions * 1024) {
+        write_error(error, error_capacity, "invalid latent checkpoint packet");
+        return kStatusInvalidArgument;
+    }
+    std::vector<float> transformer(static_cast<size_t>(frame_count) * 1024);
+    int32_t result = qwen3_tts_codec_debug_transformer_packet_v1(
+        context,
+        codec_frames,
+        frame_count,
+        transformer.data(),
+        transformer.size(),
+        error,
+        error_capacity
+    );
+    if (result != kStatusOk) {
+        return result;
+    }
+    std::vector<float> stage_one_row(stage_one_positions * 1024);
+    float* stage_two_device = nullptr;
+    size_t actual_stage_two_positions = 0;
+    result = run_latent_upsampling(
+        context,
+        context->transformer_packet,
+        frame_count,
+        stage_one_row.data(),
+        &stage_two_device,
+        &actual_stage_two_positions,
+        error,
+        error_capacity
+    );
+    if (result != kStatusOk) {
+        return result;
+    }
+    if (actual_stage_two_positions != stage_two_positions) {
+        write_error(error, error_capacity, "latent upsampler returned an invalid length");
+        return kStatusState;
+    }
+    std::vector<float> stage_two_row(stage_two_positions * 1024);
+    cudaError_t status = cudaMemcpyAsync(
+        stage_two_row.data(),
+        stage_two_device,
+        stage_two_row.size() * sizeof(float),
+        cudaMemcpyDeviceToHost,
+        context->stream
+    );
+    if (status == cudaSuccess) {
+        status = cudaStreamSynchronize(context->stream);
+    }
+    if (status != cudaSuccess) {
+        return cuda_error(error, error_capacity, "copy latent stage two", status);
+    }
+    for (size_t channel = 0; channel < 1024; ++channel) {
+        for (size_t position = 0; position < stage_one_positions; ++position) {
+            stage_one_output[channel * stage_one_positions + position] =
+                stage_one_row[position * 1024 + channel];
+        }
+        for (size_t position = 0; position < stage_two_positions; ++position) {
+            stage_two_output[channel * stage_two_positions + position] =
+                stage_two_row[position * 1024 + channel];
+        }
     }
     return kStatusOk;
 }

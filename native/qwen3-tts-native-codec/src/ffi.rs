@@ -132,6 +132,17 @@ type FrontendFn = unsafe extern "C" fn(
 ) -> i32;
 type TransformerFn =
     unsafe extern "C" fn(*mut Context, *const u16, u32, *mut f32, usize, *mut c_char, usize) -> i32;
+type LatentFn = unsafe extern "C" fn(
+    *mut Context,
+    *const u16,
+    u32,
+    *mut f32,
+    usize,
+    *mut f32,
+    usize,
+    *mut c_char,
+    usize,
+) -> i32;
 
 pub struct Api {
     _library: Library,
@@ -144,6 +155,7 @@ pub struct Api {
     model_info: ModelInfoFn,
     frontend: FrontendFn,
     transformer: TransformerFn,
+    latent: LatentFn,
     process: ProcessFn,
 }
 
@@ -166,6 +178,7 @@ impl Api {
             unsafe { load_symbol(&library, b"qwen3_tts_codec_debug_frontend_packet_v1\0")? };
         let transformer =
             unsafe { load_symbol(&library, b"qwen3_tts_codec_debug_transformer_packet_v1\0")? };
+        let latent = unsafe { load_symbol(&library, b"qwen3_tts_codec_debug_latent_packet_v1\0")? };
         let process =
             unsafe { load_symbol(&library, b"qwen3_tts_codec_process_fixture_packet_v1\0")? };
         Ok(Self {
@@ -179,6 +192,7 @@ impl Api {
             model_info,
             frontend,
             transformer,
+            latent,
             process,
         })
     }
@@ -286,6 +300,30 @@ impl Codec<'_> {
         };
         status_result(status, &error)?;
         Ok(output)
+    }
+
+    pub fn debug_latent(
+        &mut self,
+        frames: &[[u16; CODEBOOKS]],
+    ) -> Result<(Vec<f32>, Vec<f32>), String> {
+        let mut stage_one = vec![0.0_f32; frames.len() * 2 * 1024];
+        let mut stage_two = vec![0.0_f32; frames.len() * 4 * 1024];
+        let mut error = [0 as c_char; 512];
+        let status = unsafe {
+            (self.api.latent)(
+                self.context,
+                frames.as_ptr().cast::<u16>(),
+                frames.len() as u32,
+                stage_one.as_mut_ptr(),
+                stage_one.len(),
+                stage_two.as_mut_ptr(),
+                stage_two.len(),
+                error.as_mut_ptr(),
+                error.len(),
+            )
+        };
+        status_result(status, &error)?;
+        Ok((stage_one, stage_two))
     }
 
     pub fn reset(&mut self) -> Result<(), String> {

@@ -179,6 +179,20 @@ QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_debug_transformer_packet_v1(
     size_t error_capacity
 );
 
+/* Research-only latent upsampler parity hook. Outputs are channel-major
+ * [1, 1024, frames*2] and [1, 1024, frames*4]. */
+QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_debug_latent_packet_v1(
+    Qwen3TtsCodecContextV1* context,
+    const uint16_t* codec_frames,
+    uint32_t frame_count,
+    float* stage_one_output,
+    size_t stage_one_capacity,
+    float* stage_two_output,
+    size_t stage_two_capacity,
+    char* error,
+    size_t error_capacity
+);
+
 QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_process_fixture_packet_v1(
     Qwen3TtsCodecContextV1* context,
     const uint16_t* codec_frames,

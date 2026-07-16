@@ -48,6 +48,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             let fixture = required_argument(&arguments, 4, "decoder fixture directory")?;
             transformer_parity(Path::new(library), Path::new(model), Path::new(fixture))
         }
+        "latent-parity" => {
+            let library = required_argument(&arguments, 2, "shared library path")?;
+            let model = required_argument(&arguments, 3, "speech tokenizer safetensors path")?;
+            let fixture = required_argument(&arguments, 4, "decoder fixture directory")?;
+            latent_parity(Path::new(library), Path::new(model), Path::new(fixture))
+        }
         _ => {
             eprintln!(
                 "usage: qwen3-tts-native-codec <parity|benchmark> <library> [iterations]\n\
@@ -56,6 +62,109 @@ fn main() -> Result<(), Box<dyn Error>> {
             );
             Ok(())
         }
+    }
+}
+
+fn latent_parity(
+    library_path: &Path,
+    model_path: &Path,
+    fixture_path: &Path,
+) -> Result<(), Box<dyn Error>> {
+    let codes = read_u16_le(&fixture_path.join("codes.u16le"))?;
+    if codes.len() % ffi::CODEBOOKS != 0 {
+        return Err(io::Error::other("fixture code count is not divisible by 16").into());
+    }
+    let frames = codes
+        .chunks_exact(ffi::CODEBOOKS)
+        .map(|values| values.try_into().expect("chunk contains exactly 16 codes"))
+        .collect::<Vec<[u16; ffi::CODEBOOKS]>>();
+    let expected_one = read_f32_le(&fixture_path.join("04-latent-upsample-1.f32le"))?;
+    let expected_two = read_f32_le(&fixture_path.join("05-latent-upsample-2.f32le"))?;
+    let api = Api::load(library_path)?;
+    let model = model::SafetensorsFile::open(model_path)?;
+    let mut codec = api.create_codec(0).map_err(io::Error::other)?;
+    codec.load_model(&model).map_err(io::Error::other)?;
+    let (actual_one, actual_two) = codec.debug_latent(&frames).map_err(io::Error::other)?;
+    let stage_one = compare_f32(&actual_one, &expected_one)?;
+    let stage_two = compare_f32(&actual_two, &expected_two)?;
+    codec.reset().map_err(io::Error::other)?;
+    let split_pattern = [1_usize, 3];
+    let mut split_one = vec![0.0_f32; expected_one.len()];
+    let mut split_two = vec![0.0_f32; expected_two.len()];
+    let mut frame_position = 0_usize;
+    let mut stage_one_position = 0_usize;
+    let mut stage_two_position = 0_usize;
+    for requested in split_pattern {
+        let count = requested.min(frames.len() - frame_position);
+        let (packet_one, packet_two) = codec
+            .debug_latent(&frames[frame_position..frame_position + count])
+            .map_err(io::Error::other)?;
+        copy_channel_major_packet(
+            &packet_one,
+            count * 2,
+            &mut split_one,
+            frames.len() * 2,
+            stage_one_position,
+            1024,
+        );
+        copy_channel_major_packet(
+            &packet_two,
+            count * 4,
+            &mut split_two,
+            frames.len() * 4,
+            stage_two_position,
+            1024,
+        );
+        frame_position += count;
+        stage_one_position += count * 2;
+        stage_two_position += count * 4;
+        if frame_position == frames.len() {
+            break;
+        }
+    }
+    let split_stage_one = compare_f32(&split_one, &expected_one)?;
+    let split_stage_two = compare_f32(&split_two, &expected_two)?;
+    let passed = stage_one.maximum_absolute_error <= 1.0e-5
+        && stage_two.maximum_absolute_error <= 1.0e-4
+        && split_stage_one.maximum_absolute_error <= 1.0e-5
+        && split_stage_two.maximum_absolute_error <= 1.0e-4;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "schema_version": 1,
+            "mode": "real_qwen_incremental_latent_upsampler",
+            "passed": passed,
+            "frames": frames.len(),
+            "stage_one": stage_one.to_json(),
+            "stage_two": stage_two.to_json(),
+            "split_packet_stage_one": split_stage_one.to_json(),
+            "split_packet_stage_two": split_stage_two.to_json(),
+            "split_packet_pattern": split_pattern,
+            "thresholds": {
+                "stage_one_maximum_absolute_error": 1.0e-5,
+                "stage_two_maximum_absolute_error": 1.0e-4
+            },
+            "prefix_recomputed": false
+        }))?
+    );
+    if !passed {
+        return Err(io::Error::other("native latent upsampler parity failed").into());
+    }
+    Ok(())
+}
+
+fn copy_channel_major_packet(
+    packet: &[f32],
+    packet_positions: usize,
+    stream: &mut [f32],
+    stream_positions: usize,
+    stream_position: usize,
+    channels: usize,
+) {
+    for channel in 0..channels {
+        let source = &packet[channel * packet_positions..(channel + 1) * packet_positions];
+        let destination_start = channel * stream_positions + stream_position;
+        stream[destination_start..destination_start + packet_positions].copy_from_slice(source);
     }
 }
 
