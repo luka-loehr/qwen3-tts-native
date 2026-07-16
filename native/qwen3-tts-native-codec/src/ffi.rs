@@ -1,8 +1,11 @@
 use crate::model::{DecoderWeightProvider, TensorDType};
 use libloading::Library;
+use std::cell::Cell;
 use std::error::Error;
 use std::ffi::{CStr, CString, c_char, c_void};
+use std::marker::PhantomData;
 use std::path::Path;
+use std::sync::Arc;
 
 pub const CODEBOOKS: usize = 16;
 pub const MAX_PACKET_FRAMES: usize = 4;
@@ -14,6 +17,16 @@ pub const STATUS_MODEL: i32 = -5;
 
 #[repr(C)]
 pub struct Context {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct SharedModelHandle {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct SessionHandle {
     _private: [u8; 0],
 }
 
@@ -109,6 +122,32 @@ pub struct ModelInfo {
     pub loaded: u32,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ModelMemoryInfo {
+    pub source_bytes: u64,
+    pub shared_weight_device_bytes: u64,
+    pub parameter_count: u64,
+    pub transient_upload_device_bytes: u64,
+    pub tensor_count: u32,
+    pub warmup_completed: u32,
+    pub active_session_count: u32,
+    pub reserved: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SessionMemoryInfo {
+    pub device_bytes: u64,
+    pub host_pinned_bytes: u64,
+    pub transformer_kv_bytes: u64,
+    pub convolution_history_bytes: u64,
+    pub codec_ring_bytes: u64,
+    pub pcm_ring_bytes: u64,
+    pub workspace_device_bytes: u64,
+    pub reserved: u64,
+}
+
 type AbiVersionFn = unsafe extern "C" fn() -> i32;
 type CreateFn = unsafe extern "C" fn(*const Config, *mut *mut Context, *mut c_char, usize) -> i32;
 type DestroyFn = unsafe extern "C" fn(*mut Context, *mut c_char, usize) -> i32;
@@ -169,6 +208,45 @@ type DecoderCheckpointFn = unsafe extern "C" fn(
     *mut c_char,
     usize,
 ) -> i32;
+type SharedModelCreateFn =
+    unsafe extern "C" fn(i32, *mut *mut SharedModelHandle, *mut c_char, usize) -> i32;
+type SharedModelDestroyFn = unsafe extern "C" fn(*mut SharedModelHandle, *mut c_char, usize) -> i32;
+type SharedModelLoadFn = unsafe extern "C" fn(
+    *mut SharedModelHandle,
+    *const WeightProvider,
+    *mut ModelInfo,
+    *mut c_char,
+    usize,
+) -> i32;
+type SharedModelWarmupFn = unsafe extern "C" fn(*mut SharedModelHandle, *mut c_char, usize) -> i32;
+type SharedModelInfoFn =
+    unsafe extern "C" fn(*const SharedModelHandle, *mut ModelInfo, *mut c_char, usize) -> i32;
+type SharedModelMemoryInfoFn =
+    unsafe extern "C" fn(*const SharedModelHandle, *mut ModelMemoryInfo, *mut c_char, usize) -> i32;
+type SessionCreateFn = unsafe extern "C" fn(
+    *mut SharedModelHandle,
+    *mut *mut SessionHandle,
+    *mut c_char,
+    usize,
+) -> i32;
+type SessionDestroyFn = unsafe extern "C" fn(*mut SessionHandle, *mut c_char, usize) -> i32;
+type SessionResetFn = unsafe extern "C" fn(*mut SessionHandle, *mut c_char, usize) -> i32;
+type SessionCancelFn = unsafe extern "C" fn(*mut SessionHandle, *mut c_char, usize) -> i32;
+type SessionStateInfoFn =
+    unsafe extern "C" fn(*const SessionHandle, *mut StateInfo, *mut c_char, usize) -> i32;
+type SessionMemoryInfoFn =
+    unsafe extern "C" fn(*const SessionHandle, *mut SessionMemoryInfo, *mut c_char, usize) -> i32;
+type SessionProcessFn = unsafe extern "C" fn(
+    *mut SessionHandle,
+    *const u16,
+    u32,
+    i32,
+    *mut i16,
+    usize,
+    *mut PacketResult,
+    *mut c_char,
+    usize,
+) -> i32;
 
 pub struct Api {
     _library: Library,
@@ -187,11 +265,30 @@ pub struct Api {
     process: ProcessFn,
     batch_process: BatchProcessFn,
     fixture_process: ProcessFn,
+    shared_model_create: Option<SharedModelCreateFn>,
+    shared_model_destroy: Option<SharedModelDestroyFn>,
+    shared_model_load: Option<SharedModelLoadFn>,
+    shared_model_warmup: Option<SharedModelWarmupFn>,
+    shared_model_info: Option<SharedModelInfoFn>,
+    shared_model_memory_info: Option<SharedModelMemoryInfoFn>,
+    session_create: Option<SessionCreateFn>,
+    session_destroy: Option<SessionDestroyFn>,
+    session_reset: Option<SessionResetFn>,
+    session_cancel: Option<SessionCancelFn>,
+    session_state_info: Option<SessionStateInfoFn>,
+    session_memory_info: Option<SessionMemoryInfoFn>,
+    session_process: Option<SessionProcessFn>,
 }
 
 unsafe fn load_symbol<T: Copy>(library: &Library, symbol: &[u8]) -> Result<T, Box<dyn Error>> {
     let loaded = unsafe { library.get::<T>(symbol)? };
     Ok(*loaded)
+}
+
+unsafe fn load_optional_symbol<T: Copy>(library: &Library, symbol: &[u8]) -> Option<T> {
+    unsafe { library.get::<T>(symbol) }
+        .ok()
+        .map(|loaded| *loaded)
 }
 
 impl Api {
@@ -217,6 +314,34 @@ impl Api {
             unsafe { load_symbol(&library, b"qwen3_tts_codec_process_batch_v1\0")? };
         let fixture_process =
             unsafe { load_symbol(&library, b"qwen3_tts_codec_process_fixture_packet_v1\0")? };
+        let shared_model_create =
+            unsafe { load_optional_symbol(&library, b"qwen3_tts_codec_shared_model_create_v1\0") };
+        let shared_model_destroy =
+            unsafe { load_optional_symbol(&library, b"qwen3_tts_codec_shared_model_destroy_v1\0") };
+        let shared_model_load =
+            unsafe { load_optional_symbol(&library, b"qwen3_tts_codec_shared_model_load_v1\0") };
+        let shared_model_warmup =
+            unsafe { load_optional_symbol(&library, b"qwen3_tts_codec_shared_model_warmup_v1\0") };
+        let shared_model_info =
+            unsafe { load_optional_symbol(&library, b"qwen3_tts_codec_shared_model_info_v1\0") };
+        let shared_model_memory_info = unsafe {
+            load_optional_symbol(&library, b"qwen3_tts_codec_shared_model_memory_info_v1\0")
+        };
+        let session_create =
+            unsafe { load_optional_symbol(&library, b"qwen3_tts_codec_session_create_v1\0") };
+        let session_destroy =
+            unsafe { load_optional_symbol(&library, b"qwen3_tts_codec_session_destroy_v1\0") };
+        let session_reset =
+            unsafe { load_optional_symbol(&library, b"qwen3_tts_codec_session_reset_v1\0") };
+        let session_cancel =
+            unsafe { load_optional_symbol(&library, b"qwen3_tts_codec_session_cancel_v1\0") };
+        let session_state_info =
+            unsafe { load_optional_symbol(&library, b"qwen3_tts_codec_session_state_info_v1\0") };
+        let session_memory_info =
+            unsafe { load_optional_symbol(&library, b"qwen3_tts_codec_session_memory_info_v1\0") };
+        let session_process = unsafe {
+            load_optional_symbol(&library, b"qwen3_tts_codec_session_process_packet_v1\0")
+        };
         Ok(Self {
             _library: library,
             abi_version,
@@ -234,6 +359,19 @@ impl Api {
             process,
             batch_process,
             fixture_process,
+            shared_model_create,
+            shared_model_destroy,
+            shared_model_load,
+            shared_model_warmup,
+            shared_model_info,
+            shared_model_memory_info,
+            session_create,
+            session_destroy,
+            session_reset,
+            session_cancel,
+            session_state_info,
+            session_memory_info,
+            session_process,
         })
     }
 
@@ -257,6 +395,72 @@ impl Api {
             return Err("create returned a null context".to_owned());
         }
         Ok(Codec { api: self, context })
+    }
+
+    pub fn load_shared_model(
+        self: &Arc<Self>,
+        device_index: i32,
+        weights: &dyn DecoderWeightProvider,
+    ) -> Result<Arc<NativeCodecModel>, String> {
+        let create = self
+            .shared_model_create
+            .ok_or_else(|| "shared model ABI is unavailable".to_owned())?;
+        let load = self
+            .shared_model_load
+            .ok_or_else(|| "shared model ABI is unavailable".to_owned())?;
+        let warmup = self
+            .shared_model_warmup
+            .ok_or_else(|| "shared model ABI is unavailable".to_owned())?;
+        if self.shared_model_destroy.is_none()
+            || self.shared_model_info.is_none()
+            || self.shared_model_memory_info.is_none()
+            || self.session_create.is_none()
+            || self.session_destroy.is_none()
+            || self.session_reset.is_none()
+            || self.session_cancel.is_none()
+            || self.session_state_info.is_none()
+            || self.session_memory_info.is_none()
+            || self.session_process.is_none()
+        {
+            return Err("shared model ABI is incomplete".to_owned());
+        }
+
+        let mut handle = std::ptr::null_mut();
+        let mut error = [0 as c_char; 512];
+        let status = unsafe { create(device_index, &mut handle, error.as_mut_ptr(), error.len()) };
+        status_result(status, &error)?;
+        if handle.is_null() {
+            return Err("shared model create returned a null handle".to_owned());
+        }
+        let model = Arc::new(NativeCodecModel {
+            api: Arc::clone(self),
+            handle,
+        });
+
+        let mut provider_state = ModelProvider::new(weights)?;
+        let provider = WeightProvider {
+            abi_version: 1,
+            reserved: 0,
+            tensor_count: provider_state.names.len() as u64,
+            user_data: (&mut provider_state as *mut ModelProvider<'_>).cast::<c_void>(),
+            tensor_at: Some(model_tensor_at),
+        };
+        let mut info = ModelInfo::default();
+        error.fill(0);
+        let status = unsafe {
+            load(
+                model.handle,
+                &provider,
+                &mut info,
+                error.as_mut_ptr(),
+                error.len(),
+            )
+        };
+        status_result(status, &error)?;
+        error.fill(0);
+        let status = unsafe { warmup(model.handle, error.as_mut_ptr(), error.len()) };
+        status_result(status, &error)?;
+        Ok(model)
     }
 
     pub fn process_batch(
@@ -522,6 +726,208 @@ impl Codec<'_> {
             return Err((status, error_text(&error)));
         }
         Ok((pcm, result))
+    }
+}
+
+pub struct NativeCodecModel {
+    api: Arc<Api>,
+    handle: *mut SharedModelHandle,
+}
+
+// The native model is immutable after construction. Its only mutable fields
+// are atomic lifetime counters and a lifecycle mutex that is never held during
+// inference. Device weights are read-only across independent CUDA streams.
+unsafe impl Send for NativeCodecModel {}
+unsafe impl Sync for NativeCodecModel {}
+
+impl NativeCodecModel {
+    pub fn model_info(&self) -> Result<ModelInfo, String> {
+        let info = self
+            .api
+            .shared_model_info
+            .ok_or_else(|| "shared model ABI is unavailable".to_owned())?;
+        let mut output = ModelInfo::default();
+        let mut error = [0 as c_char; 512];
+        let status = unsafe { info(self.handle, &mut output, error.as_mut_ptr(), error.len()) };
+        status_result(status, &error)?;
+        Ok(output)
+    }
+
+    pub fn memory_info(&self) -> Result<ModelMemoryInfo, String> {
+        let memory_info = self
+            .api
+            .shared_model_memory_info
+            .ok_or_else(|| "shared model ABI is unavailable".to_owned())?;
+        let mut output = ModelMemoryInfo::default();
+        let mut error = [0 as c_char; 512];
+        let status =
+            unsafe { memory_info(self.handle, &mut output, error.as_mut_ptr(), error.len()) };
+        status_result(status, &error)?;
+        Ok(output)
+    }
+
+    pub fn start_session(self: &Arc<Self>) -> Result<NativeCodecSession, String> {
+        let create = self
+            .api
+            .session_create
+            .ok_or_else(|| "shared session ABI is unavailable".to_owned())?;
+        let mut handle = std::ptr::null_mut();
+        let mut error = [0 as c_char; 512];
+        let status = unsafe { create(self.handle, &mut handle, error.as_mut_ptr(), error.len()) };
+        status_result(status, &error)?;
+        if handle.is_null() {
+            return Err("session create returned a null handle".to_owned());
+        }
+        Ok(NativeCodecSession {
+            model: Arc::clone(self),
+            handle,
+            not_sync: PhantomData,
+        })
+    }
+}
+
+impl Drop for NativeCodecModel {
+    fn drop(&mut self) {
+        if self.handle.is_null() {
+            return;
+        }
+        if let Some(destroy) = self.api.shared_model_destroy {
+            let mut error = [0 as c_char; 512];
+            unsafe {
+                destroy(self.handle, error.as_mut_ptr(), error.len());
+            }
+        }
+        self.handle = std::ptr::null_mut();
+    }
+}
+
+/// An owned mutable decoder stream.
+///
+/// Sessions are `Send + 'static`, so each one can be moved into an independent
+/// worker thread. They intentionally are not `Sync`; packet, reset, and cancel
+/// operations require exclusive mutable access.
+///
+/// ```compile_fail
+/// use qwen3_tts_native_codec::NativeCodecSession;
+/// fn require_sync<T: Sync>() {}
+/// require_sync::<NativeCodecSession>();
+/// ```
+pub struct NativeCodecSession {
+    model: Arc<NativeCodecModel>,
+    handle: *mut SessionHandle,
+    not_sync: PhantomData<Cell<()>>,
+}
+
+unsafe impl Send for NativeCodecSession {}
+
+impl NativeCodecSession {
+    pub fn model(&self) -> &Arc<NativeCodecModel> {
+        &self.model
+    }
+
+    pub fn reset(&mut self) -> Result<(), String> {
+        let reset = self
+            .model
+            .api
+            .session_reset
+            .ok_or_else(|| "shared session ABI is unavailable".to_owned())?;
+        let mut error = [0 as c_char; 512];
+        let status = unsafe { reset(self.handle, error.as_mut_ptr(), error.len()) };
+        status_result(status, &error)
+    }
+
+    pub fn cancel(&mut self) -> Result<(), String> {
+        let cancel = self
+            .model
+            .api
+            .session_cancel
+            .ok_or_else(|| "shared session ABI is unavailable".to_owned())?;
+        let mut error = [0 as c_char; 512];
+        let status = unsafe { cancel(self.handle, error.as_mut_ptr(), error.len()) };
+        status_result(status, &error)
+    }
+
+    pub fn state_info(&self) -> Result<StateInfo, String> {
+        let state_info = self
+            .model
+            .api
+            .session_state_info
+            .ok_or_else(|| "shared session ABI is unavailable".to_owned())?;
+        let mut output = StateInfo::default();
+        let mut error = [0 as c_char; 512];
+        let status =
+            unsafe { state_info(self.handle, &mut output, error.as_mut_ptr(), error.len()) };
+        status_result(status, &error)?;
+        Ok(output)
+    }
+
+    pub fn memory_info(&self) -> Result<SessionMemoryInfo, String> {
+        let memory_info = self
+            .model
+            .api
+            .session_memory_info
+            .ok_or_else(|| "shared session ABI is unavailable".to_owned())?;
+        let mut output = SessionMemoryInfo::default();
+        let mut error = [0 as c_char; 512];
+        let status =
+            unsafe { memory_info(self.handle, &mut output, error.as_mut_ptr(), error.len()) };
+        status_result(status, &error)?;
+        Ok(output)
+    }
+
+    pub fn process(
+        &mut self,
+        frames: &[[u16; CODEBOOKS]],
+        is_final: bool,
+    ) -> Result<(Vec<i16>, PacketResult), (i32, String)> {
+        let mut pcm = vec![0_i16; frames.len() * SAMPLES_PER_FRAME];
+        let result = self.process_into(frames, is_final, &mut pcm)?;
+        Ok((pcm, result))
+    }
+
+    pub fn process_into(
+        &mut self,
+        frames: &[[u16; CODEBOOKS]],
+        is_final: bool,
+        pcm: &mut [i16],
+    ) -> Result<PacketResult, (i32, String)> {
+        let Some(process) = self.model.api.session_process else {
+            return Err((-1, "shared session ABI is unavailable".to_owned()));
+        };
+        let mut result = PacketResult::default();
+        let mut error = [0 as c_char; 512];
+        let status = unsafe {
+            process(
+                self.handle,
+                frames.as_ptr().cast::<u16>(),
+                frames.len() as u32,
+                i32::from(is_final),
+                pcm.as_mut_ptr(),
+                pcm.len(),
+                &mut result,
+                error.as_mut_ptr(),
+                error.len(),
+            )
+        };
+        if status != 0 {
+            return Err((status, error_text(&error)));
+        }
+        Ok(result)
+    }
+}
+
+impl Drop for NativeCodecSession {
+    fn drop(&mut self) {
+        if self.handle.is_null() {
+            return;
+        }
+        if let Some(destroy) = self.model.api.session_destroy {
+            let mut error = [0 as c_char; 512];
+            unsafe {
+                destroy(self.handle, error.as_mut_ptr(), error.len());
+            }
+        }
+        self.handle = std::ptr::null_mut();
     }
 }
 

@@ -10,13 +10,17 @@
 //!     CODEBOOKS, DecoderWeights, NativeCodecLibrary,
 //! };
 //! use std::path::Path;
+//! use std::sync::Arc;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let native = NativeCodecLibrary::load(Path::new("libqwen3_tts_codec_cuda.so"))?;
+//! let native = Arc::new(NativeCodecLibrary::load(
+//!     Path::new("libqwen3_tts_codec_cuda.so"),
+//! )?);
 //! let weights = DecoderWeights::open(Path::new("speech_tokenizer/model.safetensors"))?;
-//! let mut stream = native.create_codec(0).map_err(std::io::Error::other)?;
-//! stream.load_model(&weights).map_err(std::io::Error::other)?;
-//! stream.warmup().map_err(std::io::Error::other)?;
+//! let model = native
+//!     .load_shared_model(0, &weights)
+//!     .map_err(std::io::Error::other)?;
+//! let mut stream = model.start_session().map_err(std::io::Error::other)?;
 //!
 //! let frames = [[0_u16; CODEBOOKS]];
 //! let (pcm, packet) = stream
@@ -32,8 +36,9 @@ pub mod model;
 
 pub use ffi::{
     Api as NativeCodecLibrary, BatchOutput, CODEBOOKS, Codec as NativeCodec, MAX_BATCH_STREAMS,
-    MAX_PACKET_FRAMES, MAX_PACKET_SAMPLES, ModelInfo, PacketResult, SAMPLES_PER_FRAME,
-    STATUS_MODEL, STATUS_STATE, StateInfo,
+    MAX_PACKET_FRAMES, MAX_PACKET_SAMPLES, ModelInfo, ModelMemoryInfo, NativeCodecModel,
+    NativeCodecSession, PacketResult, SAMPLES_PER_FRAME, STATUS_MODEL, STATUS_STATE,
+    SessionMemoryInfo, StateInfo,
 };
 pub use model::{
     DecoderWeightProvider, DecoderWeightTensor, SafetensorsFile as DecoderWeights,
