@@ -245,14 +245,14 @@ mod tests {
 
     #[test]
     fn error_buffer_is_bounded_utf8_safe_and_nul_terminated() {
-        let mut capacity_one = [9_i8; 3];
+        let mut capacity_one = [9 as c_char; 3];
         unsafe { write_error_buffer(capacity_one.as_mut_ptr(), 1, "failure") };
-        assert_eq!(capacity_one, [0, 9, 9]);
+        assert_eq!(capacity_one, [0 as c_char, 9 as c_char, 9 as c_char]);
 
-        let mut truncated = [9_i8; 8];
+        let mut truncated = [9 as c_char; 8];
         unsafe { write_error_buffer(truncated.as_mut_ptr(), 5, "échec") };
-        assert_eq!(truncated[4], 0);
-        assert_eq!(truncated[5..], [9, 9, 9]);
+        assert_eq!(truncated[4], 0 as c_char);
+        assert_eq!(truncated[5..], [9 as c_char, 9 as c_char, 9 as c_char]);
         let bytes = truncated[..4]
             .iter()
             .map(|value| *value as u8)
@@ -263,8 +263,8 @@ mod tests {
     #[test]
     fn zero_capacity_error_buffer_accepts_only_null() {
         assert!(unsafe { clear_error_buffer(ptr::null_mut(), 0) });
-        let mut byte = 7_i8;
+        let mut byte = 7 as c_char;
         assert!(!unsafe { clear_error_buffer(&mut byte, 0) });
-        assert_eq!(byte, 7);
+        assert_eq!(byte, 7 as c_char);
     }
 }
