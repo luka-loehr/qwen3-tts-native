@@ -1,0 +1,17 @@
+{
+  "codec_dtype": "BF16",
+  "copy_buffer_bytes": 8388608,
+  "operation": "pack-native-qwen3-tts-artifact",
+  "output": "/home/administrator/codex-playground-artifacts/qwen3-tts-1.7b-voice-design-bf16-indexed-repeat",
+  "regular_files_only": true,
+  "schema_version": 1,
+  "speech_decoder_bytes": 228678506,
+  "speech_decoder_payload_bytes": 228646274,
+  "timing_milliseconds": {
+    "decoder_write_and_validation": 11418,
+    "material_and_voice_copy": 10985,
+    "source_contract_validation": 50,
+    "total": 24260
+  },
+  "voice_design_bytes": 3833402552
+}

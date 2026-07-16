@@ -1,0 +1,60 @@
+{
+  "artifact": "/home/administrator/codex-playground-artifacts/qwen3-tts-1.7b-voice-design-f32-indexed-test",
+  "decoder_dtype": "F32",
+  "decoder_tensor_count": 271,
+  "model_memory": {
+    "decoder_mapped_file_bytes": 457324612,
+    "decoder_tensor_payload_bytes": 457292548,
+    "host_committed_weight_copy_bytes": 0,
+    "runtime_dtype_conversion_bytes": 0,
+    "total_mapped_file_bytes": 4290727164,
+    "total_tensor_payload_bytes": 4290645252,
+    "voice_mapped_file_bytes": 3833402552,
+    "voice_tensor_payload_bytes": 3833352704
+  },
+  "open_milliseconds": 5,
+  "operation": "load-native-qwen3-tts-artifact",
+  "revision": "5ecdb67327fd37bb2e042aab12ff7391903235d3",
+  "schema_version": 1,
+  "staging_buffer_bytes": 8388608,
+  "verification": "contracts",
+  "voice_tensor_count": 404,
+  "zero_copy_probe_tensors": [
+    {
+      "arena_offset_bytes": 463506432,
+      "bytes": 8388608,
+      "dtype": "BF16",
+      "name": "talker.model.layers.0.self_attn.q_proj.weight",
+      "sha256": "dc5acadbbe65e1e5d9f17b477323aa2e57faa8c826d67abb4637f284751583cf",
+      "shape": [
+        2048,
+        2048
+      ],
+      "staging_chunks": 1
+    },
+    {
+      "arena_offset_bytes": 213914112,
+      "bytes": 4194304,
+      "dtype": "BF16",
+      "name": "talker.code_predictor.model.layers.0.self_attn.q_proj.weight",
+      "sha256": "640acfb6b9f4b335f6d9cded3b73b8c396156a90c5d4fdf3ea67e9f44a78b3f9",
+      "shape": [
+        2048,
+        1024
+      ],
+      "staging_chunks": 1
+    },
+    {
+      "arena_offset_bytes": 228367108,
+      "bytes": 2097152,
+      "dtype": "F32",
+      "name": "decoder.pre_transformer.layers.0.self_attn.q_proj.weight",
+      "sha256": "f5d333fc17bdca62cc3029fe2daf37f7da3fe754aeab11b9f35848294e6d57f6",
+      "shape": [
+        1024,
+        512
+      ],
+      "staging_chunks": 1
+    }
+  ]
+}

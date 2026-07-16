@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "operation": "native-artifact-loader-validation-summary",
+  "status": "validated-weight-pipeline-not-neural-inference",
+  "hardware": {
+    "system": "NVIDIA DGX Spark",
+    "device": "NVIDIA GB10",
+    "compute_capability": "12.1"
+  },
+  "source": {
+    "model_id": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+    "revision": "5ecdb67327fd37bb2e042aab12ff7391903235d3",
+    "source_kind": "official-local-huggingface-cache"
+  },
+  "artifact": {
+    "regular_files_only": true,
+    "symlink_count": 0,
+    "manifest_bytes": 275866,
+    "manifest_sha256": "9bb96a8d24bbb2d8933245e27083b8e7290346b776306dcb8a8f3aed68594527",
+    "voice_design": {
+      "dtype": "BF16",
+      "tensor_count": 404,
+      "parameter_count": 1916676352,
+      "payload_bytes": 3833352704,
+      "file_bytes": 3833402552,
+      "sha256": "391e8db219f292c515297cdceeb43e4eae67cdde35fa57e79a6a8a532fca0522"
+    },
+    "speech_decoder": {
+      "dtype": "BF16",
+      "tensor_count": 271,
+      "parameter_count": 114323137,
+      "payload_bytes": 228646274,
+      "file_bytes": 228678506,
+      "sha256": "062caa0a31346422410e4c0d2494aec14be20553f8cb0b71a875329de99ce180",
+      "encoder_included": false
+    }
+  },
+  "reproducibility": {
+    "independent_pack_runs": 2,
+    "manifest_byte_identical": true,
+    "voice_weights_byte_identical": true,
+    "decoder_weights_byte_identical": true
+  },
+  "bf16_pack": {
+    "wall_seconds": 24.05,
+    "max_rss_kib": 628992,
+    "copy_buffer_bytes": 8388608,
+    "pre_release_optimization_max_rss_kib": 4433728
+  },
+  "bf16_load": {
+    "contract_open_milliseconds": 4,
+    "contract_max_rss_kib": 6020,
+    "full_sha_open_milliseconds": 10567,
+    "full_sha_max_rss_kib": 11248,
+    "mapped_file_bytes": 4062081058,
+    "tensor_payload_view_bytes": 4061998978,
+    "host_committed_weight_copy_bytes": 0,
+    "runtime_dtype_conversion_bytes": 0
+  },
+  "bf16_decoder_device_upload": {
+    "tensor_count": 271,
+    "uploaded_bytes": 228646274,
+    "pinned_staging_bytes": 8388608,
+    "upload_calls": 277,
+    "native_upload_microseconds": 15075.97265625,
+    "upload_wall_milliseconds": 53.834188,
+    "effective_gib_per_second": 14.124689758550128,
+    "source_mappings_released_before_readback": true,
+    "readback_exact": true,
+    "compute_sanitizer_errors": 0
+  },
+  "f32_validation_path": {
+    "artifact_retained": false,
+    "tensor_count": 271,
+    "payload_bytes": 457292548,
+    "pack_wall_seconds": 25.44,
+    "pack_max_rss_kib": 621068,
+    "contract_open_milliseconds": 5,
+    "native_upload_microseconds": 51919.53125,
+    "upload_wall_milliseconds": 93.327242,
+    "effective_gib_per_second": 8.202825851896193,
+    "source_mappings_released_before_readback": true,
+    "readback_exact": true,
+    "runtime_dtype_conversion_bytes": 0
+  },
+  "verification": {
+    "rust_library_tests_passed": 21,
+    "rust_binary_inventory_tests_passed": 2,
+    "clippy_warnings": 0,
+    "cuda_architecture": "sm_121",
+    "cuda_compiler": "13.0.88"
+  },
+  "limitations": {
+    "full_combined_device_arena_tested": false,
+    "reason": "CUDA free memory was about 6.58 GB before the BF16 decoder test and about 3.57 GB before the later F32 decoder test; allocating the complete 4.06 GB arena beside unrelated live workloads was not safe.",
+    "neural_forward_pass_implemented": false,
+    "ttfa_measured": false,
+    "rtf_measured": false,
+    "audio_generated": false
+  }
+}

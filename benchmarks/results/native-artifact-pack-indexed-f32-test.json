@@ -1,0 +1,17 @@
+{
+  "codec_dtype": "F32",
+  "copy_buffer_bytes": 8388608,
+  "operation": "pack-native-qwen3-tts-artifact",
+  "output": "/home/administrator/codex-playground-artifacts/qwen3-tts-1.7b-voice-design-f32-indexed-test",
+  "regular_files_only": true,
+  "schema_version": 1,
+  "speech_decoder_bytes": 457324612,
+  "speech_decoder_payload_bytes": 457292548,
+  "timing_milliseconds": {
+    "decoder_write_and_validation": 12737,
+    "material_and_voice_copy": 10892,
+    "source_contract_validation": 4,
+    "total": 25441
+  },
+  "voice_design_bytes": 3833402552
+}
