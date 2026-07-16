@@ -1059,7 +1059,7 @@ fn step_eligible<B: StreamingBackend>(
         pcm.fill(PCM_SENTINEL);
         selected.push((*index, session, pcm));
     }
-    let results = match {
+    let step_outcome = {
         let mut requests = selected
             .iter_mut()
             .map(|(_, session, pcm)| BackendStepInput {
@@ -1070,7 +1070,8 @@ fn step_eligible<B: StreamingBackend>(
         catch_unwind(AssertUnwindSafe(|| {
             backend.step_batch(&mut requests, packet_frames)
         }))
-    } {
+    };
+    let results = match step_outcome {
         Ok(results) => results,
         Err(_) => {
             let error =
