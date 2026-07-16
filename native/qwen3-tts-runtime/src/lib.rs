@@ -4,9 +4,15 @@
 //! the invariants shared by the real talker, predictor, and codec backends.
 
 mod request;
+mod scheduler;
 mod types;
 
 pub use request::{PacketQueue, PacketQueueError, RequestRecord, TransitionError};
+pub use scheduler::{
+    BackendError, BackendPacket, BackendRequest, BackendStarted, BackendStepInput,
+    OwnedAudioPacket, PollError, PollOutcome, RequestHandle, Scheduler, SchedulerError,
+    StreamingBackend,
+};
 pub use types::{
     AudioPacketDescriptor, EngineConfig, GenerationConfig, Language, RequestInput,
     RequestInputError, RequestMetrics, RequestPhase, RuntimeStatus,
