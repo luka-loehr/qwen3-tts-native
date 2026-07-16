@@ -7,14 +7,12 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use memmap2::Mmap;
 use safetensors::SafeTensors;
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
-const VOICE_DESIGN_INVENTORY: &str = include_str!(
-    "../../../../benchmarks/results/voice-design-model-inventory.json"
-);
-const SPEECH_TOKENIZER_INVENTORY: &str = include_str!(
-    "../../../../benchmarks/results/speech-tokenizer-model-inventory.json"
-);
+const VOICE_DESIGN_INVENTORY: &str =
+    include_str!("../../../../benchmarks/results/voice-design-model-inventory.json");
+const SPEECH_TOKENIZER_INVENTORY: &str =
+    include_str!("../../../../benchmarks/results/speech-tokenizer-model-inventory.json");
 
 struct Arguments {
     artifact: PathBuf,
@@ -61,11 +59,8 @@ fn run() -> Result<()> {
     validate_generation_config(&generation_config)?;
     validate_tokenizer_config(&tokenizer_config)?;
 
-    let voice_design = validate_tensor_contract(
-        &model_path,
-        VOICE_DESIGN_INVENTORY,
-        "voice-design-1.7b",
-    )?;
+    let voice_design =
+        validate_tensor_contract(&model_path, VOICE_DESIGN_INVENTORY, "voice-design-1.7b")?;
     let speech_tokenizer = validate_tensor_contract(
         &tokenizer_model_path,
         SPEECH_TOKENIZER_INVENTORY,
@@ -93,8 +88,7 @@ fn run() -> Result<()> {
 
     let encoded = serde_json::to_string_pretty(&report)?;
     if let Some(path) = arguments.output {
-        fs::write(&path, encoded)
-            .with_context(|| format!("failed to write {}", path.display()))?;
+        fs::write(&path, encoded).with_context(|| format!("failed to write {}", path.display()))?;
     } else {
         println!("{encoded}");
     }
@@ -115,7 +109,9 @@ fn parse_arguments() -> Result<Arguments> {
             Some("--allow-symlinks") => allow_symlinks = true,
             Some("--output") => {
                 output = Some(PathBuf::from(
-                    arguments.next().context("--output requires a destination")?,
+                    arguments
+                        .next()
+                        .context("--output requires a destination")?,
                 ));
             }
             _ => bail!("unknown argument {argument:?}\n{}", usage(&program)),
@@ -146,8 +142,8 @@ fn inspect_material_file(path: &Path, allow_symlinks: bool) -> Result<Value> {
             path.display()
         );
     }
-    let metadata = fs::metadata(path)
-        .with_context(|| format!("failed to stat {}", path.display()))?;
+    let metadata =
+        fs::metadata(path).with_context(|| format!("failed to stat {}", path.display()))?;
     if !metadata.is_file() {
         bail!("{} is not a regular file", path.display());
     }
@@ -191,10 +187,19 @@ fn validate_voice_design_config(config: &Value) -> Result<Value> {
         ("/talker_config/text_vocab_size", 151_936),
         ("/talker_config/num_code_groups", 16),
         ("/talker_config/code_predictor_config/hidden_size", 1_024),
-        ("/talker_config/code_predictor_config/intermediate_size", 3_072),
+        (
+            "/talker_config/code_predictor_config/intermediate_size",
+            3_072,
+        ),
         ("/talker_config/code_predictor_config/num_hidden_layers", 5),
-        ("/talker_config/code_predictor_config/num_attention_heads", 16),
-        ("/talker_config/code_predictor_config/num_key_value_heads", 8),
+        (
+            "/talker_config/code_predictor_config/num_attention_heads",
+            16,
+        ),
+        (
+            "/talker_config/code_predictor_config/num_key_value_heads",
+            8,
+        ),
         ("/talker_config/code_predictor_config/vocab_size", 2_048),
         ("/talker_config/code_predictor_config/num_code_groups", 16),
     ] {
@@ -273,11 +278,7 @@ fn validate_tokenizer_config(config: &Value) -> Result<()> {
         "/decoder_config/upsample_rates",
         &json!([8, 5, 4, 3]),
     )?;
-    expect_value(
-        config,
-        "/decoder_config/upsampling_ratios",
-        &json!([2, 2]),
-    )?;
+    expect_value(config, "/decoder_config/upsampling_ratios", &json!([2, 2]))?;
     Ok(())
 }
 
@@ -303,9 +304,7 @@ fn validate_tensor_contract(path: &Path, inventory_json: &str, label: &str) -> R
         .with_context(|| format!("failed to stat {}", path.display()))?
         .len();
     if file_bytes != expected_file_bytes {
-        bail!(
-            "{label} file size mismatch: expected {expected_file_bytes}, found {file_bytes}"
-        );
+        bail!("{label} file size mismatch: expected {expected_file_bytes}, found {file_bytes}");
     }
 
     // SAFETY: The immutable model file is mapped read-only and remains open for
@@ -394,9 +393,7 @@ fn validate_tensor_contract(path: &Path, inventory_json: &str, label: &str) -> R
         bail!("{label} tensor-name set differs from the pinned inventory");
     }
     if payload_bytes != expected_payload_bytes {
-        bail!(
-            "{label} payload mismatch: expected {expected_payload_bytes}, found {payload_bytes}"
-        );
+        bail!("{label} payload mismatch: expected {expected_payload_bytes}, found {payload_bytes}");
     }
     if parameter_count != expected_parameters {
         bail!(
@@ -470,6 +467,7 @@ fn expect_value(root: &Value, pointer: &str, expected: &Value) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Map;
 
     #[test]
     fn embedded_inventories_are_complete_and_unique() {
