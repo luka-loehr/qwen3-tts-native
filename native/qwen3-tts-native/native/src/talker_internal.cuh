@@ -4,6 +4,7 @@
 #include <cuda_runtime.h>
 
 #include <cstddef>
+#include <cstdint>
 
 namespace qwen3_tts {
 
@@ -152,6 +153,61 @@ cudaError_t launch_silu_gate(
 cudaError_t launch_fill_zero(
     __nv_bfloat16* values,
     int width,
+    cudaStream_t stream
+);
+
+cudaError_t launch_sample_logits(
+    const __nv_bfloat16* logits,
+    int vocabulary,
+    bool suppress_talker_reserved,
+    int codec_eos_token,
+    const int* semantic_history,
+    int semantic_history_count,
+    int do_sample,
+    int top_k,
+    float top_p,
+    float temperature,
+    float repetition_penalty,
+    uint64_t* random_state,
+    int* selected_token,
+    cudaStream_t stream
+);
+
+cudaError_t launch_store_token(
+    int* tokens,
+    int index,
+    int value,
+    cudaStream_t stream
+);
+
+cudaError_t launch_store_sampled_token(
+    int* tokens,
+    int index,
+    const int* sampled_token,
+    cudaStream_t stream
+);
+
+cudaError_t launch_pack_frame_codes(
+    const int* tokens,
+    uint16_t* codes,
+    cudaStream_t stream
+);
+
+cudaError_t launch_gather_embedding(
+    const __nv_bfloat16* table,
+    int vocabulary,
+    int width,
+    const int* token,
+    __nv_bfloat16* output,
+    cudaStream_t stream
+);
+
+cudaError_t launch_add_embedding(
+    __nv_bfloat16* destination,
+    const __nv_bfloat16* table,
+    int vocabulary,
+    int width,
+    const int* token,
     cudaStream_t stream
 );
 

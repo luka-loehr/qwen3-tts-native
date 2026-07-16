@@ -15,7 +15,6 @@
 #include <cstring>
 #include <limits>
 #include <numeric>
-#include <random>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -186,8 +185,7 @@ public:
           max_sequence_length_(max_sequence_length),
           prefill_gemm_capacity_(std::min(max_sequence_length, kPrefillGemmCapacity)),
           trace_enabled_(std::getenv("QWEN3_TTS_PARITY_TRACE") != nullptr),
-          stage_dump_enabled_(std::getenv("QWEN3_TTS_STAGE_DUMP") != nullptr),
-          random_(seed) {
+          stage_dump_enabled_(std::getenv("QWEN3_TTS_STAGE_DUMP") != nullptr) {
         if (max_sequence_length < 16 || max_sequence_length > 8'192) {
             throw std::runtime_error("max sequence length must be in [16, 8192]");
         }
@@ -199,9 +197,17 @@ public:
             );
             check_cublas(cublasCreate(&cublas_), "cublasCreate");
             check_cublas(cublasSetStream(cublas_, stream_), "cublasSetStream");
-            check_cublas(cublasSetMathMode(cublas_, CUBLAS_TENSOR_OP_MATH), "cublasSetMathMode");
+            check_cublas(cublasSetMathMode(cublas_, CUBLAS_DEFAULT_MATH), "cublasSetMathMode");
             check_cuda(cudaEventCreate(&start_), "cudaEventCreate(start)");
             check_cuda(cudaEventCreate(&stop_), "cudaEventCreate(stop)");
+            check_cuda(
+                cudaEventCreate(&predictor_start_),
+                "cudaEventCreate(predictor start)"
+            );
+            check_cuda(
+                cudaEventCreate(&predictor_stop_),
+                "cudaEventCreate(predictor stop)"
+            );
 
             const size_t workspace_rows = static_cast<size_t>(max_sequence_length_);
             hidden_ = DeviceBuffer(workspace_rows * kTalkerHidden * sizeof(__nv_bfloat16));
@@ -225,6 +231,27 @@ public:
             const size_t score_elements = static_cast<size_t>(kTalkerQueryHeads)
                 * prefill_gemm_capacity_ * prefill_gemm_capacity_;
             attention_scores_ = DeviceBuffer(score_elements * sizeof(__nv_bfloat16));
+            sampled_token_ = DeviceBuffer(sizeof(int));
+            frame_tokens_ = DeviceBuffer(kPredictorSequence * sizeof(int));
+            frame_codes_ = DeviceBuffer(kPredictorSequence * sizeof(uint16_t));
+            semantic_history_ = DeviceBuffer(
+                static_cast<size_t>(max_sequence_length_) * sizeof(int)
+            );
+            random_state_ = DeviceBuffer(sizeof(uint64_t));
+            check_cuda(
+                cudaMallocHost(
+                    reinterpret_cast<void**>(&host_sampled_token_),
+                    sizeof(int)
+                ),
+                "cudaMallocHost(sampled token)"
+            );
+            check_cuda(
+                cudaMallocHost(
+                    reinterpret_cast<void**>(&host_frame_codes_),
+                    kPredictorSequence * sizeof(uint16_t)
+                ),
+                "cudaMallocHost(frame codes)"
+            );
 
             talker_cache_.reserve(kTalkerLayers);
             const size_t talker_cache_bytes = static_cast<size_t>(max_sequence_length_)
@@ -245,7 +272,24 @@ public:
                     DeviceBuffer(predictor_cache_bytes),
                 });
             }
+            reset(seed);
         } catch (...) {
+            if (host_frame_codes_ != nullptr) {
+                cudaFreeHost(host_frame_codes_);
+                host_frame_codes_ = nullptr;
+            }
+            if (host_sampled_token_ != nullptr) {
+                cudaFreeHost(host_sampled_token_);
+                host_sampled_token_ = nullptr;
+            }
+            if (predictor_stop_ != nullptr) {
+                cudaEventDestroy(predictor_stop_);
+                predictor_stop_ = nullptr;
+            }
+            if (predictor_start_ != nullptr) {
+                cudaEventDestroy(predictor_start_);
+                predictor_start_ = nullptr;
+            }
             if (stop_ != nullptr) {
                 cudaEventDestroy(stop_);
                 stop_ = nullptr;
@@ -267,6 +311,18 @@ public:
     }
 
     ~TalkerContext() {
+        if (host_frame_codes_ != nullptr) {
+            cudaFreeHost(host_frame_codes_);
+        }
+        if (host_sampled_token_ != nullptr) {
+            cudaFreeHost(host_sampled_token_);
+        }
+        if (predictor_stop_ != nullptr) {
+            cudaEventDestroy(predictor_stop_);
+        }
+        if (predictor_start_ != nullptr) {
+            cudaEventDestroy(predictor_start_);
+        }
         if (stop_ != nullptr) {
             cudaEventDestroy(stop_);
         }
@@ -396,8 +452,17 @@ public:
 
     void reset(uint64_t seed) {
         position_ = 0;
-        generated_semantic_.clear();
-        random_.seed(seed);
+        generated_semantic_count_ = 0;
+        const uint64_t random_state = seed == 0 ? 0x9e3779b97f4a7c15ULL : seed;
+        check_cuda(
+            cudaMemcpy(
+                random_state_.as<uint64_t>(),
+                &random_state,
+                sizeof(random_state),
+                cudaMemcpyHostToDevice
+            ),
+            "reset device random state"
+        );
     }
 
     Qwen3TtsTalkerPrefillResult prefill(
@@ -414,7 +479,7 @@ public:
             throw std::runtime_error("prompt exceeds the configured KV-cache capacity");
         }
         position_ = 0;
-        generated_semantic_.clear();
+        generated_semantic_count_ = 0;
         for (int index = 0; index < token_count; ++index) {
             prepare_prompt_embedding(
                 text_ids[index],
@@ -439,8 +504,8 @@ public:
         const float total_gpu_ms = run_talker_prefill(token_count);
         trace_active_ = false;
         position_ = token_count;
-        const int first = sample_logits(kTalkerVocabulary, sampling, true);
-        generated_semantic_.push_back(first);
+        sample_logits_device(kTalkerVocabulary, sampling, true);
+        const int first = copy_sampled_token_to_host();
         Qwen3TtsTalkerPrefillResult result{};
         result.first_semantic_token = static_cast<uint16_t>(first);
         result.prompt_tokens = static_cast<uint32_t>(token_count);
@@ -469,47 +534,117 @@ public:
         }
 
         Qwen3TtsCodecFrameResult result{};
-        result.codes[0] = semantic_token;
-        check_cuda(cudaEventRecord(start_, stream_), "cudaEventRecord(predictor start)");
+        check_cuda(
+            qwen3_tts::launch_store_token(
+                frame_tokens_.as<int>(),
+                0,
+                semantic_token,
+                stream_
+            ),
+            "store semantic frame token"
+        );
+        check_cuda(
+            cudaEventRecord(predictor_start_, stream_),
+            "cudaEventRecord(predictor start)"
+        );
 
         run_predictor_position(last_hidden_.as<__nv_bfloat16>(), 0, -1);
-        const __nv_bfloat16* semantic_embedding = embedding_row(
-            codec_embedding_,
-            semantic_token,
-            kTalkerVocabulary,
-            kTalkerHidden
+        check_cuda(
+            qwen3_tts::launch_gather_embedding(
+                codec_embedding_,
+                kTalkerVocabulary,
+                kTalkerHidden,
+                frame_tokens_.as<int>(),
+                text_output_.as<__nv_bfloat16>(),
+                stream_
+            ),
+            "gather semantic predictor embedding"
         );
-        run_predictor_position(semantic_embedding, 1, 0);
-        result.codes[1] = static_cast<uint16_t>(
-            sample_logits(kPredictorVocabulary, predictor_sampling, false)
+        run_predictor_position(text_output_.as<__nv_bfloat16>(), 1, 0);
+        sample_logits_device(kPredictorVocabulary, predictor_sampling, false);
+        check_cuda(
+            qwen3_tts::launch_store_sampled_token(
+                frame_tokens_.as<int>(),
+                1,
+                sampled_token_.as<int>(),
+                stream_
+            ),
+            "store predictor codebook token"
         );
 
         for (int residual = 1; residual < kResidualCodebooks; ++residual) {
-            const __nv_bfloat16* input = embedding_row(
-                predictor_embeddings_[residual - 1],
-                result.codes[residual],
-                kPredictorVocabulary,
-                kTalkerHidden
+            check_cuda(
+                qwen3_tts::launch_gather_embedding(
+                    predictor_embeddings_[residual - 1],
+                    kPredictorVocabulary,
+                    kTalkerHidden,
+                    frame_tokens_.as<int>() + residual,
+                    text_output_.as<__nv_bfloat16>(),
+                    stream_
+                ),
+                "gather residual predictor embedding"
             );
-            run_predictor_position(input, residual + 1, residual);
-            result.codes[residual + 1] = static_cast<uint16_t>(
-                sample_logits(kPredictorVocabulary, predictor_sampling, false)
+            run_predictor_position(
+                text_output_.as<__nv_bfloat16>(),
+                residual + 1,
+                residual
+            );
+            sample_logits_device(kPredictorVocabulary, predictor_sampling, false);
+            check_cuda(
+                qwen3_tts::launch_store_sampled_token(
+                    frame_tokens_.as<int>(),
+                    residual + 1,
+                    sampled_token_.as<int>(),
+                    stream_
+                ),
+                "store residual codebook token"
             );
         }
-        check_cuda(cudaEventRecord(stop_, stream_), "cudaEventRecord(predictor stop)");
-        check_cuda(cudaEventSynchronize(stop_), "cudaEventSynchronize(predictor)");
         check_cuda(
-            cudaEventElapsedTime(&result.predictor_gpu_milliseconds, start_, stop_),
-            "cudaEventElapsedTime(predictor)"
+            cudaEventRecord(predictor_stop_, stream_),
+            "cudaEventRecord(predictor stop)"
+        );
+        check_cuda(
+            qwen3_tts::launch_pack_frame_codes(
+                frame_tokens_.as<int>(),
+                frame_codes_.as<uint16_t>(),
+                stream_
+            ),
+            "pack codec frame"
+        );
+        check_cuda(
+            cudaMemcpyAsync(
+                host_frame_codes_,
+                frame_codes_.as<uint16_t>(),
+                kPredictorSequence * sizeof(uint16_t),
+                cudaMemcpyDeviceToHost,
+                stream_
+            ),
+            "copy codec frame to pinned host memory"
         );
 
-        prepare_generated_embedding(result.codes, trailing_text_token);
+        prepare_generated_embedding(trailing_text_token);
         result.talker_position = static_cast<uint32_t>(position_);
-        result.talker_gpu_milliseconds = run_talker_step(position_, true);
+        check_cuda(cudaEventRecord(start_, stream_), "cudaEventRecord(talker start)");
+        run_talker_step(position_, true);
+        check_cuda(cudaEventRecord(stop_, stream_), "cudaEventRecord(talker stop)");
         ++position_;
-        const int next_semantic = sample_logits(kTalkerVocabulary, talker_sampling, true);
+        sample_logits_device(kTalkerVocabulary, talker_sampling, true);
+        const int next_semantic = copy_sampled_token_to_host();
+        check_cuda(
+            cudaEventElapsedTime(
+                &result.predictor_gpu_milliseconds,
+                predictor_start_,
+                predictor_stop_
+            ),
+            "cudaEventElapsedTime(predictor)"
+        );
+        check_cuda(
+            cudaEventElapsedTime(&result.talker_gpu_milliseconds, start_, stop_),
+            "cudaEventElapsedTime(talker)"
+        );
+        std::copy_n(host_frame_codes_, kPredictorSequence, result.codes);
         result.next_semantic_token = static_cast<uint16_t>(next_semantic);
-        generated_semantic_.push_back(next_semantic);
         return result;
     }
 
@@ -692,7 +827,7 @@ private:
                 device_logits,
                 CUDA_R_32F,
                 kTalkerVocabulary,
-                CUBLAS_COMPUTE_32F_FAST_16BF,
+                CUBLAS_COMPUTE_32F,
                 CUBLAS_GEMM_DEFAULT_TENSOR_OP
             ),
             "cublasGemmEx(float codec logits)"
@@ -859,7 +994,7 @@ private:
                 output,
                 CUDA_R_16BF,
                 output_features,
-                CUBLAS_COMPUTE_32F_FAST_16BF,
+                CUBLAS_COMPUTE_32F,
                 CUBLAS_GEMM_DEFAULT_TENSOR_OP
             ),
             "cublasGemmEx"
@@ -976,7 +1111,7 @@ private:
                 rows,
                 score_stride,
                 dimensions.query_heads,
-                CUBLAS_COMPUTE_32F_FAST_16BF,
+                CUBLAS_COMPUTE_32F,
                 CUBLAS_GEMM_DEFAULT_TENSOR_OP
             ),
             "cublasGemmStridedBatchedEx(prefill QK)"
@@ -1020,7 +1155,7 @@ private:
                 dimensions.head_dimension,
                 head_stride,
                 dimensions.query_heads,
-                CUBLAS_COMPUTE_32F_FAST_16BF,
+                CUBLAS_COMPUTE_32F,
                 CUBLAS_GEMM_DEFAULT_TENSOR_OP
             ),
             "cublasGemmStridedBatchedEx(prefill PV)"
@@ -1414,6 +1549,7 @@ private:
             kTalkerHidden,
             kTalkerVocabulary
         );
+        dump_stage("final_logits", logits_.as<__nv_bfloat16>(), kTalkerVocabulary);
         trace_logits();
         trace_float_logits(normalized_.as<__nv_bfloat16>());
         check_cuda(cudaEventRecord(stop_, stream_), "cudaEventRecord(prefill stop)");
@@ -1622,8 +1758,7 @@ private:
         }
     }
 
-    float run_talker_step(int position, bool emit_logits) {
-        check_cuda(cudaEventRecord(start_, stream_), "cudaEventRecord(talker start)");
+    void run_talker_step(int position, bool emit_logits) {
         run_decoder(talker_layers_, talker_cache_, kTalkerDimensions, position);
         if (emit_logits) {
             check_cuda(
@@ -1657,14 +1792,6 @@ private:
             );
             trace_logits();
         }
-        check_cuda(cudaEventRecord(stop_, stream_), "cudaEventRecord(talker stop)");
-        check_cuda(cudaEventSynchronize(stop_), "cudaEventSynchronize(talker)");
-        float milliseconds = 0.0f;
-        check_cuda(
-            cudaEventElapsedTime(&milliseconds, start_, stop_),
-            "cudaEventElapsedTime(talker)"
-        );
-        return milliseconds;
     }
 
     void run_predictor_position(const __nv_bfloat16* input, int position, int head) {
@@ -1708,34 +1835,26 @@ private:
         }
     }
 
-    void prepare_generated_embedding(const uint16_t* codes, int text_token) {
-        const __nv_bfloat16* semantic = embedding_row(
-            codec_embedding_,
-            codes[0],
-            kTalkerVocabulary,
-            kTalkerHidden
-        );
+    void prepare_generated_embedding(int text_token) {
         check_cuda(
-            cudaMemcpyAsync(
+            qwen3_tts::launch_gather_embedding(
+                codec_embedding_,
+                kTalkerVocabulary,
+                kTalkerHidden,
+                frame_tokens_.as<int>(),
                 hidden_.as<__nv_bfloat16>(),
-                semantic,
-                kTalkerHidden * sizeof(__nv_bfloat16),
-                cudaMemcpyDeviceToDevice,
                 stream_
             ),
-            "copy semantic embedding"
+            "gather semantic talker embedding"
         );
         for (int residual = 0; residual < kResidualCodebooks; ++residual) {
             check_cuda(
-                qwen3_tts::launch_add_in_place(
+                qwen3_tts::launch_add_embedding(
                     hidden_.as<__nv_bfloat16>(),
-                    embedding_row(
-                        predictor_embeddings_[residual],
-                        codes[residual + 1],
-                        kPredictorVocabulary,
-                        kTalkerHidden
-                    ),
+                    predictor_embeddings_[residual],
+                    kPredictorVocabulary,
                     kTalkerHidden,
+                    frame_tokens_.as<int>() + residual + 1,
                     stream_
                 ),
                 "add residual codec embedding"
@@ -1753,7 +1872,7 @@ private:
         );
     }
 
-    int sample_logits(
+    void sample_logits_device(
         int vocabulary,
         const Qwen3TtsSamplingConfig& config,
         bool talker
@@ -1762,81 +1881,58 @@ private:
             || config.temperature <= 0.0f || config.repetition_penalty <= 0.0f) {
             throw std::runtime_error("invalid sampling configuration");
         }
-        std::vector<__nv_bfloat16> encoded(vocabulary);
+        if (talker && generated_semantic_count_ >= max_sequence_length_) {
+            throw std::runtime_error("semantic history exceeds configured sequence capacity");
+        }
+        check_cuda(
+            qwen3_tts::launch_sample_logits(
+                logits_.as<__nv_bfloat16>(),
+                vocabulary,
+                talker,
+                kCodecEos,
+                semantic_history_.as<int>(),
+                generated_semantic_count_,
+                config.do_sample,
+                config.top_k,
+                config.top_p,
+                config.temperature,
+                config.repetition_penalty,
+                random_state_.as<uint64_t>(),
+                sampled_token_.as<int>(),
+                stream_
+            ),
+            "sample logits on device"
+        );
+        if (talker) {
+            check_cuda(
+                qwen3_tts::launch_store_sampled_token(
+                    semantic_history_.as<int>(),
+                    generated_semantic_count_,
+                    sampled_token_.as<int>(),
+                    stream_
+                ),
+                "append sampled semantic token"
+            );
+            ++generated_semantic_count_;
+        }
+    }
+
+    int copy_sampled_token_to_host() {
         check_cuda(
             cudaMemcpyAsync(
-                encoded.data(),
-                logits_.as<__nv_bfloat16>(),
-                static_cast<size_t>(vocabulary) * sizeof(__nv_bfloat16),
+                host_sampled_token_,
+                sampled_token_.as<int>(),
+                sizeof(int),
                 cudaMemcpyDeviceToHost,
                 stream_
             ),
-            "copy logits to host"
+            "copy sampled token to pinned host memory"
         );
-        check_cuda(cudaStreamSynchronize(stream_), "cudaStreamSynchronize(logits)");
-        std::vector<float> logits(vocabulary);
-        for (int token = 0; token < vocabulary; ++token) {
-            logits[token] = __bfloat162float(encoded[token]);
+        check_cuda(cudaStreamSynchronize(stream_), "synchronize sampled token");
+        if (*host_sampled_token_ < 0 || *host_sampled_token_ >= kTalkerVocabulary) {
+            throw std::runtime_error("device sampler returned an invalid token");
         }
-
-        if (talker) {
-            for (int token = kPredictorVocabulary; token < kTalkerVocabulary; ++token) {
-                if (token != kCodecEos) {
-                    logits[token] = -std::numeric_limits<float>::infinity();
-                }
-            }
-            for (const int token : generated_semantic_) {
-                if (token >= 0 && token < vocabulary) {
-                    logits[token] = logits[token] < 0.0f
-                        ? logits[token] * config.repetition_penalty
-                        : logits[token] / config.repetition_penalty;
-                }
-            }
-        }
-
-        if (config.do_sample == 0) {
-            return static_cast<int>(
-                std::max_element(logits.begin(), logits.end()) - logits.begin()
-            );
-        }
-
-        std::vector<int> indices(vocabulary);
-        std::iota(indices.begin(), indices.end(), 0);
-        std::sort(indices.begin(), indices.end(), [&] (int left, int right) {
-            if (logits[left] == logits[right]) {
-                return left < right;
-            }
-            return logits[left] > logits[right];
-        });
-        const int top_k = config.top_k == 0
-            ? vocabulary
-            : std::min(config.top_k, vocabulary);
-        indices.resize(top_k);
-        const float maximum = logits[indices.front()] / config.temperature;
-        std::vector<double> probabilities(indices.size());
-        double denominator = 0.0;
-        for (size_t index = 0; index < indices.size(); ++index) {
-            probabilities[index] = std::exp(
-                static_cast<double>(logits[indices[index]] / config.temperature - maximum)
-            );
-            denominator += probabilities[index];
-        }
-        double cumulative = 0.0;
-        size_t retained = probabilities.size();
-        for (size_t index = 0; index < probabilities.size(); ++index) {
-            cumulative += probabilities[index] / denominator;
-            if (cumulative >= config.top_p) {
-                retained = index + 1;
-                break;
-            }
-        }
-        indices.resize(retained);
-        probabilities.resize(retained);
-        std::discrete_distribution<size_t> distribution(
-            probabilities.begin(),
-            probabilities.end()
-        );
-        return indices[distribution(random_)];
+        return *host_sampled_token_;
     }
 
     Qwen3TtsTalkerMemory memory_stats() const {
@@ -1852,7 +1948,9 @@ private:
             + key_.bytes() + value_.bytes() + attention_.bytes() + projection_.bytes()
             + gate_.bytes() + up_.bytes() + logits_.bytes() + text_output_.bytes()
             + last_hidden_.bytes() + packed_query_.bytes() + packed_key_.bytes()
-            + packed_value_.bytes() + packed_attention_.bytes() + attention_scores_.bytes();
+            + packed_value_.bytes() + packed_attention_.bytes() + attention_scores_.bytes()
+            + sampled_token_.bytes() + frame_tokens_.bytes() + frame_codes_.bytes()
+            + semantic_history_.bytes() + random_state_.bytes();
         Qwen3TtsTalkerMemory result{};
         result.weight_bytes = weight_bytes_;
         result.talker_kv_bytes = talker_kv;
@@ -1872,12 +1970,15 @@ private:
     bool trace_active_ = false;
     bool weights_finalized_ = false;
     uint64_t weight_bytes_ = 0;
-    std::mt19937_64 random_;
-    std::vector<int> generated_semantic_;
+    int generated_semantic_count_ = 0;
+    int* host_sampled_token_ = nullptr;
+    uint16_t* host_frame_codes_ = nullptr;
     cudaStream_t stream_ = nullptr;
     cublasHandle_t cublas_ = nullptr;
     cudaEvent_t start_ = nullptr;
     cudaEvent_t stop_ = nullptr;
+    cudaEvent_t predictor_start_ = nullptr;
+    cudaEvent_t predictor_stop_ = nullptr;
     std::unordered_map<std::string, DeviceTensor> tensors_;
     std::vector<DecoderWeights> talker_layers_;
     std::vector<DecoderWeights> predictor_layers_;
@@ -1915,6 +2016,11 @@ private:
     DeviceBuffer packed_value_;
     DeviceBuffer packed_attention_;
     DeviceBuffer attention_scores_;
+    DeviceBuffer sampled_token_;
+    DeviceBuffer frame_tokens_;
+    DeviceBuffer frame_codes_;
+    DeviceBuffer semantic_history_;
+    DeviceBuffer random_state_;
 };
 
 TalkerContext* context(Qwen3TtsTalkerHandle handle) {
