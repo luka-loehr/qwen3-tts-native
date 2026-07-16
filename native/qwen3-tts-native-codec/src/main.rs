@@ -8,9 +8,11 @@ use std::error::Error;
 use std::fs;
 use std::io;
 use std::path::Path;
+use std::sync::{Arc, Barrier};
 use std::time::Instant;
 
 type BatchScheduleOutput = (Vec<Vec<i16>>, Vec<Vec<u32>>);
+type ConcurrentScheduleOutput = (Vec<Vec<i16>>, Vec<Vec<u32>>, bool, f64);
 
 fn main() -> Result<(), Box<dyn Error>> {
     let arguments = std::env::args().collect::<Vec<_>>();
@@ -89,6 +91,22 @@ fn main() -> Result<(), Box<dyn Error>> {
             let fixture = required_argument(&arguments, 4, "decoder fixture directory")?;
             batch_parity(Path::new(library), Path::new(model), Path::new(fixture))
         }
+        "shared-session-parity" => {
+            let library = required_argument(&arguments, 2, "shared library path")?;
+            let model = required_argument(&arguments, 3, "speech tokenizer safetensors path")?;
+            let fixture = required_argument(&arguments, 4, "decoder fixture directory")?;
+            shared_session_parity(Path::new(library), Path::new(model), Path::new(fixture))
+        }
+        "shared-neural-benchmark" => {
+            let library = required_argument(&arguments, 2, "shared library path")?;
+            let model = required_argument(&arguments, 3, "speech tokenizer safetensors path")?;
+            let iterations = arguments
+                .get(4)
+                .map(|value| value.parse::<usize>())
+                .transpose()?
+                .unwrap_or(200);
+            shared_neural_benchmark(Path::new(library), Path::new(model), iterations)
+        }
         _ => {
             eprintln!(
                 "usage: qwen3-tts-native-codec <parity|benchmark> <library> [iterations]\n\
@@ -98,6 +116,476 @@ fn main() -> Result<(), Box<dyn Error>> {
             Ok(())
         }
     }
+}
+
+fn shared_session_parity(
+    library_path: &Path,
+    model_path: &Path,
+    fixture_path: &Path,
+) -> Result<(), Box<dyn Error>> {
+    let codes = read_u16_le(&fixture_path.join("codes.u16le"))?;
+    if codes.len() % ffi::CODEBOOKS != 0 {
+        return Err(io::Error::other("fixture code count is not divisible by 16").into());
+    }
+    let base_frames = codes
+        .chunks_exact(ffi::CODEBOOKS)
+        .map(|values| values.try_into().expect("chunk contains exactly 16 codes"))
+        .collect::<Vec<[u16; ffi::CODEBOOKS]>>();
+    if base_frames.len() != 4 {
+        return Err(io::Error::other("shared-session fixture must contain four frames").into());
+    }
+    let official_pcm = read_i16_le(&fixture_path.join("reference-pcm.s16le"))?;
+    let streams = (0..6)
+        .map(|stream| {
+            base_frames
+                .iter()
+                .enumerate()
+                .map(|(frame_index, frame)| {
+                    let mut varied = *frame;
+                    for (codebook, code) in varied.iter_mut().enumerate() {
+                        let offset = stream * 71 + frame_index * 17 + codebook * 3;
+                        *code = ((*code as usize + offset) & 2047) as u16;
+                    }
+                    varied
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+
+    let api = Arc::new(Api::load(library_path)?);
+    let weights = model::SafetensorsFile::open(model_path)?;
+    let load_start = Instant::now();
+    let shared_model = api
+        .load_shared_model(0, &weights)
+        .map_err(io::Error::other)?;
+    let load_and_warmup_milliseconds = load_start.elapsed().as_secs_f64() * 1000.0;
+    let model_info = shared_model.model_info().map_err(io::Error::other)?;
+    let model_memory = shared_model.memory_info().map_err(io::Error::other)?;
+
+    let mut b1 = shared_model.start_session().map_err(io::Error::other)?;
+    let b1_memory = b1.memory_info().map_err(io::Error::other)?;
+    let b1_active = shared_model
+        .memory_info()
+        .map_err(io::Error::other)?
+        .active_session_count;
+    let (b1_pcm, b1_packet) = b1
+        .process(&base_frames, true)
+        .map_err(|(status, message)| {
+            io::Error::other(format!("shared B1 status {status}: {message}"))
+        })?;
+    let b1_official = compare_pcm(&b1_pcm, &official_pcm)?;
+    b1.reset().map_err(io::Error::other)?;
+    let (b1_replay, _) = b1
+        .process(&base_frames, true)
+        .map_err(|(status, message)| {
+            io::Error::other(format!("shared B1 replay status {status}: {message}"))
+        })?;
+    let b1_replay_exact = b1_replay == b1_pcm;
+    drop(b1);
+    let b1_released = shared_model
+        .memory_info()
+        .map_err(io::Error::other)?
+        .active_session_count
+        == 0;
+
+    let mut latency_session = shared_model.start_session().map_err(io::Error::other)?;
+    let latency_frame = deterministic_frames(1);
+    let (_, first_chunk) =
+        latency_session
+            .process(&latency_frame, false)
+            .map_err(|(status, message)| {
+                io::Error::other(format!("shared first-chunk status {status}: {message}"))
+            })?;
+    let first_chunk_rtf = f64::from(first_chunk.end_to_end_microseconds) / 80_000.0;
+    drop(latency_session);
+
+    let schedules_three = vec![vec![1_usize; 4]; 3];
+    let expected_three =
+        shared_standalone_schedules(&shared_model, &streams[..3], &schedules_three)?;
+    let mut sessions_three = (0..3)
+        .map(|_| shared_model.start_session().map_err(io::Error::other))
+        .collect::<Result<Vec<_>, _>>()?;
+    let b3_memories = sessions_three
+        .iter()
+        .map(|session| session.memory_info().map_err(io::Error::other))
+        .collect::<Result<Vec<_>, _>>()?;
+    let b3_active = shared_model
+        .memory_info()
+        .map_err(io::Error::other)?
+        .active_session_count;
+    let (b3_interleaved, b3_slots) =
+        run_shared_interleaved(&mut sessions_three, &streams[..3], &schedules_three)?;
+    let b3_states = sessions_three
+        .iter()
+        .map(|session| session.state_info().map_err(io::Error::other))
+        .collect::<Result<Vec<_>, _>>()?;
+    for session in &mut sessions_three {
+        session.reset().map_err(io::Error::other)?;
+    }
+    let (b3_replay, b3_replay_slots) =
+        run_shared_interleaved(&mut sessions_three, &streams[..3], &schedules_three)?;
+    let b3_interleaved_exact = b3_interleaved == expected_three;
+    let b3_replay_exact = b3_replay == b3_interleaved && b3_replay_slots == b3_slots;
+    drop(sessions_three);
+
+    let (b3_concurrent, b3_concurrent_slots, b3_rounds_exact, b3_wall_ms) =
+        run_shared_concurrent(&shared_model, &streams[..3], &schedules_three, 20)?;
+    let b3_concurrent_exact = b3_concurrent == expected_three;
+
+    let first_counts = [1_usize, 2, 3, 1, 2, 3];
+    let schedules_six = first_counts
+        .iter()
+        .map(|first| vec![*first, 4 - *first])
+        .collect::<Vec<_>>();
+    let expected_six = shared_standalone_schedules(&shared_model, &streams, &schedules_six)?;
+    let mut sessions_six = (0..6)
+        .map(|_| shared_model.start_session().map_err(io::Error::other))
+        .collect::<Result<Vec<_>, _>>()?;
+    let b6_memories = sessions_six
+        .iter()
+        .map(|session| session.memory_info().map_err(io::Error::other))
+        .collect::<Result<Vec<_>, _>>()?;
+    let b6_active = shared_model
+        .memory_info()
+        .map_err(io::Error::other)?
+        .active_session_count;
+    let (b6_interleaved, b6_slots) =
+        run_shared_interleaved(&mut sessions_six, &streams, &schedules_six)?;
+    let b6_states = sessions_six
+        .iter()
+        .map(|session| session.state_info().map_err(io::Error::other))
+        .collect::<Result<Vec<_>, _>>()?;
+    let b6_interleaved_exact = b6_interleaved == expected_six;
+    drop(sessions_six);
+
+    let (b6_concurrent, b6_concurrent_slots, b6_rounds_exact, b6_wall_ms) =
+        run_shared_concurrent(&shared_model, &streams, &schedules_six, 20)?;
+    let b6_concurrent_exact = b6_concurrent == expected_six;
+
+    let mut cancelled = shared_model.start_session().map_err(io::Error::other)?;
+    let mut survivor = shared_model.start_session().map_err(io::Error::other)?;
+    cancelled
+        .process(&streams[0][..1], false)
+        .map_err(|(status, message)| {
+            io::Error::other(format!("cancel prelude status {status}: {message}"))
+        })?;
+    cancelled.cancel().map_err(io::Error::other)?;
+    let cancelled_rejects_process = matches!(
+        cancelled.process(&streams[0][1..2], false),
+        Err((STATUS_STATE, _))
+    );
+    drop(cancelled);
+    let active_after_cancel_drop = shared_model
+        .memory_info()
+        .map_err(io::Error::other)?
+        .active_session_count;
+    let (survivor_pcm, _) = run_one_shared_schedule(&mut survivor, &streams[1], &schedules_six[1])
+        .map_err(io::Error::other)?;
+    let survivor_isolated = survivor_pcm == expected_six[1];
+    drop(survivor);
+    let all_sessions_released = shared_model
+        .memory_info()
+        .map_err(io::Error::other)?
+        .active_session_count
+        == 0;
+
+    let b3_state_matches = b3_states.iter().all(|state| {
+        state.frame_position == 4
+            && state.emitted_samples == 4 * ffi::SAMPLES_PER_FRAME as u64
+            && state.next_ring_slot == 1
+            && state.kv_ring_head == 4
+            && state.device_bytes == b1_memory.device_bytes
+    });
+    let b6_state_matches = b6_states.iter().all(|state| {
+        state.frame_position == 4
+            && state.emitted_samples == 4 * ffi::SAMPLES_PER_FRAME as u64
+            && state.next_ring_slot == 2
+            && state.kv_ring_head == 4
+            && state.device_bytes == b1_memory.device_bytes
+    });
+    let session_memory_stable = b3_memories.iter().chain(&b6_memories).all(|memory| {
+        memory.device_bytes == b1_memory.device_bytes
+            && memory.host_pinned_bytes == b1_memory.host_pinned_bytes
+    });
+    let weights_shared_once = model_memory.shared_weight_device_bytes == model_info.device_bytes
+        && model_memory.tensor_count == 271
+        && model_memory.warmup_completed == 1
+        && b1_memory.device_bytes < model_memory.shared_weight_device_bytes
+        && session_memory_stable;
+    let b3_slots_match = b3_slots.iter().all(|slots| slots == &[0, 1, 2, 0])
+        && b3_concurrent_slots
+            .iter()
+            .all(|slots| slots == &[0, 1, 2, 0]);
+    let b6_slots_match = b6_slots.iter().all(|slots| slots == &[0, 1])
+        && b6_concurrent_slots.iter().all(|slots| slots == &[0, 1]);
+    let passed = b1_official.maximum_absolute_error <= 1
+        && b1_replay_exact
+        && b1_packet.sample_count as usize == official_pcm.len()
+        && b1_active == 1
+        && b1_released
+        && first_chunk_rtf < 1.0
+        && b3_active == 3
+        && b3_interleaved_exact
+        && b3_replay_exact
+        && b3_concurrent_exact
+        && b3_rounds_exact
+        && b3_slots_match
+        && b3_state_matches
+        && b6_active == 6
+        && b6_interleaved_exact
+        && b6_concurrent_exact
+        && b6_rounds_exact
+        && b6_slots_match
+        && b6_state_matches
+        && cancelled_rejects_process
+        && active_after_cancel_drop == 1
+        && survivor_isolated
+        && all_sessions_released
+        && weights_shared_once;
+
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "schema_version": 1,
+            "mode": "shared_immutable_native_decoder_model",
+            "passed": passed,
+            "model_load_and_warmup_milliseconds": load_and_warmup_milliseconds,
+            "model": {
+                "tensor_count": model_info.tensor_count,
+                "parameter_count": model_info.parameter_count,
+                "source_bytes": model_info.source_bytes,
+                "shared_weight_device_bytes": model_memory.shared_weight_device_bytes,
+                "transient_upload_device_bytes": model_memory.transient_upload_device_bytes,
+                "warmup_completed": model_memory.warmup_completed == 1
+            },
+            "one_frame_first_chunk": {
+                "end_to_end_microseconds": first_chunk.end_to_end_microseconds,
+                "gpu_microseconds": first_chunk.gpu_microseconds,
+                "real_time_factor": first_chunk_rtf
+            },
+            "batch_one": {
+                "official_pcm": b1_official.to_json(),
+                "reset_replay_bit_exact": b1_replay_exact,
+                "active_sessions": b1_active
+            },
+            "batch_three": {
+                "active_sessions": b3_active,
+                "interleaved_bit_exact": b3_interleaved_exact,
+                "reset_replay_bit_exact": b3_replay_exact,
+                "concurrent_bit_exact": b3_concurrent_exact,
+                "concurrent_stress_rounds": 20,
+                "all_stress_rounds_bit_exact": b3_rounds_exact,
+                "concurrent_wall_milliseconds": b3_wall_ms,
+                "ring_slots": b3_slots,
+                "state_matches": b3_state_matches
+            },
+            "batch_six": {
+                "active_sessions": b6_active,
+                "interleaved_bit_exact": b6_interleaved_exact,
+                "concurrent_bit_exact": b6_concurrent_exact,
+                "concurrent_stress_rounds": 20,
+                "all_stress_rounds_bit_exact": b6_rounds_exact,
+                "concurrent_wall_milliseconds": b6_wall_ms,
+                "aggregate_audio_milliseconds_per_round": 6 * 4 * 80,
+                "aggregate_wall_real_time_factor": b6_wall_ms / (20.0 * 6.0 * 4.0 * 80.0),
+                "ring_slots": b6_slots,
+                "state_matches": b6_state_matches
+            },
+            "cancel_drop": {
+                "cancelled_session_rejects_process": cancelled_rejects_process,
+                "active_sessions_after_cancelled_drop": active_after_cancel_drop,
+                "survivor_bit_exact": survivor_isolated,
+                "all_sessions_released": all_sessions_released
+            },
+            "memory": {
+                "shared_weights_allocated_once": weights_shared_once,
+                "shared_weight_device_bytes": model_memory.shared_weight_device_bytes,
+                "per_session": session_memory_json(b1_memory),
+                "b1_total_device_bytes": model_memory.shared_weight_device_bytes + b1_memory.device_bytes,
+                "b3_total_device_bytes": model_memory.shared_weight_device_bytes + 3 * b1_memory.device_bytes,
+                "b6_total_device_bytes": model_memory.shared_weight_device_bytes + 6 * b1_memory.device_bytes,
+                "b6_total_host_pinned_bytes": 6 * b1_memory.host_pinned_bytes
+            },
+            "concurrency": {
+                "host_threads": true,
+                "independent_non_blocking_cuda_streams": true,
+                "independent_cublas_handles": true,
+                "global_inference_lock": false
+            }
+        }))?
+    );
+    if !passed {
+        return Err(io::Error::other("shared decoder session parity failed").into());
+    }
+    Ok(())
+}
+
+fn shared_standalone_schedules(
+    shared_model: &Arc<ffi::NativeCodecModel>,
+    streams: &[Vec<[u16; ffi::CODEBOOKS]>],
+    schedules: &[Vec<usize>],
+) -> Result<Vec<Vec<i16>>, Box<dyn Error>> {
+    let mut session = shared_model.start_session().map_err(io::Error::other)?;
+    let mut outputs = Vec::with_capacity(streams.len());
+    for (index, (stream, schedule)) in streams.iter().zip(schedules).enumerate() {
+        if index != 0 {
+            session.reset().map_err(io::Error::other)?;
+        }
+        let (pcm, _) =
+            run_one_shared_schedule(&mut session, stream, schedule).map_err(io::Error::other)?;
+        outputs.push(pcm);
+    }
+    Ok(outputs)
+}
+
+fn run_one_shared_schedule(
+    session: &mut ffi::NativeCodecSession,
+    stream: &[[u16; ffi::CODEBOOKS]],
+    schedule: &[usize],
+) -> Result<(Vec<i16>, Vec<u32>), String> {
+    let mut position = 0_usize;
+    let mut output = Vec::with_capacity(stream.len() * ffi::SAMPLES_PER_FRAME);
+    let mut slots = Vec::with_capacity(schedule.len());
+    for count in schedule {
+        let end = position + count;
+        if end > stream.len() {
+            return Err("shared schedule exceeds stream length".to_owned());
+        }
+        let (packet, result) = session
+            .process(&stream[position..end], end == stream.len())
+            .map_err(|(status, message)| format!("shared session status {status}: {message}"))?;
+        output.extend_from_slice(&packet);
+        slots.push(result.ring_slot);
+        position = end;
+    }
+    if position != stream.len() {
+        return Err("shared schedule is incomplete".to_owned());
+    }
+    Ok((output, slots))
+}
+
+fn run_shared_interleaved(
+    sessions: &mut [ffi::NativeCodecSession],
+    streams: &[Vec<[u16; ffi::CODEBOOKS]>],
+    schedules: &[Vec<usize>],
+) -> Result<BatchScheduleOutput, Box<dyn Error>> {
+    if sessions.len() != streams.len()
+        || sessions.len() != schedules.len()
+        || schedules.is_empty()
+        || schedules
+            .iter()
+            .any(|schedule| schedule.len() != schedules[0].len())
+    {
+        return Err(io::Error::other("invalid shared interleaved schedule shape").into());
+    }
+    let mut positions = vec![0_usize; sessions.len()];
+    let mut outputs = streams
+        .iter()
+        .map(|stream| Vec::with_capacity(stream.len() * ffi::SAMPLES_PER_FRAME))
+        .collect::<Vec<_>>();
+    let mut slots = vec![Vec::new(); sessions.len()];
+    for (step, _) in schedules[0].iter().enumerate() {
+        for index in 0..sessions.len() {
+            let start = positions[index];
+            let end = start + schedules[index][step];
+            let (pcm, result) = sessions[index]
+                .process(&streams[index][start..end], end == streams[index].len())
+                .map_err(|(status, message)| {
+                    io::Error::other(format!(
+                        "shared interleaved stream {index} status {status}: {message}"
+                    ))
+                })?;
+            outputs[index].extend_from_slice(&pcm);
+            slots[index].push(result.ring_slot);
+            positions[index] = end;
+        }
+    }
+    if positions
+        .iter()
+        .zip(streams)
+        .any(|(position, stream)| *position != stream.len())
+    {
+        return Err(io::Error::other("shared interleaved schedule is incomplete").into());
+    }
+    Ok((outputs, slots))
+}
+
+fn run_shared_concurrent(
+    shared_model: &Arc<ffi::NativeCodecModel>,
+    streams: &[Vec<[u16; ffi::CODEBOOKS]>],
+    schedules: &[Vec<usize>],
+    rounds: usize,
+) -> Result<ConcurrentScheduleOutput, Box<dyn Error>> {
+    let mut sessions = (0..streams.len())
+        .map(|_| shared_model.start_session().map_err(io::Error::other))
+        .collect::<Result<Vec<_>, _>>()?;
+    let barrier = Arc::new(Barrier::new(sessions.len()));
+    let wall_start = Instant::now();
+    let results = std::thread::scope(|scope| {
+        let handles = sessions
+            .iter_mut()
+            .zip(streams)
+            .zip(schedules)
+            .map(|((session, stream), schedule)| {
+                let barrier = Arc::clone(&barrier);
+                scope.spawn(move || {
+                    barrier.wait();
+                    let mut first_output = None;
+                    let mut first_slots = None;
+                    let mut all_rounds_exact = true;
+                    for round in 0..rounds {
+                        let (output, slots) = run_one_shared_schedule(session, stream, schedule)?;
+                        if let Some(expected) = &first_output {
+                            all_rounds_exact &= expected == &output;
+                            all_rounds_exact &= first_slots.as_ref() == Some(&slots);
+                        } else {
+                            first_output = Some(output);
+                            first_slots = Some(slots);
+                        }
+                        if round + 1 != rounds {
+                            session.reset()?;
+                        }
+                    }
+                    Ok::<_, String>((
+                        first_output.unwrap_or_default(),
+                        first_slots.unwrap_or_default(),
+                        all_rounds_exact,
+                    ))
+                })
+            })
+            .collect::<Vec<_>>();
+        handles
+            .into_iter()
+            .map(|handle| {
+                handle
+                    .join()
+                    .map_err(|_| "shared decoder worker panicked".to_owned())?
+            })
+            .collect::<Result<Vec<_>, String>>()
+    })
+    .map_err(io::Error::other)?;
+    let wall_milliseconds = wall_start.elapsed().as_secs_f64() * 1000.0;
+    let mut outputs = Vec::with_capacity(results.len());
+    let mut slots = Vec::with_capacity(results.len());
+    let mut all_rounds_exact = true;
+    for (output, stream_slots, exact) in results {
+        outputs.push(output);
+        slots.push(stream_slots);
+        all_rounds_exact &= exact;
+    }
+    Ok((outputs, slots, all_rounds_exact, wall_milliseconds))
+}
+
+fn session_memory_json(memory: ffi::SessionMemoryInfo) -> Value {
+    json!({
+        "device_bytes": memory.device_bytes,
+        "host_pinned_bytes": memory.host_pinned_bytes,
+        "transformer_kv_bytes": memory.transformer_kv_bytes,
+        "convolution_history_bytes": memory.convolution_history_bytes,
+        "codec_ring_bytes": memory.codec_ring_bytes,
+        "pcm_ring_bytes": memory.pcm_ring_bytes,
+        "workspace_device_bytes": memory.workspace_device_bytes
+    })
 }
 
 fn batch_parity(
@@ -1147,6 +1635,122 @@ fn neural_cold_start(library_path: &Path, model_path: &Path) -> Result<(), Box<d
         }))?
     );
     Ok(())
+}
+
+fn shared_neural_benchmark(
+    library_path: &Path,
+    model_path: &Path,
+    iterations: usize,
+) -> Result<(), Box<dyn Error>> {
+    if iterations < 200 {
+        return Err(
+            io::Error::other("shared neural benchmark requires at least 200 iterations").into(),
+        );
+    }
+    let api = Arc::new(Api::load(library_path)?);
+    let weights = model::SafetensorsFile::open(model_path)?;
+    let load_start = Instant::now();
+    let shared_model = api
+        .load_shared_model(0, &weights)
+        .map_err(io::Error::other)?;
+    let model_load_and_warmup_milliseconds = load_start.elapsed().as_secs_f64() * 1000.0;
+    let model_info = shared_model.model_info().map_err(io::Error::other)?;
+    let model_memory = shared_model.memory_info().map_err(io::Error::other)?;
+    let mut session = shared_model.start_session().map_err(io::Error::other)?;
+    let session_memory = session.memory_info().map_err(io::Error::other)?;
+
+    let first_frame = deterministic_frames(1);
+    let (_, first_result) = session
+        .process(&first_frame, false)
+        .map_err(|(status, message)| {
+            io::Error::other(format!(
+                "shared post-warmup first-chunk status {status}: {message}"
+            ))
+        })?;
+    session.reset().map_err(io::Error::other)?;
+    let one_frame = shared_neural_benchmark_case(&mut session, 1, iterations)?;
+    session.reset().map_err(io::Error::other)?;
+    let four_frames = shared_neural_benchmark_case(&mut session, 4, iterations)?;
+    let state = session.state_info().map_err(io::Error::other)?;
+
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "schema_version": 1,
+            "mode": "shared_immutable_real_qwen_decoder",
+            "model_load_and_warmup_milliseconds": model_load_and_warmup_milliseconds,
+            "model": {
+                "tensor_count": model_info.tensor_count,
+                "parameter_count": model_info.parameter_count,
+                "source_bytes": model_info.source_bytes,
+                "shared_weight_device_bytes": model_memory.shared_weight_device_bytes,
+                "warmup_completed": model_memory.warmup_completed == 1
+            },
+            "fresh_session_first_80ms_chunk": {
+                "gpu_microseconds": first_result.gpu_microseconds,
+                "end_to_end_microseconds": first_result.end_to_end_microseconds,
+                "real_time_factor": f64::from(first_result.end_to_end_microseconds) / 80_000.0
+            },
+            "one_frame_80ms_packets": one_frame,
+            "four_frame_320ms_packets": four_frames,
+            "per_session_memory": session_memory_json(session_memory),
+            "final_session_state": state_json(state),
+            "shared_weights_loaded_once": true,
+            "model_warmed_once": true,
+            "pcm_delivered_after_each_packet": true,
+            "python_or_node_runtime": false
+        }))?
+    );
+    Ok(())
+}
+
+fn shared_neural_benchmark_case(
+    session: &mut ffi::NativeCodecSession,
+    frames_per_packet: usize,
+    iterations: usize,
+) -> Result<Value, Box<dyn Error>> {
+    let frames = deterministic_frames(frames_per_packet);
+    for _ in 0..20 {
+        session
+            .process(&frames, false)
+            .map_err(|(status, message)| {
+                io::Error::other(format!("shared neural warmup status {status}: {message}"))
+            })?;
+    }
+    session.reset().map_err(io::Error::other)?;
+    let mut gpu_microseconds = Vec::with_capacity(iterations);
+    let mut end_to_end_microseconds = Vec::with_capacity(iterations);
+    for iteration in 0..iterations {
+        let (pcm, result) = session
+            .process(&frames, iteration + 1 == iterations)
+            .map_err(|(status, message)| {
+                io::Error::other(format!(
+                    "shared neural benchmark status {status}: {message}"
+                ))
+            })?;
+        if pcm.len() != frames_per_packet * ffi::SAMPLES_PER_FRAME {
+            return Err(io::Error::other("unexpected shared benchmark sample count").into());
+        }
+        gpu_microseconds.push(f64::from(result.gpu_microseconds));
+        end_to_end_microseconds.push(f64::from(result.end_to_end_microseconds));
+    }
+    gpu_microseconds.sort_by(f64::total_cmp);
+    end_to_end_microseconds.sort_by(f64::total_cmp);
+    let audio_microseconds = frames_per_packet as f64 * 80_000.0;
+    let end_to_end_p50 = percentile(&end_to_end_microseconds, 0.50);
+    Ok(json!({
+        "iterations": iterations,
+        "warmup_iterations": 20,
+        "continuous_stream": true,
+        "reset_between_measured_packets": false,
+        "frames_per_packet": frames_per_packet,
+        "samples_per_packet": frames_per_packet * ffi::SAMPLES_PER_FRAME,
+        "audio_milliseconds_per_packet": audio_microseconds / 1000.0,
+        "gpu_microseconds": latency_json(&gpu_microseconds),
+        "end_to_end_microseconds": latency_json(&end_to_end_microseconds),
+        "p50_real_time_factor": end_to_end_p50 / audio_microseconds,
+        "p50_times_faster_than_realtime": audio_microseconds / end_to_end_p50
+    }))
 }
 
 fn neural_benchmark(
