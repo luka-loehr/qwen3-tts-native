@@ -16,8 +16,8 @@ use ffi::{
     SAMPLES_PER_FRAME, StartResult,
 };
 use report::{
-    Distribution, QualificationGates, QualificationReport, RequestReport, RuntimeMetricsReport,
-    ScenarioReport,
+    Distribution, PreflightReport, QualificationGates, QualificationReport, RequestReport,
+    RuntimeMetricsReport, ScenarioReport,
 };
 use serde::Deserialize;
 
@@ -54,6 +54,8 @@ fn run() -> Result<()> {
         config.ring_slots,
     );
     let mut engine = api.create_engine(&config.model_root, &engine_config)?;
+    let preflight =
+        exercise_backpressure_and_cancellation(&api, &engine, &corpus[0], maximum_concurrency)?;
 
     if config.warmup_requests > 0 {
         let warmup = ExecuteConfig {
@@ -88,6 +90,7 @@ fn run() -> Result<()> {
     let gates = evaluate_gates(
         config.qualifying_run,
         config.requests_per_concurrency,
+        &preflight,
         &scenarios,
     );
     let report = QualificationReport {
@@ -101,6 +104,7 @@ fn run() -> Result<()> {
         corpus_entries: corpus.len(),
         warmup_requests: config.warmup_requests,
         requests_per_concurrency: config.requests_per_concurrency,
+        preflight,
         scenarios,
         gates,
     };
@@ -624,9 +628,78 @@ fn execute_scenario<'api>(
     })
 }
 
+fn exercise_backpressure_and_cancellation<'api>(
+    api: &'api Api,
+    engine: &Engine<'api>,
+    entry: &CorpusEntry,
+    capacity: usize,
+) -> Result<PreflightReport> {
+    let language = entry.language_id()?;
+    let mut requests = Vec::with_capacity(capacity);
+    for ordinal in 0..capacity {
+        let generation = GenerationConfig::official_defaults(ordinal as u64, 256);
+        match api.start_request(engine, language, &entry.text, &entry.instruct, generation)? {
+            StartResult::Started(request) => requests.push(request),
+            StartResult::WouldBlock => {
+                bail!("engine applied backpressure before its configured capacity")
+            }
+        }
+    }
+    let capacity_filled = requests.len() == capacity;
+    let overflow_returned_would_block = matches!(
+        api.start_request(
+            engine,
+            language,
+            &entry.text,
+            &entry.instruct,
+            GenerationConfig::official_defaults(0xffff_ffff, 256),
+        )?,
+        StartResult::WouldBlock
+    );
+    if !overflow_returned_would_block {
+        bail!("engine accepted a request beyond its configured capacity");
+    }
+
+    for request in &mut requests {
+        request.cancel()?;
+        request.destroy()?;
+    }
+    let all_requests_cancelled_and_destroyed = true;
+    let capacity_recovered_after_cancellation = match api.start_request(
+        engine,
+        language,
+        &entry.text,
+        &entry.instruct,
+        GenerationConfig::official_defaults(0xfeed_beef, 256),
+    )? {
+        StartResult::Started(mut request) => {
+            request.cancel()?;
+            request.destroy()?;
+            true
+        }
+        StartResult::WouldBlock => false,
+    };
+    if !capacity_recovered_after_cancellation {
+        bail!("engine capacity did not recover after cancellation");
+    }
+    let passed = capacity_filled
+        && overflow_returned_would_block
+        && all_requests_cancelled_and_destroyed
+        && capacity_recovered_after_cancellation;
+    Ok(PreflightReport {
+        configured_capacity: capacity,
+        capacity_filled,
+        overflow_returned_would_block,
+        all_requests_cancelled_and_destroyed,
+        capacity_recovered_after_cancellation,
+        passed,
+    })
+}
+
 fn evaluate_gates(
     qualifying_run: bool,
     requests_per_concurrency: usize,
+    preflight: &PreflightReport,
     scenarios: &[ScenarioReport],
 ) -> QualificationGates {
     let all_requests_completed = scenarios
@@ -641,6 +714,7 @@ fn evaluate_gates(
     let exact_pcm_copy_bounds = scenarios
         .iter()
         .all(|scenario| scenario.exact_copy_bound_requests == scenario.completed);
+    let backpressure_and_cancellation = preflight.passed;
     let rtf_below_one_all_scenarios = scenarios
         .iter()
         .all(|scenario| scenario.aggregate_rtf < 1.0 && scenario.request_rtf.p95 < 1.0);
@@ -653,6 +727,7 @@ fn evaluate_gates(
         && progressive_streaming_observed
         && packet_positions_contiguous
         && exact_pcm_copy_bounds
+        && backpressure_and_cancellation
         && rtf_below_one_all_scenarios
         && first_audio_p95_below_200_ms_all_scenarios;
     QualificationGates {
@@ -661,6 +736,7 @@ fn evaluate_gates(
         progressive_streaming_observed,
         packet_positions_contiguous,
         exact_pcm_copy_bounds,
+        backpressure_and_cancellation,
         rtf_below_one_all_scenarios,
         first_audio_p95_below_200_ms_all_scenarios,
         passed,
@@ -697,7 +773,7 @@ fn safe_filename(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{evaluate_gates, parse_concurrencies, safe_filename};
+    use super::{PreflightReport, evaluate_gates, parse_concurrencies, safe_filename};
 
     #[test]
     fn concurrency_parser_deduplicates_and_sorts() {
@@ -712,7 +788,15 @@ mod tests {
 
     #[test]
     fn empty_smoke_result_never_claims_qualification() {
-        let gates = evaluate_gates(false, 3, &[]);
+        let preflight = PreflightReport {
+            configured_capacity: 1,
+            capacity_filled: true,
+            overflow_returned_would_block: true,
+            all_requests_cancelled_and_destroyed: true,
+            capacity_recovered_after_cancellation: true,
+            passed: true,
+        };
+        let gates = evaluate_gates(false, 3, &preflight, &[]);
         assert!(!gates.passed);
         assert!(!gates.at_least_200_requests_per_scenario);
     }

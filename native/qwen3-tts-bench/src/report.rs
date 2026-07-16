@@ -14,8 +14,19 @@ pub struct QualificationReport {
     pub corpus_entries: usize,
     pub warmup_requests: usize,
     pub requests_per_concurrency: usize,
+    pub preflight: PreflightReport,
     pub scenarios: Vec<ScenarioReport>,
     pub gates: QualificationGates,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PreflightReport {
+    pub configured_capacity: usize,
+    pub capacity_filled: bool,
+    pub overflow_returned_would_block: bool,
+    pub all_requests_cancelled_and_destroyed: bool,
+    pub capacity_recovered_after_cancellation: bool,
+    pub passed: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -25,6 +36,7 @@ pub struct QualificationGates {
     pub progressive_streaming_observed: bool,
     pub packet_positions_contiguous: bool,
     pub exact_pcm_copy_bounds: bool,
+    pub backpressure_and_cancellation: bool,
     pub rtf_below_one_all_scenarios: bool,
     pub first_audio_p95_below_200_ms_all_scenarios: bool,
     pub passed: bool,
