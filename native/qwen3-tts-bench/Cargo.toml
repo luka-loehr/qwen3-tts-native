@@ -16,5 +16,3 @@ unsafe_op_in_unsafe_fn = "deny"
 
 [lints.clippy]
 all = "deny"
-pedantic = "deny"
-

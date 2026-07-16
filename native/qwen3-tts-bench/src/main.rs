@@ -206,7 +206,7 @@ impl CliConfig {
         if requests_per_concurrency == 0 || packet_frames == 0 || ring_slots == 0 {
             bail!("request count, packet frames, and ring slots must be non-zero");
         }
-        if concurrencies.iter().any(|value| *value == 0) {
+        if concurrencies.contains(&0) {
             bail!("concurrency values must be non-zero");
         }
         if audio_dir.is_none() {
@@ -544,7 +544,7 @@ fn execute_scenario<'api>(
         }
 
         loop_count += 1;
-        if loop_count % 32 == 0 {
+        if loop_count.is_multiple_of(32) {
             rss_peak = maximum_optional(rss_peak, current_rss_bytes());
         }
         if !made_progress {
