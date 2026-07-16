@@ -39,3 +39,33 @@ The default packet contains four codec frames, or 7,680 samples (320 ms). A
 short final packet is allowed. Frame indices, sample offsets, and packet sequence
 numbers must remain contiguous. Backpressure is signaled rather than dropping or
 overwriting audio.
+
+## Real native E2E smoke
+
+`native_e2e_smoke` connects the real native 1.7B VoiceDesign talker to the real
+neural speech-tokenizer decoder and writes mono 24 kHz signed 16-bit PCM as a
+WAV file. It validates contiguous frame/sample positions, exact sample counts,
+the final-packet flag, and basic PCM amplitude statistics.
+
+```text
+cargo run --release --locked --bin native_e2e_smoke -- \
+  /path/to/libqwen3_tts_cuda.so \
+  /path/to/libqwen3_tts_codec_cuda.so \
+  /path/to/qwen3-tts-1.7b-voice-design-bf16-indexed \
+  /tmp/native-e2e.wav \
+  --text "Guten Morgen." \
+  --instruction "A calm adult male voice with natural articulation." \
+  --language German \
+  --max-frames 40 \
+  --packet-frames 4 \
+  --seed 0 \
+  --greedy \
+  --report /tmp/native-e2e.json
+```
+
+This command is intentionally reported as a non-qualifying whole-sequence
+smoke: the current public talker API completes code generation before decoder
+polling starts. It proves real model execution and WAV correctness, but its
+first-audio measurement is not the incremental streaming TTFA gate. The final
+runtime must use a persistent incremental talker session and pass the separate
+200-request qualification harness.

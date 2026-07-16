@@ -30,6 +30,16 @@ struct Arguments {
     greedy: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct PcmStatistics {
+    minimum: i16,
+    maximum: i16,
+    peak_absolute: u32,
+    nonzero_samples: usize,
+    clipped_samples: usize,
+    rms_normalized: f64,
+}
+
 fn main() {
     if let Err(error) = run() {
         eprintln!("error: {error}");
@@ -150,6 +160,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     write_wav(&arguments.wav_output, &pcm)?;
 
     let audio_milliseconds = pcm.len() as f64 * 1_000.0 / f64::from(SAMPLE_RATE);
+    let pcm_statistics = pcm_statistics(&pcm)?;
     let report = json!({
         "schema_version": 1,
         "operation": "native-qwen3-tts-e2e-smoke",
@@ -189,6 +200,15 @@ fn run() -> Result<(), Box<dyn Error>> {
             "channels": CHANNELS,
             "samples": pcm.len(),
             "milliseconds": audio_milliseconds,
+            "pcm": {
+                "minimum": pcm_statistics.minimum,
+                "maximum": pcm_statistics.maximum,
+                "peak_absolute": pcm_statistics.peak_absolute,
+                "peak_normalized": f64::from(pcm_statistics.peak_absolute) / 32_768.0,
+                "nonzero_samples": pcm_statistics.nonzero_samples,
+                "clipped_samples": pcm_statistics.clipped_samples,
+                "rms_normalized": pcm_statistics.rms_normalized,
+            },
         },
         "observed_whole_sequence_pipeline": {
             "first_audio_milliseconds": first_audio_milliseconds,
@@ -281,6 +301,36 @@ fn required_usize(
     Ok(required_string(values, flag)?.parse()?)
 }
 
+fn pcm_statistics(samples: &[i16]) -> Result<PcmStatistics, Box<dyn Error>> {
+    let first = *samples
+        .first()
+        .ok_or_else(|| io::Error::other("cannot measure empty PCM"))?;
+    let mut minimum = first;
+    let mut maximum = first;
+    let mut peak_absolute = 0_u32;
+    let mut nonzero_samples = 0_usize;
+    let mut clipped_samples = 0_usize;
+    let mut squared_sum = 0_f64;
+    for sample in samples {
+        minimum = minimum.min(*sample);
+        maximum = maximum.max(*sample);
+        let absolute = i32::from(*sample).unsigned_abs();
+        peak_absolute = peak_absolute.max(absolute);
+        nonzero_samples += usize::from(*sample != 0);
+        clipped_samples += usize::from(matches!(*sample, i16::MIN | i16::MAX));
+        let normalized = f64::from(*sample) / 32_768.0;
+        squared_sum += normalized * normalized;
+    }
+    Ok(PcmStatistics {
+        minimum,
+        maximum,
+        peak_absolute,
+        nonzero_samples,
+        clipped_samples,
+        rms_normalized: (squared_sum / samples.len() as f64).sqrt(),
+    })
+}
+
 fn write_wav(path: &Path, samples: &[i16]) -> Result<(), Box<dyn Error>> {
     let data_bytes = samples
         .len()
@@ -311,4 +361,22 @@ fn write_wav(path: &Path, samples: &[i16]) -> Result<(), Box<dyn Error>> {
     }
     file.flush()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pcm_statistics_cover_signed_peak_rms_and_clipping() {
+        let statistics =
+            pcm_statistics(&[i16::MIN, -16_384, 0, 16_384, i16::MAX]).expect("PCM statistics");
+        assert_eq!(statistics.minimum, i16::MIN);
+        assert_eq!(statistics.maximum, i16::MAX);
+        assert_eq!(statistics.peak_absolute, 32_768);
+        assert_eq!(statistics.nonzero_samples, 4);
+        assert_eq!(statistics.clipped_samples, 2);
+        assert!(statistics.rms_normalized > 0.70);
+        assert!(statistics.rms_normalized < 0.71);
+    }
 }
