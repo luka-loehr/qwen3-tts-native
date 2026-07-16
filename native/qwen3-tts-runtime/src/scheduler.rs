@@ -1376,32 +1376,40 @@ mod tests {
             steps: 1,
             maximum_batch: Arc::new(AtomicUsize::new(0)),
         };
-        let mut invalid = Vec::new();
-
-        let mut config = EngineConfig::default();
-        config.struct_size = 0;
-        invalid.push(config);
-        let mut config = EngineConfig::default();
-        config.flags = 1;
-        invalid.push(config);
-        let mut config = EngineConfig::default();
-        config.reserved[0] = 1;
-        invalid.push(config);
-        let mut config = EngineConfig::default();
-        config.max_concurrent_requests = MAX_CONCURRENT_REQUESTS + 1;
-        invalid.push(config);
-        let mut config = EngineConfig::default();
-        config.packet_frames = MAX_PACKET_FRAMES + 1;
-        invalid.push(config);
-        let mut config = EngineConfig::default();
-        config.pcm_ring_slots = MAX_PCM_RING_SLOTS + 1;
-        invalid.push(config);
-        let mut config = EngineConfig::default();
-        config.max_text_bytes = MAX_TEXT_BYTES + 1;
-        invalid.push(config);
-        let mut config = EngineConfig::default();
-        config.max_instruct_bytes = MAX_INSTRUCT_BYTES + 1;
-        invalid.push(config);
+        let invalid = [
+            EngineConfig {
+                struct_size: 0,
+                ..EngineConfig::default()
+            },
+            EngineConfig {
+                flags: 1,
+                ..EngineConfig::default()
+            },
+            EngineConfig {
+                reserved: [1; 8],
+                ..EngineConfig::default()
+            },
+            EngineConfig {
+                max_concurrent_requests: MAX_CONCURRENT_REQUESTS + 1,
+                ..EngineConfig::default()
+            },
+            EngineConfig {
+                packet_frames: MAX_PACKET_FRAMES + 1,
+                ..EngineConfig::default()
+            },
+            EngineConfig {
+                pcm_ring_slots: MAX_PCM_RING_SLOTS + 1,
+                ..EngineConfig::default()
+            },
+            EngineConfig {
+                max_text_bytes: MAX_TEXT_BYTES + 1,
+                ..EngineConfig::default()
+            },
+            EngineConfig {
+                max_instruct_bytes: MAX_INSTRUCT_BYTES + 1,
+                ..EngineConfig::default()
+            },
+        ];
 
         for config in invalid {
             assert!(matches!(
@@ -1414,23 +1422,28 @@ mod tests {
     #[test]
     fn generation_abi_and_model_limits_are_enforced() {
         let scheduler = scheduler(1, 1, 1);
-        let mut invalid = Vec::new();
-
-        let mut generation = GenerationConfig::default();
-        generation.struct_size = 0;
-        invalid.push(generation);
-        let mut generation = GenerationConfig::default();
-        generation.reserved[0] = 1;
-        invalid.push(generation);
-        let mut generation = GenerationConfig::default();
-        generation.max_codec_frames = MAX_CODEC_FRAMES + 1;
-        invalid.push(generation);
-        let mut generation = GenerationConfig::default();
-        generation.top_k = 3_073;
-        invalid.push(generation);
-        let mut generation = GenerationConfig::default();
-        generation.predictor_top_k = 2_049;
-        invalid.push(generation);
+        let invalid = [
+            GenerationConfig {
+                struct_size: 0,
+                ..GenerationConfig::default()
+            },
+            GenerationConfig {
+                reserved: [1; 8],
+                ..GenerationConfig::default()
+            },
+            GenerationConfig {
+                max_codec_frames: MAX_CODEC_FRAMES + 1,
+                ..GenerationConfig::default()
+            },
+            GenerationConfig {
+                top_k: 3_073,
+                ..GenerationConfig::default()
+            },
+            GenerationConfig {
+                predictor_top_k: 2_049,
+                ..GenerationConfig::default()
+            },
+        ];
 
         for generation in invalid {
             assert!(matches!(
