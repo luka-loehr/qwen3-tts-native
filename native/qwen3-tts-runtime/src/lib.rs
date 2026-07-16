@@ -3,10 +3,13 @@
 //! This crate deliberately contains no placeholder neural inference. It owns
 //! the invariants shared by the real talker, predictor, and codec backends.
 
+mod ffi_support;
+mod native_backend;
 mod request;
 mod scheduler;
 mod types;
 
+pub use native_backend::{NativeBackend, NativeBackendSession};
 pub use request::{PacketQueue, PacketQueueError, RequestRecord, TransitionError};
 pub use scheduler::{
     BackendError, BackendPacket, BackendRequest, BackendStarted, BackendStepInput,

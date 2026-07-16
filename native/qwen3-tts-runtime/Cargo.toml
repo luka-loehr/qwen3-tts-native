@@ -7,6 +7,7 @@ edition = "2024"
 crate-type = ["rlib", "staticlib", "cdylib"]
 
 [dependencies]
+anyhow = "1.0"
 qwen3-tts-native = { path = "../qwen3-tts-native" }
 qwen3-tts-native-codec = { path = "../qwen3-tts-native-codec" }
 serde_json = "1.0.150"
