@@ -98,6 +98,22 @@ constexpr size_t kLatentDeviceBytes =
     (2 * kLatentElements + kLatentExpandedElements +
      kLatentHistoryElements) *
     sizeof(float);
+constexpr size_t kDecoderMaxPositions =
+    QWEN3_TTS_CODEC_MAX_PACKET_FRAMES * QWEN3_TTS_CODEC_SAMPLES_PER_FRAME;
+constexpr size_t kDecoderMaxActivationElements = kDecoderMaxPositions * 96;
+constexpr size_t kDecoderMaxIm2colElements = kDecoderMaxPositions * 96 * 7;
+constexpr size_t kDecoderHistoryElements = 128160;
+constexpr size_t kDecoderDeviceBytes =
+    (2 * kDecoderMaxActivationElements + kDecoderMaxIm2colElements +
+     kDecoderHistoryElements) *
+    sizeof(float);
+constexpr size_t kDecoderPreconvHistoryOffset = 0;
+constexpr size_t kDecoderTransposeHistoryOffset = 6 * 1024;
+constexpr size_t kDecoderResidualHistoryOffset =
+    kDecoderTransposeHistoryOffset + (768 * 8 + 384 * 5 + 192 * 4 + 96 * 3);
+constexpr size_t kDecoderFinalHistoryOffset =
+    kDecoderResidualHistoryOffset + (768 + 384 + 192 + 96) * 78;
+static_assert(kDecoderFinalHistoryOffset + 96 * 6 == kDecoderHistoryElements);
 
 constexpr int32_t kStatusOk = QWEN3_TTS_CODEC_STATUS_OK;
 constexpr int32_t kStatusInvalidArgument =
@@ -661,6 +677,164 @@ __global__ void gamma_residual_kernel(
     }
 }
 
+__global__ void snake_beta_kernel(
+    const float* input,
+    const float* alpha_parameter,
+    const float* beta_parameter,
+    size_t count,
+    size_t channels,
+    float* output
+) {
+    const size_t item = blockIdx.x * blockDim.x + threadIdx.x;
+    if (item < count) {
+        const size_t channel = item % channels;
+        const float alpha = expf(alpha_parameter[channel]);
+        const float beta = expf(beta_parameter[channel]);
+        const float sine = sinf(input[item] * alpha);
+        output[item] = input[item] + (sine * sine) / (beta + 1.0e-9F);
+    }
+}
+
+__global__ void causal_im2col_kernel(
+    const float* input,
+    size_t positions,
+    size_t channels,
+    size_t kernel_size,
+    size_t dilation,
+    const float* history,
+    size_t history_positions,
+    float* columns
+) {
+    const size_t item = blockIdx.x * blockDim.x + threadIdx.x;
+    const size_t width = channels * kernel_size;
+    const size_t total = positions * width;
+    if (item >= total) {
+        return;
+    }
+    const int32_t position = static_cast<int32_t>(item / width);
+    const size_t column = item % width;
+    const size_t channel = column / kernel_size;
+    const size_t kernel = column % kernel_size;
+    const int32_t source_position = position - static_cast<int32_t>(
+        (kernel_size - 1 - kernel) * dilation
+    );
+    columns[item] = source_position >= 0
+                        ? input[static_cast<size_t>(source_position) * channels + channel]
+                        : history[static_cast<size_t>(
+                              static_cast<int32_t>(history_positions) + source_position
+                          ) *
+                                      channels +
+                                  channel];
+}
+
+__global__ void transpose_overlap_neural_kernel(
+    const float* input,
+    size_t input_positions,
+    size_t input_channels,
+    size_t output_channels,
+    size_t stride,
+    const float* weight,
+    const float* bias,
+    const float* prior_tail,
+    float* output
+) {
+    const size_t output_positions = input_positions * stride;
+    const size_t item = blockIdx.x * blockDim.x + threadIdx.x;
+    const size_t total = output_positions * output_channels;
+    if (item >= total) {
+        return;
+    }
+    const size_t output_position = item / output_channels;
+    const size_t output_channel = item % output_channels;
+    const size_t input_position = output_position / stride;
+    const size_t phase = output_position % stride;
+    float result = bias[output_channel];
+    if (input_position == 0) {
+        result += prior_tail[phase * output_channels + output_channel];
+    } else {
+        for (size_t input_channel = 0; input_channel < input_channels; ++input_channel) {
+            const size_t weight_index =
+                (input_channel * output_channels + output_channel) * (2 * stride) +
+                stride + phase;
+            result = fmaf(
+                input[(input_position - 1) * input_channels + input_channel],
+                weight[weight_index],
+                result
+            );
+        }
+    }
+    for (size_t input_channel = 0; input_channel < input_channels; ++input_channel) {
+        const size_t weight_index =
+            (input_channel * output_channels + output_channel) * (2 * stride) + phase;
+        result = fmaf(
+            input[input_position * input_channels + input_channel],
+            weight[weight_index],
+            result
+        );
+    }
+    output[item] = result;
+}
+
+__global__ void update_transpose_tail_neural_kernel(
+    const float* input,
+    size_t input_positions,
+    size_t input_channels,
+    size_t output_channels,
+    size_t stride,
+    const float* weight,
+    float* tail
+) {
+    const size_t item = blockIdx.x * blockDim.x + threadIdx.x;
+    const size_t total = stride * output_channels;
+    if (item >= total) {
+        return;
+    }
+    const size_t phase = item / output_channels;
+    const size_t output_channel = item % output_channels;
+    float result = 0.0F;
+    for (size_t input_channel = 0; input_channel < input_channels; ++input_channel) {
+        const size_t weight_index =
+            (input_channel * output_channels + output_channel) * (2 * stride) +
+            stride + phase;
+        result = fmaf(
+            input[(input_positions - 1) * input_channels + input_channel],
+            weight[weight_index],
+            result
+        );
+    }
+    tail[item] = result;
+}
+
+__global__ void add_residual_kernel(
+    const float* residual,
+    float* values,
+    size_t count
+) {
+    const size_t item = blockIdx.x * blockDim.x + threadIdx.x;
+    if (item < count) {
+        values[item] += residual[item];
+    }
+}
+
+__global__ void clamp_waveform_kernel(float* values, size_t count) {
+    const size_t item = blockIdx.x * blockDim.x + threadIdx.x;
+    if (item < count) {
+        values[item] = fminf(1.0F, fmaxf(-1.0F, values[item]));
+    }
+}
+
+__global__ void waveform_to_pcm_kernel(
+    const float* waveform,
+    size_t count,
+    int16_t* pcm
+) {
+    const size_t item = blockIdx.x * blockDim.x + threadIdx.x;
+    if (item < count) {
+        const float scaled = roundf(waveform[item] * 32767.0F);
+        pcm[item] = static_cast<int16_t>(fminf(32767.0F, fmaxf(-32768.0F, scaled)));
+    }
+}
+
 template <typename T>
 cudaError_t allocate_device(T** pointer, size_t elements) noexcept {
     return cudaMalloc(reinterpret_cast<void**>(pointer), elements * sizeof(T));
@@ -712,6 +886,10 @@ struct Qwen3TtsCodecContextV1 {
     float* latent_b = nullptr;
     float* latent_expanded = nullptr;
     float* latent_history = nullptr;
+    float* decoder_a = nullptr;
+    float* decoder_b = nullptr;
+    float* decoder_im2col = nullptr;
+    float* decoder_history = nullptr;
     uint64_t frame_position = 0;
     uint64_t emitted_samples = 0;
     uint64_t neural_frame_position = 0;
@@ -1103,6 +1281,590 @@ int32_t run_latent_upsampling(
     return kStatusOk;
 }
 
+int32_t run_snake_beta(
+    Qwen3TtsCodecContextV1* context,
+    const float* input,
+    size_t positions,
+    size_t channels,
+    const char* alpha_name,
+    const char* beta_name,
+    float* output,
+    char* error,
+    size_t error_capacity
+) noexcept {
+    const float* alpha = require_f32_weight(
+        context, alpha_name, error, error_capacity
+    );
+    const float* beta = require_f32_weight(
+        context, beta_name, error, error_capacity
+    );
+    if (alpha == nullptr || beta == nullptr) {
+        return kStatusModel;
+    }
+    const size_t count = positions * channels;
+    snake_beta_kernel<<<blocks_for(count), 256, 0, context->stream>>>(
+        input, alpha, beta, count, channels, output
+    );
+    const cudaError_t status = cudaGetLastError();
+    return status == cudaSuccess
+               ? kStatusOk
+               : cuda_error(error, error_capacity, "launch SnakeBeta", status);
+}
+
+int32_t run_causal_convolution(
+    Qwen3TtsCodecContextV1* context,
+    const float* input,
+    size_t positions,
+    size_t input_channels,
+    size_t output_channels,
+    size_t kernel_size,
+    size_t dilation,
+    float* history,
+    const char* weight_name,
+    const char* bias_name,
+    float* output,
+    char* error,
+    size_t error_capacity
+) noexcept {
+    const size_t history_positions = (kernel_size - 1) * dilation;
+    const size_t column_width = input_channels * kernel_size;
+    const size_t column_count = positions * column_width;
+    causal_im2col_kernel<<<blocks_for(column_count), 256, 0, context->stream>>>(
+        input,
+        positions,
+        input_channels,
+        kernel_size,
+        dilation,
+        history,
+        history_positions,
+        context->decoder_im2col
+    );
+    cudaError_t status = cudaGetLastError();
+    if (status == cudaSuccess && history_positions > 0) {
+        update_causal_history_kernel<<<
+            blocks_for(input_channels),
+            256,
+            0,
+            context->stream>>>(
+            input,
+            positions,
+            input_channels,
+            history_positions,
+            history
+        );
+        status = cudaGetLastError();
+    }
+    if (status != cudaSuccess) {
+        return cuda_error(error, error_capacity, "launch causal convolution input", status);
+    }
+    return launch_linear_matrix(
+        context,
+        context->decoder_im2col,
+        positions,
+        column_width,
+        weight_name,
+        bias_name,
+        output_channels,
+        output,
+        error,
+        error_capacity
+    );
+}
+
+size_t decoder_transpose_tail_offset(uint32_t stage) noexcept {
+    constexpr size_t kSizes[] = {768 * 8, 384 * 5, 192 * 4, 96 * 3};
+    size_t offset = kDecoderTransposeHistoryOffset;
+    for (uint32_t prior = 0; prior < stage; ++prior) {
+        offset += kSizes[prior];
+    }
+    return offset;
+}
+
+size_t decoder_residual_history_offset(
+    uint32_t stage,
+    uint32_t unit
+) noexcept {
+    constexpr size_t kChannels[] = {768, 384, 192, 96};
+    constexpr size_t kDilations[] = {1, 3, 9};
+    size_t offset = kDecoderResidualHistoryOffset;
+    for (uint32_t prior_stage = 0; prior_stage < stage; ++prior_stage) {
+        offset += kChannels[prior_stage] * 78;
+    }
+    for (uint32_t prior_unit = 0; prior_unit < unit; ++prior_unit) {
+        offset += kChannels[stage] * 6 * kDilations[prior_unit];
+    }
+    return offset;
+}
+
+int32_t run_decoder_transpose(
+    Qwen3TtsCodecContextV1* context,
+    uint32_t stage,
+    const float* input,
+    size_t positions,
+    size_t input_channels,
+    size_t output_channels,
+    size_t stride,
+    float* output,
+    char* error,
+    size_t error_capacity
+) noexcept {
+    char weight_name[128];
+    char bias_name[128];
+    std::snprintf(
+        weight_name,
+        sizeof(weight_name),
+        "decoder.decoder.%u.block.1.conv.weight",
+        stage + 1
+    );
+    std::snprintf(
+        bias_name,
+        sizeof(bias_name),
+        "decoder.decoder.%u.block.1.conv.bias",
+        stage + 1
+    );
+    const float* weight = require_f32_weight(
+        context, weight_name, error, error_capacity
+    );
+    const float* bias = require_f32_weight(
+        context, bias_name, error, error_capacity
+    );
+    if (weight == nullptr || bias == nullptr) {
+        return kStatusModel;
+    }
+    float* tail = context->decoder_history + decoder_transpose_tail_offset(stage);
+    const size_t output_count = positions * stride * output_channels;
+    transpose_overlap_neural_kernel<<<
+        blocks_for(output_count),
+        256,
+        0,
+        context->stream>>>(
+        input,
+        positions,
+        input_channels,
+        output_channels,
+        stride,
+        weight,
+        bias,
+        tail,
+        output
+    );
+    cudaError_t status = cudaGetLastError();
+    if (status == cudaSuccess) {
+        update_transpose_tail_neural_kernel<<<
+            blocks_for(stride * output_channels),
+            256,
+            0,
+            context->stream>>>(
+            input,
+            positions,
+            input_channels,
+            output_channels,
+            stride,
+            weight,
+            tail
+        );
+        status = cudaGetLastError();
+    }
+    return status == cudaSuccess
+               ? kStatusOk
+               : cuda_error(error, error_capacity, "launch decoder transposed convolution", status);
+}
+
+int32_t run_decoder_residual_unit(
+    Qwen3TtsCodecContextV1* context,
+    uint32_t stage,
+    uint32_t unit,
+    const float* input,
+    size_t positions,
+    size_t channels,
+    float* output,
+    char* error,
+    size_t error_capacity
+) noexcept {
+    constexpr size_t kDilations[] = {1, 3, 9};
+    const uint32_t block_index = unit + 2;
+    char alpha_name[128];
+    char beta_name[128];
+    char weight_name[128];
+    char bias_name[128];
+    std::snprintf(
+        alpha_name,
+        sizeof(alpha_name),
+        "decoder.decoder.%u.block.%u.act1.alpha",
+        stage + 1,
+        block_index
+    );
+    std::snprintf(
+        beta_name,
+        sizeof(beta_name),
+        "decoder.decoder.%u.block.%u.act1.beta",
+        stage + 1,
+        block_index
+    );
+    int32_t result = run_snake_beta(
+        context,
+        input,
+        positions,
+        channels,
+        alpha_name,
+        beta_name,
+        output,
+        error,
+        error_capacity
+    );
+    if (result != kStatusOk) {
+        return result;
+    }
+    std::snprintf(
+        weight_name,
+        sizeof(weight_name),
+        "decoder.decoder.%u.block.%u.conv1.conv.weight",
+        stage + 1,
+        block_index
+    );
+    std::snprintf(
+        bias_name,
+        sizeof(bias_name),
+        "decoder.decoder.%u.block.%u.conv1.conv.bias",
+        stage + 1,
+        block_index
+    );
+    float* history = context->decoder_history +
+                     decoder_residual_history_offset(stage, unit);
+    result = run_causal_convolution(
+        context,
+        output,
+        positions,
+        channels,
+        channels,
+        7,
+        kDilations[unit],
+        history,
+        weight_name,
+        bias_name,
+        output,
+        error,
+        error_capacity
+    );
+    if (result != kStatusOk) {
+        return result;
+    }
+    std::snprintf(
+        alpha_name,
+        sizeof(alpha_name),
+        "decoder.decoder.%u.block.%u.act2.alpha",
+        stage + 1,
+        block_index
+    );
+    std::snprintf(
+        beta_name,
+        sizeof(beta_name),
+        "decoder.decoder.%u.block.%u.act2.beta",
+        stage + 1,
+        block_index
+    );
+    result = run_snake_beta(
+        context,
+        output,
+        positions,
+        channels,
+        alpha_name,
+        beta_name,
+        output,
+        error,
+        error_capacity
+    );
+    if (result != kStatusOk) {
+        return result;
+    }
+    std::snprintf(
+        weight_name,
+        sizeof(weight_name),
+        "decoder.decoder.%u.block.%u.conv2.conv.weight",
+        stage + 1,
+        block_index
+    );
+    std::snprintf(
+        bias_name,
+        sizeof(bias_name),
+        "decoder.decoder.%u.block.%u.conv2.conv.bias",
+        stage + 1,
+        block_index
+    );
+    result = run_causal_convolution(
+        context,
+        output,
+        positions,
+        channels,
+        channels,
+        1,
+        1,
+        history,
+        weight_name,
+        bias_name,
+        output,
+        error,
+        error_capacity
+    );
+    if (result != kStatusOk) {
+        return result;
+    }
+    add_residual_kernel<<<blocks_for(positions * channels), 256, 0, context->stream>>>(
+        input, output, positions * channels
+    );
+    const cudaError_t status = cudaGetLastError();
+    return status == cudaSuccess
+               ? kStatusOk
+               : cuda_error(error, error_capacity, "launch decoder residual", status);
+}
+
+int32_t copy_decoder_checkpoint(
+    Qwen3TtsCodecContextV1* context,
+    const float* input,
+    size_t positions,
+    size_t channels,
+    float* output,
+    size_t output_capacity,
+    char* error,
+    size_t error_capacity
+) noexcept {
+    if (output == nullptr || output_capacity < positions * channels) {
+        write_error(error, error_capacity, "decoder checkpoint capacity is too small");
+        return kStatusInvalidArgument;
+    }
+    std::vector<float> row_major(positions * channels);
+    cudaError_t status = cudaMemcpyAsync(
+        row_major.data(),
+        input,
+        row_major.size() * sizeof(float),
+        cudaMemcpyDeviceToHost,
+        context->stream
+    );
+    if (status == cudaSuccess) {
+        status = cudaStreamSynchronize(context->stream);
+    }
+    if (status != cudaSuccess) {
+        return cuda_error(error, error_capacity, "copy decoder checkpoint", status);
+    }
+    for (size_t channel = 0; channel < channels; ++channel) {
+        for (size_t position = 0; position < positions; ++position) {
+            output[channel * positions + position] =
+                row_major[position * channels + channel];
+        }
+    }
+    return kStatusOk;
+}
+
+int32_t run_waveform_decoder(
+    Qwen3TtsCodecContextV1* context,
+    const float* latent,
+    size_t latent_positions,
+    uint32_t checkpoint,
+    float* checkpoint_output,
+    size_t checkpoint_capacity,
+    float** waveform,
+    size_t* waveform_positions,
+    char* error,
+    size_t error_capacity
+) noexcept {
+    int32_t result = run_causal_convolution(
+        context,
+        latent,
+        latent_positions,
+        1024,
+        1536,
+        7,
+        1,
+        context->decoder_history + kDecoderPreconvHistoryOffset,
+        "decoder.decoder.0.conv.weight",
+        "decoder.decoder.0.conv.bias",
+        context->decoder_a,
+        error,
+        error_capacity
+    );
+    if (result != kStatusOk) {
+        return result;
+    }
+    size_t positions = latent_positions;
+    size_t channels = 1536;
+    float* current = context->decoder_a;
+    float* other = context->decoder_b;
+    if (checkpoint == 6) {
+        return copy_decoder_checkpoint(
+            context,
+            current,
+            positions,
+            channels,
+            checkpoint_output,
+            checkpoint_capacity,
+            error,
+            error_capacity
+        );
+    }
+
+    constexpr size_t kStrides[] = {8, 5, 4, 3};
+    constexpr size_t kOutputChannels[] = {768, 384, 192, 96};
+    for (uint32_t stage = 0; stage < 4; ++stage) {
+        char alpha_name[128];
+        char beta_name[128];
+        std::snprintf(
+            alpha_name,
+            sizeof(alpha_name),
+            "decoder.decoder.%u.block.0.alpha",
+            stage + 1
+        );
+        std::snprintf(
+            beta_name,
+            sizeof(beta_name),
+            "decoder.decoder.%u.block.0.beta",
+            stage + 1
+        );
+        result = run_snake_beta(
+            context,
+            current,
+            positions,
+            channels,
+            alpha_name,
+            beta_name,
+            other,
+            error,
+            error_capacity
+        );
+        if (result != kStatusOk) {
+            return result;
+        }
+        std::swap(current, other);
+        result = run_decoder_transpose(
+            context,
+            stage,
+            current,
+            positions,
+            channels,
+            kOutputChannels[stage],
+            kStrides[stage],
+            other,
+            error,
+            error_capacity
+        );
+        if (result != kStatusOk) {
+            return result;
+        }
+        std::swap(current, other);
+        positions *= kStrides[stage];
+        channels = kOutputChannels[stage];
+        for (uint32_t unit = 0; unit < 3; ++unit) {
+            result = run_decoder_residual_unit(
+                context,
+                stage,
+                unit,
+                current,
+                positions,
+                channels,
+                other,
+                error,
+                error_capacity
+            );
+            if (result != kStatusOk) {
+                return result;
+            }
+            std::swap(current, other);
+        }
+        if (checkpoint == stage + 7) {
+            return copy_decoder_checkpoint(
+                context,
+                current,
+                positions,
+                channels,
+                checkpoint_output,
+                checkpoint_capacity,
+                error,
+                error_capacity
+            );
+        }
+    }
+
+    result = run_snake_beta(
+        context,
+        current,
+        positions,
+        96,
+        "decoder.decoder.5.alpha",
+        "decoder.decoder.5.beta",
+        other,
+        error,
+        error_capacity
+    );
+    if (result != kStatusOk) {
+        return result;
+    }
+    std::swap(current, other);
+    if (checkpoint == 11) {
+        return copy_decoder_checkpoint(
+            context,
+            current,
+            positions,
+            96,
+            checkpoint_output,
+            checkpoint_capacity,
+            error,
+            error_capacity
+        );
+    }
+    result = run_causal_convolution(
+        context,
+        current,
+        positions,
+        96,
+        1,
+        7,
+        1,
+        context->decoder_history + kDecoderFinalHistoryOffset,
+        "decoder.decoder.6.conv.weight",
+        "decoder.decoder.6.conv.bias",
+        other,
+        error,
+        error_capacity
+    );
+    if (result != kStatusOk) {
+        return result;
+    }
+    std::swap(current, other);
+    if (checkpoint == 12) {
+        return copy_decoder_checkpoint(
+            context,
+            current,
+            positions,
+            1,
+            checkpoint_output,
+            checkpoint_capacity,
+            error,
+            error_capacity
+        );
+    }
+    clamp_waveform_kernel<<<blocks_for(positions), 256, 0, context->stream>>>(
+        current, positions
+    );
+    const cudaError_t status = cudaGetLastError();
+    if (status != cudaSuccess) {
+        return cuda_error(error, error_capacity, "launch waveform clamp", status);
+    }
+    if (checkpoint == 13) {
+        return copy_decoder_checkpoint(
+            context,
+            current,
+            positions,
+            1,
+            checkpoint_output,
+            checkpoint_capacity,
+            error,
+            error_capacity
+        );
+    }
+    *waveform = current;
+    *waveform_positions = positions;
+    return kStatusOk;
+}
+
 int32_t run_transformer_frame(
     Qwen3TtsCodecContextV1* context,
     const float* input,
@@ -1400,6 +2162,10 @@ void release_context(Qwen3TtsCodecContextV1* context) noexcept {
     cudaFree(context->latent_expanded);
     cudaFree(context->latent_b);
     cudaFree(context->latent_a);
+    cudaFree(context->decoder_history);
+    cudaFree(context->decoder_im2col);
+    cudaFree(context->decoder_b);
+    cudaFree(context->decoder_a);
     cudaFree(context->fixture_history);
     cudaFree(context->convolution_history);
     cudaFree(context->transformer_kv);
@@ -1486,6 +2252,15 @@ int32_t reset_device_state(
     );
     if (status != cudaSuccess) {
         return cuda_error(error, error_capacity, "clear latent ConvNeXt history", status);
+    }
+    status = cudaMemsetAsync(
+        context->decoder_history,
+        0,
+        kDecoderHistoryElements * sizeof(float),
+        context->stream
+    );
+    if (status != cudaSuccess) {
+        return cuda_error(error, error_capacity, "clear waveform decoder history", status);
     }
     status = cudaStreamSynchronize(context->stream);
     if (status != cudaSuccess) {
@@ -1707,6 +2482,26 @@ extern "C" QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_create_v1(
     if (status == cudaSuccess) {
         status = allocate_device(&context->latent_history, kLatentHistoryElements);
     }
+    if (status == cudaSuccess) {
+        status = allocate_device(
+            &context->decoder_a, kDecoderMaxActivationElements
+        );
+    }
+    if (status == cudaSuccess) {
+        status = allocate_device(
+            &context->decoder_b, kDecoderMaxActivationElements
+        );
+    }
+    if (status == cudaSuccess) {
+        status = allocate_device(
+            &context->decoder_im2col, kDecoderMaxIm2colElements
+        );
+    }
+    if (status == cudaSuccess) {
+        status = allocate_device(
+            &context->decoder_history, kDecoderHistoryElements
+        );
+    }
     if (status != cudaSuccess) {
         const int32_t result =
             cuda_error(error, error_capacity, "allocate codec state", status);
@@ -1766,7 +2561,8 @@ extern "C" QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_state_info_v1(
         kTransformerKvBytes + kConvolutionHistoryBytes + kCodecRingBytes +
         kPcmRingBytes + kFixtureHistoryBytes + kScratchBytes +
         kFrontendDeviceBytes + kTransformerDeviceBytes +
-        kLatentDeviceBytes + context->model_info.device_bytes;
+        kLatentDeviceBytes + kDecoderDeviceBytes +
+        context->model_info.device_bytes;
     *output = Qwen3TtsCodecStateInfoV1{
         context->frame_position,
         context->emitted_samples,
@@ -2339,6 +3135,57 @@ qwen3_tts_codec_debug_latent_packet_v1(
         }
     }
     return kStatusOk;
+}
+
+extern "C" QWEN3_TTS_CODEC_API int32_t
+qwen3_tts_codec_debug_decoder_checkpoint_v1(
+    Qwen3TtsCodecContextV1* context,
+    const uint16_t* codec_frames,
+    uint32_t frame_count,
+    uint32_t checkpoint,
+    float* checkpoint_output,
+    size_t checkpoint_capacity,
+    char* error,
+    size_t error_capacity
+) {
+    clear_error(error, error_capacity);
+    if (context == nullptr || codec_frames == nullptr ||
+        checkpoint_output == nullptr || frame_count == 0 ||
+        frame_count > QWEN3_TTS_CODEC_MAX_PACKET_FRAMES || checkpoint < 6 ||
+        checkpoint > 13) {
+        write_error(error, error_capacity, "invalid waveform decoder checkpoint request");
+        return kStatusInvalidArgument;
+    }
+    std::vector<float> stage_one(static_cast<size_t>(frame_count) * 2 * 1024);
+    std::vector<float> stage_two(static_cast<size_t>(frame_count) * 4 * 1024);
+    int32_t result = qwen3_tts_codec_debug_latent_packet_v1(
+        context,
+        codec_frames,
+        frame_count,
+        stage_one.data(),
+        stage_one.size(),
+        stage_two.data(),
+        stage_two.size(),
+        error,
+        error_capacity
+    );
+    if (result != kStatusOk) {
+        return result;
+    }
+    float* waveform = nullptr;
+    size_t waveform_positions = 0;
+    return run_waveform_decoder(
+        context,
+        context->latent_b,
+        static_cast<size_t>(frame_count) * 4,
+        checkpoint,
+        checkpoint_output,
+        checkpoint_capacity,
+        &waveform,
+        &waveform_positions,
+        error,
+        error_capacity
+    );
 }
 
 extern "C" QWEN3_TTS_CODEC_API int32_t

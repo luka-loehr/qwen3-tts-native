@@ -54,6 +54,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             let fixture = required_argument(&arguments, 4, "decoder fixture directory")?;
             latent_parity(Path::new(library), Path::new(model), Path::new(fixture))
         }
+        "decoder-parity" => {
+            let library = required_argument(&arguments, 2, "shared library path")?;
+            let model = required_argument(&arguments, 3, "speech tokenizer safetensors path")?;
+            let fixture = required_argument(&arguments, 4, "decoder fixture directory")?;
+            decoder_parity(Path::new(library), Path::new(model), Path::new(fixture))
+        }
         _ => {
             eprintln!(
                 "usage: qwen3-tts-native-codec <parity|benchmark> <library> [iterations]\n\
@@ -63,6 +69,105 @@ fn main() -> Result<(), Box<dyn Error>> {
             Ok(())
         }
     }
+}
+
+fn decoder_parity(
+    library_path: &Path,
+    model_path: &Path,
+    fixture_path: &Path,
+) -> Result<(), Box<dyn Error>> {
+    let codes = read_u16_le(&fixture_path.join("codes.u16le"))?;
+    if codes.len() % ffi::CODEBOOKS != 0 {
+        return Err(io::Error::other("fixture code count is not divisible by 16").into());
+    }
+    let frames = codes
+        .chunks_exact(ffi::CODEBOOKS)
+        .map(|values| values.try_into().expect("chunk contains exactly 16 codes"))
+        .collect::<Vec<[u16; ffi::CODEBOOKS]>>();
+    let specifications = [
+        (6_u32, "06-decoder-pre-conv.f32le", 5.0e-5_f64, 4, 1536),
+        (7, "07-decoder-block-1.f32le", 5.0e-5, 32, 768),
+        (8, "08-decoder-block-2.f32le", 1.0e-4, 160, 384),
+        (9, "09-decoder-block-3.f32le", 2.0e-4, 640, 192),
+        (10, "10-decoder-block-4.f32le", 1.0e-3, 1920, 96),
+        (11, "11-final-snake.f32le", 2.0e-3, 1920, 96),
+        (12, "12-final-pre-clamp.f32le", 5.0e-6, 1920, 1),
+        (13, "13-final-clamp.f32le", 5.0e-6, 1920, 1),
+    ];
+    let api = Api::load(library_path)?;
+    let model = model::SafetensorsFile::open(model_path)?;
+    let mut codec = api.create_codec(0).map_err(io::Error::other)?;
+    codec.load_model(&model).map_err(io::Error::other)?;
+    let mut results = serde_json::Map::new();
+    let mut passed = true;
+    let split_pattern = [1_usize, 3];
+    for (checkpoint, filename, threshold, positions_per_frame, channels) in specifications {
+        codec.reset().map_err(io::Error::other)?;
+        let expected = read_f32_le(&fixture_path.join(filename))?;
+        let actual = codec
+            .debug_decoder_checkpoint(&frames, checkpoint, expected.len())
+            .map_err(io::Error::other)?;
+        let comparison = compare_f32(&actual, &expected)?;
+        codec.reset().map_err(io::Error::other)?;
+        let stream_positions = frames.len() * positions_per_frame;
+        let mut split = vec![0.0_f32; expected.len()];
+        let mut frame_position = 0_usize;
+        let mut output_position = 0_usize;
+        for requested in split_pattern {
+            let count = requested.min(frames.len() - frame_position);
+            let packet_positions = count * positions_per_frame;
+            let packet = codec
+                .debug_decoder_checkpoint(
+                    &frames[frame_position..frame_position + count],
+                    checkpoint,
+                    packet_positions * channels,
+                )
+                .map_err(io::Error::other)?;
+            copy_channel_major_packet(
+                &packet,
+                packet_positions,
+                &mut split,
+                stream_positions,
+                output_position,
+                channels,
+            );
+            frame_position += count;
+            output_position += packet_positions;
+            if frame_position == frames.len() {
+                break;
+            }
+        }
+        let split_comparison = compare_f32(&split, &expected)?;
+        let checkpoint_passed = comparison.maximum_absolute_error <= threshold
+            && split_comparison.maximum_absolute_error <= threshold;
+        passed &= checkpoint_passed;
+        results.insert(
+            checkpoint.to_string(),
+            json!({
+                "file": filename,
+                "passed": checkpoint_passed,
+                "maximum_absolute_error_threshold": threshold,
+                "comparison": comparison.to_json(),
+                "split_packet_comparison": split_comparison.to_json(),
+                "split_packet_pattern": split_pattern
+            }),
+        );
+    }
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "schema_version": 1,
+            "mode": "real_qwen_waveform_decoder",
+            "passed": passed,
+            "frames": frames.len(),
+            "checkpoints": results,
+            "prefix_recomputed": false
+        }))?
+    );
+    if !passed {
+        return Err(io::Error::other("native waveform decoder parity failed").into());
+    }
+    Ok(())
 }
 
 fn latent_parity(

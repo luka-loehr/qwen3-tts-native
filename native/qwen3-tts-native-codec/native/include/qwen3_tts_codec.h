@@ -27,6 +27,17 @@ enum {
 };
 
 enum {
+    QWEN3_TTS_CODEC_CHECKPOINT_DECODER_PRECONV = 6,
+    QWEN3_TTS_CODEC_CHECKPOINT_DECODER_BLOCK_1 = 7,
+    QWEN3_TTS_CODEC_CHECKPOINT_DECODER_BLOCK_2 = 8,
+    QWEN3_TTS_CODEC_CHECKPOINT_DECODER_BLOCK_3 = 9,
+    QWEN3_TTS_CODEC_CHECKPOINT_DECODER_BLOCK_4 = 10,
+    QWEN3_TTS_CODEC_CHECKPOINT_FINAL_SNAKE = 11,
+    QWEN3_TTS_CODEC_CHECKPOINT_FINAL_PRECLAMP = 12,
+    QWEN3_TTS_CODEC_CHECKPOINT_FINAL_CLAMP = 13,
+};
+
+enum {
     QWEN3_TTS_CODEC_STATUS_OK = 0,
     QWEN3_TTS_CODEC_STATUS_INVALID_ARGUMENT = -1,
     QWEN3_TTS_CODEC_STATUS_CUDA = -2,
@@ -189,6 +200,19 @@ QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_debug_latent_packet_v1(
     size_t stage_one_capacity,
     float* stage_two_output,
     size_t stage_two_capacity,
+    char* error,
+    size_t error_capacity
+);
+
+/* Research-only waveform-decoder checkpoint hook. Output layout is
+ * channel-major and its exact shape is defined by the official fixture. */
+QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_debug_decoder_checkpoint_v1(
+    Qwen3TtsCodecContextV1* context,
+    const uint16_t* codec_frames,
+    uint32_t frame_count,
+    uint32_t checkpoint,
+    float* checkpoint_output,
+    size_t checkpoint_capacity,
     char* error,
     size_t error_capacity
 );
