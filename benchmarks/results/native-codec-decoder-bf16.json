@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "measured_at": "2026-07-16",
+  "device": "NVIDIA GB10",
+  "cuda": "13.0.88",
+  "cuda_architecture": "sm_121",
+  "mode": "real_qwen_speech_tokenizer_decoder",
+  "artifact": {
+    "sha256": "062caa0a31346422410e4c0d2494aec14be20553f8cb0b71a875329de99ce180",
+    "tensor_count": 271,
+    "parameter_count": 114323137,
+    "source_dtype": "BF16",
+    "source_tensor_bytes": 228646274,
+    "device_execution_dtype": "F32",
+    "device_weight_bytes": 457292548,
+    "upload_staging_bytes": 8388608
+  },
+  "startup": {
+    "model_load_milliseconds": 32.334236,
+    "cold_first_80ms_chunk_milliseconds": 157.109234375,
+    "explicit_warmup_milliseconds": 207.730622,
+    "first_80ms_chunk_after_warmup_milliseconds": 7.87968310546875,
+    "warmup_state_reset": true
+  },
+  "latency": {
+    "measured_packets_per_bucket": 200,
+    "warmup_packets_per_bucket": 20,
+    "one_frame_80ms": {
+      "minimum_milliseconds": 7.7019228515625,
+      "p50_milliseconds": 11.65133203125,
+      "p95_milliseconds": 12.659380859375,
+      "p99_milliseconds": 14.6515263671875,
+      "maximum_milliseconds": 15.0159091796875,
+      "p50_real_time_factor": 0.145641650390625
+    },
+    "four_frame_320ms": {
+      "minimum_milliseconds": 50.42235546875,
+      "p50_milliseconds": 62.08628125,
+      "p95_milliseconds": 65.833546875,
+      "p99_milliseconds": 67.918921875,
+      "maximum_milliseconds": 69.5126796875,
+      "p50_real_time_factor": 0.19401962890625
+    }
+  },
+  "memory_bytes": {
+    "device_total": 492327468,
+    "device_runtime_excluding_weights": 35034920,
+    "host_pinned": 46080,
+    "transformer_kv": 7077888,
+    "convolution_history": 848832,
+    "codec_ring": 384,
+    "pcm_ring": 46080
+  },
+  "parity": {
+    "official_pcm_maximum_absolute_error_lsb": 1,
+    "reset_replay_bit_exact": true,
+    "short_final_samples": 1920,
+    "stale_tail_sentinel_unchanged": true,
+    "post_final_packet_rejected": true,
+    "warmup_after_stream_rejected": true,
+    "ring_slots": [0, 1, 2, 0]
+  },
+  "batch": {
+    "batch_3_standalone_bit_exact": true,
+    "batch_3_reset_replay_bit_exact": true,
+    "batch_6_standalone_bit_exact": true,
+    "cross_request_leakage_detected": false,
+    "dispatch": "array_order_reference_not_fused"
+  },
+  "compute_sanitizer": {
+    "tool": "memcheck",
+    "leak_check": "full",
+    "errors": 0,
+    "leaked_bytes": 0
+  },
+  "runtime_dependencies": ["Rust standard library", "CUDA runtime", "cuBLAS"],
+  "python_or_node_runtime": false
+}
