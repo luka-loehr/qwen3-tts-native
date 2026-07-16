@@ -5,7 +5,9 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use qwen3_tts_native::native_talker::{NativeTalker, SamplingConfig, VoiceDesignRequest};
+use qwen3_tts_native::native_talker::{
+    NativeTalker, SamplingConfig, SessionEndReason, VoiceDesignRequest,
+};
 use qwen3_tts_native_codec::{CODEBOOKS, DecoderWeights, NativeCodecLibrary, SAMPLES_PER_FRAME};
 use serde_json::json;
 
@@ -85,59 +87,81 @@ fn run() -> Result<(), Box<dyn Error>> {
         request.predictor_sampling = SamplingConfig::greedy();
     }
 
+    let talker_memory = talker.memory_usage();
     let pipeline_started = Instant::now();
-    let talker_started = Instant::now();
-    let generated = talker.generate(request)?;
-    let talker_wall_milliseconds = talker_started.elapsed().as_secs_f64() * 1_000.0;
-    if generated.codec_codes.len() != generated.frame_count * CODEBOOKS {
-        return Err(io::Error::other("talker returned a non-frame-aligned code stream").into());
-    }
-    if generated.frame_count == 0 {
-        return Err(io::Error::other("talker returned no codec frames").into());
-    }
+    let prefill_started = Instant::now();
+    let mut session = talker.start(request)?;
+    let prefill_wall_milliseconds = prefill_started.elapsed().as_secs_f64() * 1_000.0;
+    let prefill = session.prefill_result();
 
-    let frames = generated
-        .codec_codes
-        .chunks_exact(CODEBOOKS)
-        .map(|codes| {
-            let mut frame = [0_u16; CODEBOOKS];
-            frame.copy_from_slice(codes);
-            frame
-        })
-        .collect::<Vec<_>>();
-    let mut pcm = Vec::with_capacity(frames.len() * SAMPLES_PER_FRAME);
+    let mut pcm = Vec::with_capacity(arguments.max_frames * SAMPLES_PER_FRAME);
+    let mut pending_frames = Vec::<[u16; CODEBOOKS]>::with_capacity(arguments.packet_frames);
+    let mut frame_reports = Vec::with_capacity(arguments.max_frames);
     let mut packet_reports = Vec::new();
     let mut expected_frame = 0_u64;
     let mut expected_sample = 0_u64;
     let mut first_audio_milliseconds = None;
-    let decoder_started = Instant::now();
-    let packet_count = frames.len().div_ceil(arguments.packet_frames);
-    for (packet_index, packet_frames) in frames.chunks(arguments.packet_frames).enumerate() {
-        let is_final = packet_index + 1 == packet_count;
+    let mut previous_packet_milliseconds = None;
+    let mut inter_packet_gaps_milliseconds = Vec::new();
+    let mut talker_frame_wall_milliseconds = 0.0_f64;
+    let mut decoder_wall_milliseconds = 0.0_f64;
+    while let Some(frame) = {
+        let frame_started = Instant::now();
+        let frame = session.next_frame()?;
+        talker_frame_wall_milliseconds += frame_started.elapsed().as_secs_f64() * 1_000.0;
+        frame
+    } {
+        if frame.frame_index != frame_reports.len() {
+            return Err(io::Error::other("talker frame indices are not contiguous").into());
+        }
+        pending_frames.push(frame.codes);
+        frame_reports.push(json!({
+            "frame_index": frame.frame_index,
+            "talker_position": frame.talker_position,
+            "next_semantic_token": frame.next_semantic_token,
+            "ended_by_eos": frame.ended_by_eos,
+            "predictor_gpu_milliseconds": frame.predictor_gpu_milliseconds,
+            "talker_gpu_milliseconds": frame.talker_gpu_milliseconds,
+        }));
+
+        let is_final = session.is_ended();
+        let is_first_packet = packet_reports.is_empty();
+        let should_decode =
+            is_first_packet || pending_frames.len() == arguments.packet_frames || is_final;
+        if !should_decode {
+            continue;
+        }
+
+        let decoder_started = Instant::now();
         let (samples, packet) =
             codec
-                .process(packet_frames, is_final)
+                .process(&pending_frames, is_final)
                 .map_err(|(status, message)| {
                     io::Error::other(format!("decoder status {status}: {message}"))
                 })?;
+        decoder_wall_milliseconds += decoder_started.elapsed().as_secs_f64() * 1_000.0;
         if packet.first_frame_position != expected_frame {
             return Err(io::Error::other("decoder frame positions are not contiguous").into());
         }
         if packet.first_sample_position != expected_sample {
             return Err(io::Error::other("decoder sample positions are not contiguous").into());
         }
-        let expected_samples = packet_frames.len() * SAMPLES_PER_FRAME;
+        let expected_samples = pending_frames.len() * SAMPLES_PER_FRAME;
         if samples.len() != expected_samples || packet.sample_count as usize != expected_samples {
             return Err(io::Error::other("decoder returned an invalid sample count").into());
         }
         if (packet.is_final != 0) != is_final {
             return Err(io::Error::other("decoder final-packet flag is inconsistent").into());
         }
-        if first_audio_milliseconds.is_none() {
-            first_audio_milliseconds = Some(pipeline_started.elapsed().as_secs_f64() * 1_000.0);
+        let arrival_milliseconds = pipeline_started.elapsed().as_secs_f64() * 1_000.0;
+        if let Some(previous) = previous_packet_milliseconds {
+            inter_packet_gaps_milliseconds.push(arrival_milliseconds - previous);
+        } else {
+            first_audio_milliseconds = Some(arrival_milliseconds);
         }
+        previous_packet_milliseconds = Some(arrival_milliseconds);
         packet_reports.push(json!({
-            "sequence": packet_index,
+            "sequence": packet_reports.len(),
             "first_codec_frame": packet.first_frame_position,
             "first_sample": packet.first_sample_position,
             "codec_frames": packet.frame_count,
@@ -145,15 +169,26 @@ fn run() -> Result<(), Box<dyn Error>> {
             "is_final": packet.is_final != 0,
             "gpu_microseconds": packet.gpu_microseconds,
             "end_to_end_microseconds": packet.end_to_end_microseconds,
+            "arrival_milliseconds": arrival_milliseconds,
         }));
         expected_frame += u64::from(packet.frame_count);
         expected_sample += u64::from(packet.sample_count);
         pcm.extend_from_slice(&samples);
+        pending_frames.clear();
     }
-    let decoder_wall_milliseconds = decoder_started.elapsed().as_secs_f64() * 1_000.0;
+    if !pending_frames.is_empty() {
+        return Err(io::Error::other("talker ended with an undecoded partial packet").into());
+    }
+    let end_reason = session.end_reason();
+    let final_semantic_token = session.current_semantic_token();
+    let frame_count = session.frames_emitted();
+    drop(session);
     let pipeline_wall_milliseconds = pipeline_started.elapsed().as_secs_f64() * 1_000.0;
 
-    let expected_samples = generated.frame_count * SAMPLES_PER_FRAME;
+    if frame_count == 0 {
+        return Err(io::Error::other("talker returned no codec frames").into());
+    }
+    let expected_samples = frame_count * SAMPLES_PER_FRAME;
     if pcm.len() != expected_samples {
         return Err(io::Error::other("E2E PCM length does not match generated frame count").into());
     }
@@ -165,8 +200,8 @@ fn run() -> Result<(), Box<dyn Error>> {
         "schema_version": 1,
         "operation": "native-qwen3-tts-e2e-smoke",
         "qualifying_run": false,
-        "streaming_mode": "whole_sequence_talker_then_packet_decoder",
-        "limitation": "This smoke proves real text-to-code-to-PCM execution. It is not the incremental runtime qualification because the current public talker API returns the complete code sequence before decoder polling.",
+        "streaming_mode": "incremental_talker_with_adaptive_neural_decoder_packets",
+        "limitation": "This single-request smoke proves progressive native text-to-code-to-PCM execution. Qualification still requires the public runtime ABI, cancellation/backpressure, 200 requests, and concurrency 1/3/6.",
         "model_root": arguments.model_root,
         "language": arguments.language,
         "text": arguments.text,
@@ -177,15 +212,17 @@ fn run() -> Result<(), Box<dyn Error>> {
         "wav_output": arguments.wav_output,
         "talker": {
             "load_milliseconds": talker_load_milliseconds,
-            "wall_milliseconds": talker_wall_milliseconds,
-            "prompt_tokens": generated.prompt_tokens,
-            "frame_count": generated.frame_count,
-            "ended_by_eos": generated.ended_by_eos,
-            "first_semantic_token": generated.first_semantic_token,
-            "final_semantic_token": generated.final_semantic_token,
-            "prefill_gpu_milliseconds": generated.prefill_talker_gpu_milliseconds,
-            "frame_timings": generated.frame_timings,
-            "memory": generated.memory,
+            "prefill_wall_milliseconds": prefill_wall_milliseconds,
+            "frame_wall_milliseconds": talker_frame_wall_milliseconds,
+            "prompt_tokens": prefill.prompt_tokens,
+            "frame_count": frame_count,
+            "end_reason": end_reason,
+            "ended_by_eos": end_reason == Some(SessionEndReason::CodecEos),
+            "first_semantic_token": prefill.first_semantic_token,
+            "final_semantic_token": final_semantic_token,
+            "prefill_gpu_milliseconds": prefill.talker_gpu_milliseconds,
+            "frames": frame_reports,
+            "memory": talker_memory,
         },
         "decoder": {
             "load_and_warmup_milliseconds": codec_load_and_warmup_milliseconds,
@@ -210,10 +247,13 @@ fn run() -> Result<(), Box<dyn Error>> {
                 "rms_normalized": pcm_statistics.rms_normalized,
             },
         },
-        "observed_whole_sequence_pipeline": {
+        "observed_incremental_pipeline": {
             "first_audio_milliseconds": first_audio_milliseconds,
             "wall_milliseconds": pipeline_wall_milliseconds,
             "real_time_factor": pipeline_wall_milliseconds / audio_milliseconds,
+            "first_packet_codec_frames": 1,
+            "configured_followup_packet_frames": arguments.packet_frames,
+            "inter_packet_gaps_milliseconds": inter_packet_gaps_milliseconds,
         },
     });
     let encoded = serde_json::to_string_pretty(&report)?;
