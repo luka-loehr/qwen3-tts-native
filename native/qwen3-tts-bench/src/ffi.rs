@@ -460,7 +460,7 @@ impl ErrorBuffer {
             .unwrap_or(self.bytes.len());
         let bytes = self.bytes[..end]
             .iter()
-            .map(|byte| *byte as u8)
+            .map(|byte| byte.to_ne_bytes()[0])
             .collect::<Vec<_>>();
         String::from_utf8_lossy(&bytes).into_owned()
     }
