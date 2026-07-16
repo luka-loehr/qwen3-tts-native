@@ -1,0 +1,39 @@
+{
+  "audio_milliseconds_per_packet": 320.0,
+  "continuous_measured_stream": true,
+  "end_to_end_microseconds": {
+    "maximum": 45.007999420166016,
+    "minimum": 32.0,
+    "p50": 36.57600021362305,
+    "p95": 38.75199890136719,
+    "p99": 44.6879997253418
+  },
+  "frames_per_packet": 4,
+  "gpu_microseconds": {
+    "maximum": 39.74399948120117,
+    "minimum": 26.8799991607666,
+    "p50": 31.231998443603516,
+    "p95": 33.50400161743164,
+    "p99": 39.3280029296875
+  },
+  "iterations": 200,
+  "limitations": [
+    "Latency covers the deterministic CUDA state/parity fixture only.",
+    "It must not be reported as Qwen3-TTS neural decoder latency or audio quality."
+  ],
+  "mode": "deterministic_fixture_not_neural_audio",
+  "reset_between_measured_packets": false,
+  "samples_per_packet": 7680,
+  "schema_version": 1,
+  "state_bytes": {
+    "codec_ring": 384,
+    "convolution_history": 282944,
+    "device_total": 2733224,
+    "host_pinned": 46080,
+    "max_packet_frames": 4,
+    "pcm_ring": 46080,
+    "ring_slots": 3,
+    "transformer_kv": 2359296
+  },
+  "warmup_iterations": 20
+}

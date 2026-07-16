@@ -1,0 +1,46 @@
+{
+  "abi_version": 1,
+  "actual_samples": 159360,
+  "boundary_delta_error": 0,
+  "expected_samples": 159360,
+  "input_frames": 83,
+  "limitations": [
+    "This fixture validates incremental state and packet-boundary invariance.",
+    "It does not execute Qwen3-TTS tokenizer decoder weights and is not generated speech."
+  ],
+  "maximum_absolute_error": 0,
+  "mean_squared_error": 0.0,
+  "mode": "deterministic_fixture_not_neural_audio",
+  "packet_count": 34,
+  "packet_pattern": [
+    1,
+    4,
+    2,
+    3,
+    4,
+    1,
+    3,
+    2
+  ],
+  "passed": true,
+  "positions_match": true,
+  "post_final_packet_rejected": true,
+  "reset_matches": true,
+  "sample_count_matches": true,
+  "schema_version": 1,
+  "seam_maximum_absolute_error": 0,
+  "snr_db": "infinite",
+  "snr_minimum_db": 50.0,
+  "snr_minimum_satisfied": true,
+  "state_bytes": {
+    "codec_ring": 384,
+    "convolution_history": 282944,
+    "device_total": 2733224,
+    "host_pinned": 46080,
+    "max_packet_frames": 4,
+    "pcm_ring": 46080,
+    "ring_slots": 3,
+    "transformer_kv": 2359296
+  },
+  "state_matches": true
+}
