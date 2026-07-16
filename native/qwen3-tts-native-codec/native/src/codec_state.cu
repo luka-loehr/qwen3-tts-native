@@ -79,6 +79,16 @@ constexpr size_t kFrontendDeviceBytes =
     (kFrontendQuantizedElements + kFrontendRvqElements +
      kFrontendPreconvElements + kFrontendHistoryElements) *
     sizeof(float);
+constexpr size_t kNeuralKvElements =
+    2ULL * QWEN3_TTS_CODEC_TRANSFORMER_LAYERS * QWEN3_TTS_CODEC_KV_HEADS *
+    QWEN3_TTS_CODEC_KV_WINDOW * QWEN3_TTS_CODEC_HEAD_DIM;
+constexpr size_t kTransformerPacketElements =
+    QWEN3_TTS_CODEC_MAX_PACKET_FRAMES * 1024;
+constexpr size_t kTransformerScratchElements = 8192;
+constexpr size_t kTransformerDeviceBytes =
+    (kNeuralKvElements + kTransformerPacketElements +
+     kTransformerScratchElements) *
+    sizeof(float);
 
 constexpr int32_t kStatusOk = QWEN3_TTS_CODEC_STATUS_OK;
 constexpr int32_t kStatusInvalidArgument =
@@ -356,6 +366,161 @@ __global__ void update_frontend_history_kernel(
     }
 }
 
+__global__ void add_bias_kernel(float* values, const float* bias, size_t count, size_t width) {
+    const size_t item = blockIdx.x * blockDim.x + threadIdx.x;
+    if (item < count) {
+        values[item] += bias[item % width];
+    }
+}
+
+__global__ void rms_norm_kernel(
+    const float* input,
+    const float* weight,
+    size_t width,
+    float epsilon,
+    float* output
+) {
+    if (blockIdx.x != 0 || threadIdx.x != 0) {
+        return;
+    }
+    float square_sum = 0.0F;
+    for (size_t index = 0; index < width; ++index) {
+        square_sum = fmaf(input[index], input[index], square_sum);
+    }
+    const float scale = rsqrtf(square_sum / static_cast<float>(width) + epsilon);
+    for (size_t index = 0; index < width; ++index) {
+        output[index] = input[index] * scale * weight[index];
+    }
+}
+
+__global__ void apply_rope_kernel(
+    float* query,
+    float* key,
+    uint64_t position
+) {
+    const size_t item = blockIdx.x * blockDim.x + threadIdx.x;
+    if (item >= 16 * 64) {
+        return;
+    }
+    const size_t head = item / 64;
+    const size_t dimension = item % 64;
+    if (dimension >= 32) {
+        return;
+    }
+    const float exponent = static_cast<float>(2 * dimension) / 64.0F;
+    const float frequency = 1.0F / powf(10000.0F, exponent);
+    const float angle = static_cast<float>(position) * frequency;
+    float sine = 0.0F;
+    float cosine = 0.0F;
+    sincosf(angle, &sine, &cosine);
+    const size_t first = head * 64 + dimension;
+    const size_t second = first + 32;
+    const float q_first = query[first];
+    const float q_second = query[second];
+    const float k_first = key[first];
+    const float k_second = key[second];
+    query[first] = q_first * cosine - q_second * sine;
+    query[second] = q_second * cosine + q_first * sine;
+    key[first] = k_first * cosine - k_second * sine;
+    key[second] = k_second * cosine + k_first * sine;
+}
+
+__global__ void sliding_attention_kernel(
+    const float* query,
+    const float* key,
+    const float* value,
+    uint32_t layer,
+    uint64_t position,
+    float* kv,
+    float* output
+) {
+    const uint32_t head = threadIdx.x;
+    if (blockIdx.x != 0 || head >= QWEN3_TTS_CODEC_KV_HEADS) {
+        return;
+    }
+    const size_t slot = position % QWEN3_TTS_CODEC_KV_WINDOW;
+    for (size_t dimension = 0; dimension < QWEN3_TTS_CODEC_HEAD_DIM; ++dimension) {
+        const size_t cache_index =
+            ((((static_cast<size_t>(layer) * QWEN3_TTS_CODEC_KV_HEADS + head) *
+                QWEN3_TTS_CODEC_KV_WINDOW +
+               slot) *
+                  QWEN3_TTS_CODEC_HEAD_DIM) +
+             dimension);
+        kv[cache_index] = key[head * 64 + dimension];
+        kv[kNeuralKvElements / 2 + cache_index] = value[head * 64 + dimension];
+    }
+    const uint64_t first_position =
+        position + 1 > QWEN3_TTS_CODEC_KV_WINDOW
+            ? position + 1 - QWEN3_TTS_CODEC_KV_WINDOW
+            : 0;
+    const uint32_t count = static_cast<uint32_t>(position - first_position + 1);
+    float scores[QWEN3_TTS_CODEC_KV_WINDOW];
+    float maximum = -3.402823466e+38F;
+    for (uint32_t index = 0; index < count; ++index) {
+        const size_t source_slot =
+            (first_position + index) % QWEN3_TTS_CODEC_KV_WINDOW;
+        float score = 0.0F;
+        for (size_t dimension = 0; dimension < 64; ++dimension) {
+            const size_t cache_index =
+                ((((static_cast<size_t>(layer) * 16 + head) * 72 + source_slot) * 64) +
+                 dimension);
+            score = fmaf(
+                query[head * 64 + dimension], kv[cache_index], score
+            );
+        }
+        score *= 0.125F;
+        scores[index] = score;
+        maximum = fmaxf(maximum, score);
+    }
+    float denominator = 0.0F;
+    for (uint32_t index = 0; index < count; ++index) {
+        scores[index] = expf(scores[index] - maximum);
+        denominator += scores[index];
+    }
+    for (size_t dimension = 0; dimension < 64; ++dimension) {
+        float result = 0.0F;
+        for (uint32_t index = 0; index < count; ++index) {
+            const size_t source_slot =
+                (first_position + index) % QWEN3_TTS_CODEC_KV_WINDOW;
+            const size_t cache_index =
+                ((((static_cast<size_t>(layer) * 16 + head) * 72 + source_slot) * 64) +
+                 dimension);
+            result = fmaf(
+                scores[index] / denominator,
+                kv[kNeuralKvElements / 2 + cache_index],
+                result
+            );
+        }
+        output[head * 64 + dimension] = result;
+    }
+}
+
+__global__ void scaled_residual_kernel(
+    const float* residual,
+    const float* update,
+    const float* scale,
+    size_t width,
+    float* output
+) {
+    const size_t item = blockIdx.x * blockDim.x + threadIdx.x;
+    if (item < width) {
+        output[item] = residual[item] + update[item] * scale[item];
+    }
+}
+
+__global__ void silu_product_kernel(
+    const float* gate,
+    const float* up,
+    size_t width,
+    float* output
+) {
+    const size_t item = blockIdx.x * blockDim.x + threadIdx.x;
+    if (item < width) {
+        const float value = gate[item];
+        output[item] = (value / (1.0F + expf(-value))) * up[item];
+    }
+}
+
 template <typename T>
 cudaError_t allocate_device(T** pointer, size_t elements) noexcept {
     return cudaMalloc(reinterpret_cast<void**>(pointer), elements * sizeof(T));
@@ -400,8 +565,12 @@ struct Qwen3TtsCodecContextV1 {
     float* frontend_rvq = nullptr;
     float* frontend_preconv = nullptr;
     float* frontend_history = nullptr;
+    float* neural_kv = nullptr;
+    float* transformer_packet = nullptr;
+    float* transformer_scratch = nullptr;
     uint64_t frame_position = 0;
     uint64_t emitted_samples = 0;
+    uint64_t neural_frame_position = 0;
     uint32_t next_ring_slot = 0;
     uint32_t kv_ring_head = 0;
     bool finalized = false;
@@ -441,6 +610,315 @@ const float* require_f32_weight(
     return static_cast<const float*>(tensor->data);
 }
 
+int32_t launch_linear_vector(
+    Qwen3TtsCodecContextV1* context,
+    const float* input,
+    size_t input_width,
+    const char* weight_name,
+    const char* bias_name,
+    size_t output_width,
+    float* output,
+    char* error,
+    size_t error_capacity
+) noexcept {
+    const float* weight = require_f32_weight(
+        context, weight_name, error, error_capacity
+    );
+    if (weight == nullptr) {
+        return kStatusModel;
+    }
+    constexpr float kOne = 1.0F;
+    constexpr float kZero = 0.0F;
+    const cublasStatus_t cublas_status = cublasSgemv(
+        context->cublas,
+        CUBLAS_OP_T,
+        static_cast<int>(input_width),
+        static_cast<int>(output_width),
+        &kOne,
+        weight,
+        static_cast<int>(input_width),
+        input,
+        1,
+        &kZero,
+        output,
+        1
+    );
+    if (cublas_status != CUBLAS_STATUS_SUCCESS) {
+        return cublas_error(error, error_capacity, "execute linear projection", cublas_status);
+    }
+    if (bias_name != nullptr) {
+        const float* bias = require_f32_weight(
+            context, bias_name, error, error_capacity
+        );
+        if (bias == nullptr) {
+            return kStatusModel;
+        }
+        add_bias_kernel<<<blocks_for(output_width), 256, 0, context->stream>>>(
+            output, bias, output_width, output_width
+        );
+        const cudaError_t status = cudaGetLastError();
+        if (status != cudaSuccess) {
+            return cuda_error(error, error_capacity, "launch linear bias", status);
+        }
+    }
+    return kStatusOk;
+}
+
+int32_t run_transformer_frame(
+    Qwen3TtsCodecContextV1* context,
+    const float* input,
+    uint64_t position,
+    float* output,
+    char* error,
+    size_t error_capacity
+) noexcept {
+    float* hidden_a = context->transformer_scratch;
+    float* hidden_b = hidden_a + 512;
+    float* normalized = hidden_b + 512;
+    float* query = normalized + 512;
+    float* key = query + 1024;
+    float* value = key + 1024;
+    float* attention = value + 1024;
+    float* gate = attention + 1024;
+    float* up = gate + 1024;
+    float* projection = up + 1024;
+
+    int32_t result = launch_linear_vector(
+        context,
+        input,
+        1024,
+        "decoder.pre_transformer.input_proj.weight",
+        "decoder.pre_transformer.input_proj.bias",
+        512,
+        hidden_a,
+        error,
+        error_capacity
+    );
+    if (result != kStatusOk) {
+        return result;
+    }
+
+    for (uint32_t layer = 0; layer < 8; ++layer) {
+        char name[128];
+        std::snprintf(
+            name,
+            sizeof(name),
+            "decoder.pre_transformer.layers.%u.input_layernorm.weight",
+            layer
+        );
+        const float* norm_weight = require_f32_weight(
+            context, name, error, error_capacity
+        );
+        if (norm_weight == nullptr) {
+            return kStatusModel;
+        }
+        rms_norm_kernel<<<1, 1, 0, context->stream>>>(
+            hidden_a, norm_weight, 512, 1.0e-5F, normalized
+        );
+        cudaError_t status = cudaGetLastError();
+        if (status != cudaSuccess) {
+            return cuda_error(error, error_capacity, "launch attention RMS norm", status);
+        }
+
+        const char* projections[] = {"q_proj", "k_proj", "v_proj"};
+        float* projection_outputs[] = {query, key, value};
+        for (size_t index = 0; index < 3; ++index) {
+            std::snprintf(
+                name,
+                sizeof(name),
+                "decoder.pre_transformer.layers.%u.self_attn.%s.weight",
+                layer,
+                projections[index]
+            );
+            result = launch_linear_vector(
+                context,
+                normalized,
+                512,
+                name,
+                nullptr,
+                1024,
+                projection_outputs[index],
+                error,
+                error_capacity
+            );
+            if (result != kStatusOk) {
+                return result;
+            }
+        }
+        apply_rope_kernel<<<4, 256, 0, context->stream>>>(query, key, position);
+        status = cudaGetLastError();
+        if (status != cudaSuccess) {
+            return cuda_error(error, error_capacity, "launch decoder RoPE", status);
+        }
+        sliding_attention_kernel<<<1, 16, 0, context->stream>>>(
+            query,
+            key,
+            value,
+            layer,
+            position,
+            context->neural_kv,
+            attention
+        );
+        status = cudaGetLastError();
+        if (status != cudaSuccess) {
+            return cuda_error(error, error_capacity, "launch sliding attention", status);
+        }
+        std::snprintf(
+            name,
+            sizeof(name),
+            "decoder.pre_transformer.layers.%u.self_attn.o_proj.weight",
+            layer
+        );
+        result = launch_linear_vector(
+            context,
+            attention,
+            1024,
+            name,
+            nullptr,
+            512,
+            projection,
+            error,
+            error_capacity
+        );
+        if (result != kStatusOk) {
+            return result;
+        }
+        std::snprintf(
+            name,
+            sizeof(name),
+            "decoder.pre_transformer.layers.%u.self_attn_layer_scale.scale",
+            layer
+        );
+        const float* attention_scale = require_f32_weight(
+            context, name, error, error_capacity
+        );
+        if (attention_scale == nullptr) {
+            return kStatusModel;
+        }
+        scaled_residual_kernel<<<2, 256, 0, context->stream>>>(
+            hidden_a, projection, attention_scale, 512, hidden_b
+        );
+        status = cudaGetLastError();
+        if (status != cudaSuccess) {
+            return cuda_error(error, error_capacity, "launch attention residual", status);
+        }
+
+        std::snprintf(
+            name,
+            sizeof(name),
+            "decoder.pre_transformer.layers.%u.post_attention_layernorm.weight",
+            layer
+        );
+        norm_weight = require_f32_weight(context, name, error, error_capacity);
+        if (norm_weight == nullptr) {
+            return kStatusModel;
+        }
+        rms_norm_kernel<<<1, 1, 0, context->stream>>>(
+            hidden_b, norm_weight, 512, 1.0e-5F, normalized
+        );
+        status = cudaGetLastError();
+        if (status != cudaSuccess) {
+            return cuda_error(error, error_capacity, "launch MLP RMS norm", status);
+        }
+        const char* mlp_projections[] = {"gate_proj", "up_proj"};
+        float* mlp_outputs[] = {gate, up};
+        for (size_t index = 0; index < 2; ++index) {
+            std::snprintf(
+                name,
+                sizeof(name),
+                "decoder.pre_transformer.layers.%u.mlp.%s.weight",
+                layer,
+                mlp_projections[index]
+            );
+            result = launch_linear_vector(
+                context,
+                normalized,
+                512,
+                name,
+                nullptr,
+                1024,
+                mlp_outputs[index],
+                error,
+                error_capacity
+            );
+            if (result != kStatusOk) {
+                return result;
+            }
+        }
+        silu_product_kernel<<<4, 256, 0, context->stream>>>(
+            gate, up, 1024, value
+        );
+        status = cudaGetLastError();
+        if (status != cudaSuccess) {
+            return cuda_error(error, error_capacity, "launch gated SiLU", status);
+        }
+        std::snprintf(
+            name,
+            sizeof(name),
+            "decoder.pre_transformer.layers.%u.mlp.down_proj.weight",
+            layer
+        );
+        result = launch_linear_vector(
+            context,
+            value,
+            1024,
+            name,
+            nullptr,
+            512,
+            projection,
+            error,
+            error_capacity
+        );
+        if (result != kStatusOk) {
+            return result;
+        }
+        std::snprintf(
+            name,
+            sizeof(name),
+            "decoder.pre_transformer.layers.%u.mlp_layer_scale.scale",
+            layer
+        );
+        const float* mlp_scale = require_f32_weight(
+            context, name, error, error_capacity
+        );
+        if (mlp_scale == nullptr) {
+            return kStatusModel;
+        }
+        scaled_residual_kernel<<<2, 256, 0, context->stream>>>(
+            hidden_b, projection, mlp_scale, 512, hidden_a
+        );
+        status = cudaGetLastError();
+        if (status != cudaSuccess) {
+            return cuda_error(error, error_capacity, "launch MLP residual", status);
+        }
+    }
+
+    const float* final_norm = require_f32_weight(
+        context, "decoder.pre_transformer.norm.weight", error, error_capacity
+    );
+    if (final_norm == nullptr) {
+        return kStatusModel;
+    }
+    rms_norm_kernel<<<1, 1, 0, context->stream>>>(
+        hidden_a, final_norm, 512, 1.0e-5F, normalized
+    );
+    cudaError_t status = cudaGetLastError();
+    if (status != cudaSuccess) {
+        return cuda_error(error, error_capacity, "launch final transformer norm", status);
+    }
+    return launch_linear_vector(
+        context,
+        normalized,
+        512,
+        "decoder.pre_transformer.output_proj.weight",
+        "decoder.pre_transformer.output_proj.bias",
+        1024,
+        output,
+        error,
+        error_capacity
+    );
+}
+
 void release_model(Qwen3TtsCodecContextV1* context) noexcept {
     if (context == nullptr) {
         return;
@@ -476,6 +954,9 @@ void release_context(Qwen3TtsCodecContextV1* context) noexcept {
     cudaFree(context->frontend_preconv);
     cudaFree(context->frontend_rvq);
     cudaFree(context->frontend_quantized);
+    cudaFree(context->transformer_scratch);
+    cudaFree(context->transformer_packet);
+    cudaFree(context->neural_kv);
     cudaFree(context->fixture_history);
     cudaFree(context->convolution_history);
     cudaFree(context->transformer_kv);
@@ -548,6 +1029,12 @@ int32_t reset_device_state(
     if (status != cudaSuccess) {
         return cuda_error(error, error_capacity, "clear neural frontend history", status);
     }
+    status = cudaMemsetAsync(
+        context->neural_kv, 0, kNeuralKvElements * sizeof(float), context->stream
+    );
+    if (status != cudaSuccess) {
+        return cuda_error(error, error_capacity, "clear neural transformer KV", status);
+    }
     status = cudaStreamSynchronize(context->stream);
     if (status != cudaSuccess) {
         return cuda_error(error, error_capacity, "synchronize reset", status);
@@ -555,6 +1042,7 @@ int32_t reset_device_state(
     std::memset(context->host_pcm_ring, 0, kPcmRingBytes);
     context->frame_position = 0;
     context->emitted_samples = 0;
+    context->neural_frame_position = 0;
     context->next_ring_slot = 0;
     context->kv_ring_head = 0;
     context->finalized = false;
@@ -740,6 +1228,19 @@ extern "C" QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_create_v1(
             &context->frontend_history, kFrontendHistoryElements
         );
     }
+    if (status == cudaSuccess) {
+        status = allocate_device(&context->neural_kv, kNeuralKvElements);
+    }
+    if (status == cudaSuccess) {
+        status = allocate_device(
+            &context->transformer_packet, kTransformerPacketElements
+        );
+    }
+    if (status == cudaSuccess) {
+        status = allocate_device(
+            &context->transformer_scratch, kTransformerScratchElements
+        );
+    }
     if (status != cudaSuccess) {
         const int32_t result =
             cuda_error(error, error_capacity, "allocate codec state", status);
@@ -798,7 +1299,8 @@ extern "C" QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_state_info_v1(
     const uint64_t device_bytes =
         kTransformerKvBytes + kConvolutionHistoryBytes + kCodecRingBytes +
         kPcmRingBytes + kFixtureHistoryBytes + kScratchBytes +
-        kFrontendDeviceBytes + context->model_info.device_bytes;
+        kFrontendDeviceBytes + kTransformerDeviceBytes +
+        context->model_info.device_bytes;
     *output = Qwen3TtsCodecStateInfoV1{
         context->frame_position,
         context->emitted_samples,
@@ -1222,6 +1724,70 @@ qwen3_tts_codec_debug_frontend_packet_v1(
             rvq_output[channel * frame_count + frame] =
                 rvq_row_major[frame * 512 + channel];
         }
+    }
+    return kStatusOk;
+}
+
+extern "C" QWEN3_TTS_CODEC_API int32_t
+qwen3_tts_codec_debug_transformer_packet_v1(
+    Qwen3TtsCodecContextV1* context,
+    const uint16_t* codec_frames,
+    uint32_t frame_count,
+    float* transformer_output,
+    size_t transformer_capacity,
+    char* error,
+    size_t error_capacity
+) {
+    clear_error(error, error_capacity);
+    if (context == nullptr || codec_frames == nullptr ||
+        transformer_output == nullptr || frame_count == 0 ||
+        frame_count > QWEN3_TTS_CODEC_MAX_PACKET_FRAMES ||
+        transformer_capacity < static_cast<size_t>(frame_count) * 1024) {
+        write_error(error, error_capacity, "invalid transformer checkpoint packet");
+        return kStatusInvalidArgument;
+    }
+    std::vector<float> rvq(static_cast<size_t>(frame_count) * 512);
+    std::vector<float> preconv(static_cast<size_t>(frame_count) * 1024);
+    int32_t result = qwen3_tts_codec_debug_frontend_packet_v1(
+        context,
+        codec_frames,
+        frame_count,
+        rvq.data(),
+        rvq.size(),
+        preconv.data(),
+        preconv.size(),
+        error,
+        error_capacity
+    );
+    if (result != kStatusOk) {
+        return result;
+    }
+    for (uint32_t frame = 0; frame < frame_count; ++frame) {
+        result = run_transformer_frame(
+            context,
+            context->frontend_preconv + static_cast<size_t>(frame) * 1024,
+            context->neural_frame_position,
+            context->transformer_packet + static_cast<size_t>(frame) * 1024,
+            error,
+            error_capacity
+        );
+        if (result != kStatusOk) {
+            return result;
+        }
+        context->neural_frame_position += 1;
+    }
+    cudaError_t status = cudaMemcpyAsync(
+        transformer_output,
+        context->transformer_packet,
+        static_cast<size_t>(frame_count) * 1024 * sizeof(float),
+        cudaMemcpyDeviceToHost,
+        context->stream
+    );
+    if (status == cudaSuccess) {
+        status = cudaStreamSynchronize(context->stream);
+    }
+    if (status != cudaSuccess) {
+        return cuda_error(error, error_capacity, "copy transformer checkpoint", status);
     }
     return kStatusOk;
 }

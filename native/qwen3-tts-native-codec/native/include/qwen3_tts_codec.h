@@ -168,6 +168,17 @@ QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_debug_frontend_packet_v1(
     size_t error_capacity
 );
 
+/* Research-only transformer parity hook. Output layout is [1, frames, 1024]. */
+QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_debug_transformer_packet_v1(
+    Qwen3TtsCodecContextV1* context,
+    const uint16_t* codec_frames,
+    uint32_t frame_count,
+    float* transformer_output,
+    size_t transformer_capacity,
+    char* error,
+    size_t error_capacity
+);
+
 QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_process_fixture_packet_v1(
     Qwen3TtsCodecContextV1* context,
     const uint16_t* codec_frames,

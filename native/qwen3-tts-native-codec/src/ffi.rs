@@ -130,6 +130,8 @@ type FrontendFn = unsafe extern "C" fn(
     *mut c_char,
     usize,
 ) -> i32;
+type TransformerFn =
+    unsafe extern "C" fn(*mut Context, *const u16, u32, *mut f32, usize, *mut c_char, usize) -> i32;
 
 pub struct Api {
     _library: Library,
@@ -141,6 +143,7 @@ pub struct Api {
     load_model: LoadModelFn,
     model_info: ModelInfoFn,
     frontend: FrontendFn,
+    transformer: TransformerFn,
     process: ProcessFn,
 }
 
@@ -161,6 +164,8 @@ impl Api {
         let model_info = unsafe { load_symbol(&library, b"qwen3_tts_codec_model_info_v1\0")? };
         let frontend =
             unsafe { load_symbol(&library, b"qwen3_tts_codec_debug_frontend_packet_v1\0")? };
+        let transformer =
+            unsafe { load_symbol(&library, b"qwen3_tts_codec_debug_transformer_packet_v1\0")? };
         let process =
             unsafe { load_symbol(&library, b"qwen3_tts_codec_process_fixture_packet_v1\0")? };
         Ok(Self {
@@ -173,6 +178,7 @@ impl Api {
             load_model,
             model_info,
             frontend,
+            transformer,
             process,
         })
     }
@@ -262,6 +268,24 @@ impl Codec<'_> {
         };
         status_result(status, &error)?;
         Ok((rvq, preconv))
+    }
+
+    pub fn debug_transformer(&mut self, frames: &[[u16; CODEBOOKS]]) -> Result<Vec<f32>, String> {
+        let mut output = vec![0.0_f32; frames.len() * 1024];
+        let mut error = [0 as c_char; 512];
+        let status = unsafe {
+            (self.api.transformer)(
+                self.context,
+                frames.as_ptr().cast::<u16>(),
+                frames.len() as u32,
+                output.as_mut_ptr(),
+                output.len(),
+                error.as_mut_ptr(),
+                error.len(),
+            )
+        };
+        status_result(status, &error)?;
+        Ok(output)
     }
 
     pub fn reset(&mut self) -> Result<(), String> {

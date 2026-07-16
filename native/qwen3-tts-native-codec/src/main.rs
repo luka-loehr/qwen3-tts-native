@@ -42,6 +42,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             let fixture = required_argument(&arguments, 4, "decoder fixture directory")?;
             frontend_parity(Path::new(library), Path::new(model), Path::new(fixture))
         }
+        "transformer-parity" => {
+            let library = required_argument(&arguments, 2, "shared library path")?;
+            let model = required_argument(&arguments, 3, "speech tokenizer safetensors path")?;
+            let fixture = required_argument(&arguments, 4, "decoder fixture directory")?;
+            transformer_parity(Path::new(library), Path::new(model), Path::new(fixture))
+        }
         _ => {
             eprintln!(
                 "usage: qwen3-tts-native-codec <parity|benchmark> <library> [iterations]\n\
@@ -51,6 +57,62 @@ fn main() -> Result<(), Box<dyn Error>> {
             Ok(())
         }
     }
+}
+
+fn transformer_parity(
+    library_path: &Path,
+    model_path: &Path,
+    fixture_path: &Path,
+) -> Result<(), Box<dyn Error>> {
+    let codes = read_u16_le(&fixture_path.join("codes.u16le"))?;
+    if codes.len() % ffi::CODEBOOKS != 0 {
+        return Err(io::Error::other("fixture code count is not divisible by 16").into());
+    }
+    let frames = codes
+        .chunks_exact(ffi::CODEBOOKS)
+        .map(|values| values.try_into().expect("chunk contains exactly 16 codes"))
+        .collect::<Vec<[u16; ffi::CODEBOOKS]>>();
+    let expected = read_f32_le(&fixture_path.join("03-transformer.f32le"))?;
+    let api = Api::load(library_path)?;
+    let model = model::SafetensorsFile::open(model_path)?;
+    let mut codec = api.create_codec(0).map_err(io::Error::other)?;
+    codec.load_model(&model).map_err(io::Error::other)?;
+    let packet_pattern = [4_usize, 1, 3, 2];
+    let mut actual = Vec::with_capacity(expected.len());
+    let mut position = 0_usize;
+    let mut packet_count = 0_usize;
+    while position < frames.len() {
+        let count =
+            packet_pattern[packet_count % packet_pattern.len()].min(frames.len() - position);
+        actual.extend(
+            codec
+                .debug_transformer(&frames[position..position + count])
+                .map_err(io::Error::other)?,
+        );
+        position += count;
+        packet_count += 1;
+    }
+    let comparison = compare_f32(&actual, &expected)?;
+    let passed = comparison.maximum_absolute_error <= 1.0e-6;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "schema_version": 1,
+            "mode": "real_qwen_incremental_transformer",
+            "passed": passed,
+            "frames": frames.len(),
+            "packet_count": packet_count,
+            "packet_pattern": packet_pattern,
+            "comparison": comparison.to_json(),
+            "maximum_absolute_error_threshold": 1.0e-6,
+            "kv_window_frames": 72,
+            "prefix_recomputed": false
+        }))?
+    );
+    if !passed {
+        return Err(io::Error::other("native decoder transformer parity failed").into());
+    }
+    Ok(())
 }
 
 fn frontend_parity(
