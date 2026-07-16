@@ -13,6 +13,8 @@
 extern "C" {
 #endif
 
+#define QWEN3_TTS_TALKER_ABI_VERSION 1U
+
 typedef struct Qwen3TtsDeviceInfo {
     int32_t device_index;
     int32_t compute_major;
@@ -83,11 +85,35 @@ typedef struct Qwen3TtsTalkerPrefillResult {
 typedef struct Qwen3TtsCodecFrameResult {
     uint16_t codes[16];
     uint16_t next_semantic_token;
-    uint16_t reserved;
+    uint16_t ended_by_eos;
     uint32_t talker_position;
     float predictor_gpu_milliseconds;
     float talker_gpu_milliseconds;
 } Qwen3TtsCodecFrameResult;
+
+typedef struct Qwen3TtsCodecFrameInfo {
+    uint32_t talker_position;
+    uint32_t ended_by_eos;
+    float predictor_gpu_milliseconds;
+    float talker_gpu_milliseconds;
+} Qwen3TtsCodecFrameInfo;
+
+typedef enum Qwen3TtsTalkerPhase {
+    QWEN3_TTS_TALKER_CREATED = 0,
+    QWEN3_TTS_TALKER_READY = 1,
+    QWEN3_TTS_TALKER_PREFILLED = 2,
+    QWEN3_TTS_TALKER_ENDED = 3,
+} Qwen3TtsTalkerPhase;
+
+typedef struct Qwen3TtsTalkerStateInfo {
+    uint32_t abi_version;
+    uint32_t phase;
+    uint32_t talker_position;
+    uint32_t semantic_history_count;
+    uint64_t frames_generated;
+    uint64_t device_sample_count;
+    uint64_t host_sync_count;
+} Qwen3TtsTalkerStateInfo;
 
 typedef struct Qwen3TtsTalkerMemory {
     uint64_t weight_bytes;
@@ -98,7 +124,25 @@ typedef struct Qwen3TtsTalkerMemory {
     uint32_t tensor_count;
 } Qwen3TtsTalkerMemory;
 
+typedef struct Qwen3TtsModelMemory {
+    uint64_t shared_weight_bytes;
+    uint32_t tensor_count;
+    int32_t device_index;
+} Qwen3TtsModelMemory;
+
+typedef struct Qwen3TtsSessionMemory {
+    uint64_t talker_kv_bytes;
+    uint64_t predictor_kv_bytes;
+    uint64_t workspace_bytes;
+    uint32_t max_sequence_length;
+    uint32_t reserved;
+} Qwen3TtsSessionMemory;
+
 typedef void* Qwen3TtsTalkerHandle;
+typedef void* Qwen3TtsModelHandle;
+typedef void* Qwen3TtsSessionHandle;
+
+QWEN3_TTS_API uint32_t qwen3_tts_talker_abi_version(void);
 
 QWEN3_TTS_API int32_t qwen3_tts_probe_device(
     int32_t device_index,
@@ -233,6 +277,106 @@ QWEN3_TTS_API int32_t qwen3_tts_talker_next_frame(
     char* error,
     size_t error_capacity
 );
+
+QWEN3_TTS_API int32_t qwen3_tts_talker_next_frame_v1(
+    Qwen3TtsTalkerHandle handle,
+    uint16_t semantic_token,
+    int32_t trailing_text_token_id,
+    Qwen3TtsSamplingConfig talker_sampling,
+    Qwen3TtsSamplingConfig predictor_sampling,
+    uint16_t* output_codes,
+    size_t output_code_capacity,
+    uint16_t* next_semantic_token,
+    Qwen3TtsCodecFrameInfo* frame_info,
+    char* error,
+    size_t error_capacity
+);
+
+QWEN3_TTS_API int32_t qwen3_tts_talker_state_info(
+    Qwen3TtsTalkerHandle handle,
+    Qwen3TtsTalkerStateInfo* output,
+    char* error,
+    size_t error_capacity
+);
+
+QWEN3_TTS_API int32_t qwen3_tts_model_create(
+    int32_t device_index,
+    Qwen3TtsModelHandle* output,
+    char* error,
+    size_t error_capacity
+);
+
+QWEN3_TTS_API void qwen3_tts_model_destroy(Qwen3TtsModelHandle handle);
+
+QWEN3_TTS_API int32_t qwen3_tts_model_upload_tensor(
+    Qwen3TtsModelHandle handle,
+    const char* name,
+    const void* bf16_data,
+    uint64_t byte_size,
+    int32_t rank,
+    const uint64_t* shape,
+    char* error,
+    size_t error_capacity
+);
+
+QWEN3_TTS_API int32_t qwen3_tts_model_finalize(
+    Qwen3TtsModelHandle handle,
+    Qwen3TtsModelMemory* memory,
+    char* error,
+    size_t error_capacity
+);
+
+QWEN3_TTS_API int32_t qwen3_tts_session_create(
+    Qwen3TtsModelHandle model,
+    int32_t max_sequence_length,
+    uint64_t random_seed,
+    Qwen3TtsSessionHandle* output,
+    Qwen3TtsSessionMemory* memory,
+    char* error,
+    size_t error_capacity
+);
+
+QWEN3_TTS_API void qwen3_tts_session_destroy(Qwen3TtsSessionHandle handle);
+
+QWEN3_TTS_API int32_t qwen3_tts_session_reset(
+    Qwen3TtsSessionHandle handle,
+    uint64_t random_seed,
+    char* error,
+    size_t error_capacity
+);
+
+QWEN3_TTS_API int32_t qwen3_tts_session_prefill(
+    Qwen3TtsSessionHandle handle,
+    const int32_t* text_token_ids,
+    const int32_t* codec_token_ids,
+    int32_t token_count,
+    Qwen3TtsSamplingConfig sampling,
+    Qwen3TtsTalkerPrefillResult* output,
+    char* error,
+    size_t error_capacity
+);
+
+QWEN3_TTS_API int32_t qwen3_tts_session_next_frame(
+    Qwen3TtsSessionHandle handle,
+    uint16_t semantic_token,
+    int32_t trailing_text_token_id,
+    Qwen3TtsSamplingConfig talker_sampling,
+    Qwen3TtsSamplingConfig predictor_sampling,
+    uint16_t* output_codes,
+    size_t output_code_capacity,
+    uint16_t* next_semantic_token,
+    Qwen3TtsCodecFrameInfo* frame_info,
+    char* error,
+    size_t error_capacity
+);
+
+QWEN3_TTS_API int32_t qwen3_tts_session_state_info(
+    Qwen3TtsSessionHandle handle,
+    Qwen3TtsTalkerStateInfo* output,
+    char* error,
+    size_t error_capacity
+);
+
 #ifdef __cplusplus
 }
 #endif

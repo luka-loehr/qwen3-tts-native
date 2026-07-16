@@ -41,9 +41,10 @@ pub fn run_generate_codes(mut arguments: impl Iterator<Item = OsString>) -> Resu
 
     let text = text.context("generate-codes requires --text")?;
     let instruction = instruction.context("generate-codes requires --instruction")?;
-    let mut engine = NativeTalker::load(&library, &model, 0, max_sequence, seed)?;
+    let engine = NativeTalker::load(&library, &model, 0)?;
     let mut request = VoiceDesignRequest::new(text, instruction, language);
     request.max_frames = max_frames;
+    request.max_sequence_length = max_sequence;
     request.random_seed = seed;
     if greedy {
         request.talker_sampling = SamplingConfig::greedy();
