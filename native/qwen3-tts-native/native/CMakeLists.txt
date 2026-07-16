@@ -8,6 +8,7 @@ add_library(qwen3_tts_cuda SHARED
     src/gemv.cu
     src/primitive_parity.cu
     src/runtime.cu
+    src/sampling_kernels.cu
     src/talker.cu
     src/talker_kernels.cu
     src/weights.cu
