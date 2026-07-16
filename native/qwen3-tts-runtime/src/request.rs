@@ -99,8 +99,6 @@ impl RequestRecord {
         self.next_codec_frame += u64::from(packet.codec_frames);
         self.next_sample += u64::from(packet.sample_count);
         self.metrics.generated_codec_frames += u64::from(packet.codec_frames);
-        self.metrics.emitted_samples += u64::from(packet.sample_count);
-        self.metrics.emitted_packets += 1;
         self.metrics.talker_gpu_microseconds += f64::from(packet.talker_gpu_microseconds);
         self.metrics.codec_gpu_microseconds += f64::from(packet.codec_gpu_microseconds);
         Ok(())
