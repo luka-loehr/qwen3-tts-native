@@ -1223,7 +1223,7 @@ fn neural_benchmark_case(
     iterations: usize,
 ) -> Result<Value, Box<dyn Error>> {
     let frames = deterministic_frames(frames_per_packet);
-    for _ in 0..10 {
+    for _ in 0..20 {
         codec.process(&frames, false).map_err(|(status, message)| {
             io::Error::other(format!("neural warmup status {status}: {message}"))
         })?;
@@ -1249,7 +1249,7 @@ fn neural_benchmark_case(
     let end_to_end_p50 = percentile(&end_to_end_microseconds, 0.50);
     Ok(json!({
         "iterations": iterations,
-        "warmup_iterations": 10,
+        "warmup_iterations": 20,
         "continuous_stream": true,
         "reset_between_measured_packets": false,
         "frames_per_packet": frames_per_packet,
