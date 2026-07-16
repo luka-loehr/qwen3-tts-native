@@ -75,6 +75,8 @@ be labelled qualifying.
 
 The reproducible command and API contract are documented in
 [`native/qwen3-tts-native/README.md`](../native/qwen3-tts-native/README.md).
+The latest uncontaminated evidence is
+[`results/native-talker-session-qualification.json`](results/native-talker-session-qualification.json).
 
 ## End-to-end candidate protocol
 

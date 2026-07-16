@@ -110,6 +110,11 @@ See [`native/qwen3-tts-native/README.md`](native/qwen3-tts-native/README.md) for
 the API contract, build instructions, memory accounting, and the reproducible
 session-qualification command.
 
+The latest uncontaminated 200-request model-session qualification measured warm
+TTFA p50/p95/p99 of 61.36/65.51/66.45 ms. Mean aggregate real-time factors were
+0.569 at B1, 0.428 at B3, and 0.404 at B6. All 200 warm requests reused a session,
+and full-sequence parity plus lifecycle-isolation gates passed.
+
 This status applies to codec-frame generation. The native speech-tokenizer
 decoder, PCM packetization, raw-socket delivery, audio-quality qualification,
 and production integration remain separate gates and must not be inferred from

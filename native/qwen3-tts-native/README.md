@@ -395,6 +395,39 @@ Run throughput qualification only on an otherwise idle GPU. Reports produced
 while another CUDA workload is active must be labelled contaminated and must not
 be promoted as qualifying evidence.
 
+### Latest uncontaminated qualification
+
+The tracked report is
+[`benchmarks/results/native-talker-session-qualification.json`](../../benchmarks/results/native-talker-session-qualification.json).
+It was captured with no competing CUDA compute process and contains 200 measured
+warm requests plus three measured rounds for every concurrency level.
+
+| Metric | Result |
+| --- | ---: |
+| Cold model load, excluded from warm TTFA | 9,392.57 ms |
+| Warm requests / pool hits | 200 / 200 |
+| Warm TTFA p50 | 61.36 ms |
+| Warm TTFA p95 | 65.51 ms |
+| Warm TTFA p99 | 66.45 ms |
+| Warm TTFA maximum | 68.46 ms |
+| Warm session-create p95 | 0.00 ms |
+| Warm session-reset p95 | 0.011 ms |
+| Warm prefill p95 | 19.35 ms |
+| B1 mean aggregate RTF | 0.569 |
+| B3 mean aggregate RTF | 0.428 |
+| B6 mean aggregate RTF | 0.404 |
+
+B1 TTFA was 61.06–62.39 ms in the measured concurrency rounds. B3 was
+133.23–148.68 ms and B6 was 257.29–269.97 ms. The sub-200-ms warm TTFA gate is
+the persistent B1 request gate; concurrent TTFA is reported independently rather
+than hidden inside the aggregate throughput figure.
+
+All measured sessions used capacity 288 for the 26-token prompt and 256-frame
+safety budget. Full sampled sequences matched their standalone references for
+B1, B3, and B6. Greedy B3, seed isolation, cancellation, sibling drop,
+round-robin interleaving, cross-thread movement, and EOS-before-limit checks all
+passed.
+
 ### Component boundary
 
 This crate qualifies the VoiceDesign talker and code predictor. A complete audio
