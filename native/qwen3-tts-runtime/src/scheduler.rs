@@ -7,9 +7,10 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::{
-    AudioPacketDescriptor, EngineConfig, GenerationConfig, RequestInput, RequestInputError,
-    RequestMetrics, RequestPhase, RequestRecord, RuntimeStatus, SAMPLE_RATE,
-    SAMPLES_PER_CODEC_FRAME,
+    AudioPacketDescriptor, EngineConfig, GenerationConfig, MAX_CODEC_FRAMES,
+    MAX_CONCURRENT_REQUESTS, MAX_INSTRUCT_BYTES, MAX_PACKET_FRAMES, MAX_PCM_RING_SLOTS,
+    MAX_TEXT_BYTES, RequestInput, RequestInputError, RequestMetrics, RequestPhase, RequestRecord,
+    RuntimeStatus, SAMPLE_RATE, SAMPLES_PER_CODEC_FRAME,
 };
 
 const WORKER_IDLE_WAIT: Duration = Duration::from_millis(2);
@@ -599,9 +600,24 @@ impl<B: StreamingBackend> Drop for Scheduler<B> {
 }
 
 fn validate_config(config: &EngineConfig) -> Result<(), SchedulerError> {
+    if config.struct_size != size_of::<EngineConfig>() as u32 {
+        return Err(SchedulerError::InvalidConfiguration(
+            "struct_size does not match EngineConfig",
+        ));
+    }
+    if config.flags != 0 || config.reserved.iter().any(|value| *value != 0) {
+        return Err(SchedulerError::InvalidConfiguration(
+            "flags and reserved fields must be zero",
+        ));
+    }
     if config.max_concurrent_requests == 0 {
         return Err(SchedulerError::InvalidConfiguration(
             "max_concurrent_requests must be non-zero",
+        ));
+    }
+    if config.max_concurrent_requests > MAX_CONCURRENT_REQUESTS {
+        return Err(SchedulerError::InvalidConfiguration(
+            "max_concurrent_requests exceeds the native batch limit",
         ));
     }
     if config.packet_frames == 0 {
@@ -609,18 +625,53 @@ fn validate_config(config: &EngineConfig) -> Result<(), SchedulerError> {
             "packet_frames must be non-zero",
         ));
     }
+    if config.packet_frames > MAX_PACKET_FRAMES {
+        return Err(SchedulerError::InvalidConfiguration(
+            "packet_frames exceeds the neural decoder limit",
+        ));
+    }
     if config.pcm_ring_slots == 0 {
         return Err(SchedulerError::InvalidConfiguration(
             "pcm_ring_slots must be non-zero",
+        ));
+    }
+    if config.pcm_ring_slots > MAX_PCM_RING_SLOTS {
+        return Err(SchedulerError::InvalidConfiguration(
+            "pcm_ring_slots exceeds the bounded runtime limit",
+        ));
+    }
+    if config.max_text_bytes == 0 || config.max_text_bytes > MAX_TEXT_BYTES {
+        return Err(SchedulerError::InvalidConfiguration(
+            "max_text_bytes is outside the supported range",
+        ));
+    }
+    if config.max_instruct_bytes > MAX_INSTRUCT_BYTES {
+        return Err(SchedulerError::InvalidConfiguration(
+            "max_instruct_bytes exceeds the supported range",
         ));
     }
     Ok(())
 }
 
 fn validate_generation(config: &GenerationConfig) -> Result<(), SchedulerError> {
+    if config.struct_size != size_of::<GenerationConfig>() as u32 {
+        return Err(SchedulerError::InvalidGeneration(
+            "struct_size does not match GenerationConfig",
+        ));
+    }
+    if config.reserved.iter().any(|value| *value != 0) {
+        return Err(SchedulerError::InvalidGeneration(
+            "reserved fields must be zero",
+        ));
+    }
     if config.max_codec_frames == 0 {
         return Err(SchedulerError::InvalidGeneration(
             "max_codec_frames must be non-zero",
+        ));
+    }
+    if config.max_codec_frames > MAX_CODEC_FRAMES {
+        return Err(SchedulerError::InvalidGeneration(
+            "max_codec_frames exceeds the native sequence limit",
         ));
     }
     if !config.temperature.is_finite() || config.temperature <= 0.0 {
@@ -654,6 +705,11 @@ fn validate_generation(config: &GenerationConfig) -> Result<(), SchedulerError> 
     if config.do_sample > 1 || config.predictor_do_sample > 1 {
         return Err(SchedulerError::InvalidGeneration(
             "sampling flags must be zero or one",
+        ));
+    }
+    if config.top_k > 3_072 || config.predictor_top_k > 2_048 {
+        return Err(SchedulerError::InvalidGeneration(
+            "top_k exceeds the corresponding model vocabulary",
         ));
     }
     Ok(())
@@ -1312,6 +1368,76 @@ mod tests {
             scheduler.start(input(), generation),
             Err(SchedulerError::InvalidGeneration(_))
         ));
+    }
+
+    #[test]
+    fn unbounded_or_abi_incompatible_engine_configs_are_rejected() {
+        let backend = || ScriptedBackend {
+            steps: 1,
+            maximum_batch: Arc::new(AtomicUsize::new(0)),
+        };
+        let mut invalid = Vec::new();
+
+        let mut config = EngineConfig::default();
+        config.struct_size = 0;
+        invalid.push(config);
+        let mut config = EngineConfig::default();
+        config.flags = 1;
+        invalid.push(config);
+        let mut config = EngineConfig::default();
+        config.reserved[0] = 1;
+        invalid.push(config);
+        let mut config = EngineConfig::default();
+        config.max_concurrent_requests = MAX_CONCURRENT_REQUESTS + 1;
+        invalid.push(config);
+        let mut config = EngineConfig::default();
+        config.packet_frames = MAX_PACKET_FRAMES + 1;
+        invalid.push(config);
+        let mut config = EngineConfig::default();
+        config.pcm_ring_slots = MAX_PCM_RING_SLOTS + 1;
+        invalid.push(config);
+        let mut config = EngineConfig::default();
+        config.max_text_bytes = MAX_TEXT_BYTES + 1;
+        invalid.push(config);
+        let mut config = EngineConfig::default();
+        config.max_instruct_bytes = MAX_INSTRUCT_BYTES + 1;
+        invalid.push(config);
+
+        for config in invalid {
+            assert!(matches!(
+                Scheduler::new(config, backend()),
+                Err(SchedulerError::InvalidConfiguration(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn generation_abi_and_model_limits_are_enforced() {
+        let scheduler = scheduler(1, 1, 1);
+        let mut invalid = Vec::new();
+
+        let mut generation = GenerationConfig::default();
+        generation.struct_size = 0;
+        invalid.push(generation);
+        let mut generation = GenerationConfig::default();
+        generation.reserved[0] = 1;
+        invalid.push(generation);
+        let mut generation = GenerationConfig::default();
+        generation.max_codec_frames = MAX_CODEC_FRAMES + 1;
+        invalid.push(generation);
+        let mut generation = GenerationConfig::default();
+        generation.top_k = 3_073;
+        invalid.push(generation);
+        let mut generation = GenerationConfig::default();
+        generation.predictor_top_k = 2_049;
+        invalid.push(generation);
+
+        for generation in invalid {
+            assert!(matches!(
+                scheduler.start(input(), generation),
+                Err(SchedulerError::InvalidGeneration(_))
+            ));
+        }
     }
 
     fn wait_for_phase(request: &RequestHandle, phase: RequestPhase) {
