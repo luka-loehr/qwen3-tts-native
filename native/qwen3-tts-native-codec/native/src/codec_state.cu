@@ -7,6 +7,10 @@
 #include <cstdio>
 #include <cstring>
 #include <new>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -70,6 +74,8 @@ constexpr int32_t kStatusInvalidArgument =
 constexpr int32_t kStatusCuda = QWEN3_TTS_CODEC_STATUS_CUDA;
 constexpr int32_t kStatusState = QWEN3_TTS_CODEC_STATUS_STATE;
 constexpr int32_t kStatusAllocation = QWEN3_TTS_CODEC_STATUS_ALLOCATION;
+constexpr int32_t kStatusModel = QWEN3_TTS_CODEC_STATUS_MODEL;
+constexpr uint32_t kExpectedDecoderTensors = 271;
 
 void clear_error(char* error, size_t capacity) noexcept {
     if (error != nullptr && capacity > 0) {
@@ -251,6 +257,14 @@ size_t blocks_for(size_t items) noexcept {
 
 }  // namespace
 
+struct DeviceTensor {
+    void* data = nullptr;
+    uint64_t byte_length = 0;
+    uint64_t shape[QWEN3_TTS_CODEC_MAX_TENSOR_RANK]{};
+    uint32_t rank = 0;
+    uint32_t dtype = 0;
+};
+
 struct Qwen3TtsCodecContextV1 {
     int32_t device_index = 0;
     uint32_t ring_slots = QWEN3_TTS_CODEC_RING_SLOTS;
@@ -276,9 +290,24 @@ struct Qwen3TtsCodecContextV1 {
     uint32_t next_ring_slot = 0;
     uint32_t kv_ring_head = 0;
     bool finalized = false;
+    std::unordered_map<std::string, DeviceTensor> weights;
+    Qwen3TtsCodecModelInfoV1 model_info{};
 };
 
 namespace {
+
+void release_model(Qwen3TtsCodecContextV1* context) noexcept {
+    if (context == nullptr) {
+        return;
+    }
+    for (auto& [name, tensor] : context->weights) {
+        (void)name;
+        cudaFree(tensor.data);
+        tensor.data = nullptr;
+    }
+    context->weights.clear();
+    context->model_info = Qwen3TtsCodecModelInfoV1{};
+}
 
 void release_context(Qwen3TtsCodecContextV1* context) noexcept {
     if (context == nullptr) {
@@ -290,6 +319,7 @@ void release_context(Qwen3TtsCodecContextV1* context) noexcept {
     if (context->stream != nullptr) {
         cudaStreamSynchronize(context->stream);
     }
+    release_model(context);
     cudaFree(context->scratch6);
     cudaFree(context->scratch5);
     cudaFree(context->scratch4);
@@ -581,7 +611,8 @@ extern "C" QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_state_info_v1(
     }
     const uint64_t device_bytes =
         kTransformerKvBytes + kConvolutionHistoryBytes + kCodecRingBytes +
-        kPcmRingBytes + kFixtureHistoryBytes + kScratchBytes;
+        kPcmRingBytes + kFixtureHistoryBytes + kScratchBytes +
+        context->model_info.device_bytes;
     *output = Qwen3TtsCodecStateInfoV1{
         context->frame_position,
         context->emitted_samples,
@@ -596,6 +627,167 @@ extern "C" QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_state_info_v1(
         context->ring_slots,
         context->max_packet_frames,
     };
+    return kStatusOk;
+}
+
+extern "C" QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_load_model_v1(
+    Qwen3TtsCodecContextV1* context,
+    const Qwen3TtsCodecWeightProviderV1* provider,
+    Qwen3TtsCodecModelInfoV1* output,
+    char* error,
+    size_t error_capacity
+) {
+    clear_error(error, error_capacity);
+    if (context == nullptr || provider == nullptr || output == nullptr ||
+        provider->tensor_at == nullptr) {
+        write_error(
+            error,
+            error_capacity,
+            "context, weight provider, output, and tensor callback are required"
+        );
+        return kStatusInvalidArgument;
+    }
+    if (provider->abi_version != QWEN3_TTS_CODEC_ABI_VERSION_V1 ||
+        provider->reserved != 0) {
+        write_error(error, error_capacity, "unsupported weight-provider ABI");
+        return kStatusInvalidArgument;
+    }
+    if (!context->weights.empty()) {
+        write_error(error, error_capacity, "model is already loaded");
+        return kStatusState;
+    }
+    cudaError_t cuda_status = cudaSetDevice(context->device_index);
+    if (cuda_status != cudaSuccess) {
+        return cuda_error(error, error_capacity, "select CUDA device", cuda_status);
+    }
+
+    Qwen3TtsCodecModelInfoV1 info{};
+    for (uint64_t index = 0; index < provider->tensor_count; ++index) {
+        const char* name = nullptr;
+        Qwen3TtsCodecTensorViewV1 source{};
+        const int32_t provider_status = provider->tensor_at(
+            provider->user_data,
+            index,
+            &name,
+            &source,
+            error,
+            error_capacity
+        );
+        if (provider_status != kStatusOk) {
+            release_model(context);
+            if (error == nullptr || error_capacity == 0 || error[0] == '\0') {
+                write_error(error, error_capacity, "weight provider rejected tensor index");
+            }
+            return kStatusModel;
+        }
+        if (name == nullptr || std::strncmp(name, "decoder.", 8) != 0) {
+            continue;
+        }
+        if (source.data == nullptr || source.byte_length == 0 || source.rank == 0 ||
+            source.rank > QWEN3_TTS_CODEC_MAX_TENSOR_RANK ||
+            (source.dtype != QWEN3_TTS_CODEC_TENSOR_F32 &&
+             source.dtype != QWEN3_TTS_CODEC_TENSOR_BF16)) {
+            release_model(context);
+            write_error(error, error_capacity, "decoder tensor metadata is invalid");
+            return kStatusModel;
+        }
+        uint64_t element_count = 1;
+        for (uint32_t dimension = 0; dimension < source.rank; ++dimension) {
+            if (source.shape[dimension] == 0 ||
+                element_count > UINT64_MAX / source.shape[dimension]) {
+                release_model(context);
+                write_error(error, error_capacity, "decoder tensor shape is invalid");
+                return kStatusModel;
+            }
+            element_count *= source.shape[dimension];
+        }
+        const uint64_t scalar_bytes =
+            source.dtype == QWEN3_TTS_CODEC_TENSOR_F32 ? 4 : 2;
+        if (element_count > UINT64_MAX / scalar_bytes ||
+            element_count * scalar_bytes != source.byte_length) {
+            release_model(context);
+            write_error(error, error_capacity, "decoder tensor byte length is invalid");
+            return kStatusModel;
+        }
+        DeviceTensor tensor{};
+        tensor.byte_length = source.byte_length;
+        tensor.rank = source.rank;
+        tensor.dtype = source.dtype;
+        std::memcpy(tensor.shape, source.shape, sizeof(tensor.shape));
+        cuda_status = cudaMalloc(&tensor.data, static_cast<size_t>(source.byte_length));
+        if (cuda_status == cudaSuccess) {
+            cuda_status = cudaMemcpyAsync(
+                tensor.data,
+                source.data,
+                static_cast<size_t>(source.byte_length),
+                cudaMemcpyHostToDevice,
+                context->stream
+            );
+        }
+        if (cuda_status != cudaSuccess) {
+            cudaFree(tensor.data);
+            release_model(context);
+            return cuda_error(error, error_capacity, "upload decoder tensor", cuda_status);
+        }
+        const auto [position, inserted] =
+            context->weights.emplace(std::string(name), tensor);
+        (void)position;
+        if (!inserted) {
+            cudaFree(tensor.data);
+            release_model(context);
+            write_error(error, error_capacity, "duplicate decoder tensor name");
+            return kStatusModel;
+        }
+        info.source_bytes += source.byte_length;
+        info.device_bytes += source.byte_length;
+        info.parameter_count += element_count;
+        info.tensor_count += 1;
+        if (source.dtype == QWEN3_TTS_CODEC_TENSOR_F32) {
+            info.source_dtype_f32_count += 1;
+        } else {
+            info.source_dtype_bf16_count += 1;
+        }
+    }
+    cuda_status = cudaStreamSynchronize(context->stream);
+    if (cuda_status != cudaSuccess) {
+        release_model(context);
+        return cuda_error(error, error_capacity, "finish decoder upload", cuda_status);
+    }
+    if (info.tensor_count != kExpectedDecoderTensors) {
+        release_model(context);
+        write_error(error, error_capacity, "model does not contain exactly 271 decoder tensors");
+        return kStatusModel;
+    }
+    const char* required[] = {
+        "decoder.quantizer.rvq_first.vq.layers.0._codebook.embedding_sum",
+        "decoder.pre_transformer.layers.0.self_attn.q_proj.weight",
+        "decoder.decoder.6.conv.weight",
+    };
+    for (const char* name : required) {
+        if (context->weights.find(name) == context->weights.end()) {
+            release_model(context);
+            write_error(error, error_capacity, "model is missing a required decoder tensor");
+            return kStatusModel;
+        }
+    }
+    info.loaded = 1;
+    context->model_info = info;
+    *output = info;
+    return kStatusOk;
+}
+
+extern "C" QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_model_info_v1(
+    const Qwen3TtsCodecContextV1* context,
+    Qwen3TtsCodecModelInfoV1* output,
+    char* error,
+    size_t error_capacity
+) {
+    clear_error(error, error_capacity);
+    if (context == nullptr || output == nullptr) {
+        write_error(error, error_capacity, "context and output are required");
+        return kStatusInvalidArgument;
+    }
+    *output = context->model_info;
     return kStatusOk;
 }
 
