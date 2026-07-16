@@ -1,7 +1,21 @@
 use qwen3_tts_runtime::{
     AudioPacketDescriptor, EngineConfig, GenerationConfig, Language, PacketQueue, PacketQueueError,
-    RequestInput, RequestPhase, RequestRecord, SAMPLE_RATE,
+    RequestInput, RequestMetrics, RequestPhase, RequestRecord, RuntimeStatus, SAMPLE_RATE,
 };
+
+#[test]
+fn public_c_layouts_are_stable() {
+    assert_eq!(size_of::<RuntimeStatus>(), 4);
+    assert_eq!(size_of::<Language>(), 4);
+    assert_eq!(size_of::<EngineConfig>(), 96);
+    assert_eq!(align_of::<EngineConfig>(), 8);
+    assert_eq!(size_of::<GenerationConfig>(), 120);
+    assert_eq!(align_of::<GenerationConfig>(), 8);
+    assert_eq!(size_of::<AudioPacketDescriptor>(), 72);
+    assert_eq!(align_of::<AudioPacketDescriptor>(), 8);
+    assert_eq!(size_of::<RequestMetrics>(), 96);
+    assert_eq!(align_of::<RequestMetrics>(), 8);
+}
 
 fn packet(request_id: u64, sequence: u64, first_frame: u64, frames: u32) -> AudioPacketDescriptor {
     AudioPacketDescriptor {
