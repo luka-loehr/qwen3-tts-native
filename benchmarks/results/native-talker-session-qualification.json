@@ -1,0 +1,3431 @@
+{
+  "model_load_wall_milliseconds": 9392.565027,
+  "shared_model_memory": {
+    "weight_bytes": 3833352704,
+    "tensor_count": 404,
+    "device_index": 0
+  },
+  "requested_max_frames": 256,
+  "maximum_sequence_length": 1024,
+  "warm_latency": {
+    "request_count": 200,
+    "pool_hit_count": 200,
+    "all_pool_hits": true,
+    "exact_reference_parity": true,
+    "ttfa_p50_milliseconds": 61.363447,
+    "ttfa_p95_milliseconds": 65.508027,
+    "ttfa_p99_milliseconds": 66.448235,
+    "ttfa_max_milliseconds": 68.461709,
+    "gate_milliseconds": 200.0,
+    "gate_passed": true,
+    "samples_milliseconds": [
+      61.406791000000005,
+      61.129943,
+      60.471157999999996,
+      60.556519,
+      61.139079,
+      60.473478,
+      61.382679,
+      61.721032,
+      61.647479,
+      61.992967,
+      60.506934,
+      61.602007,
+      61.176438,
+      61.976071,
+      61.186982,
+      62.083143,
+      61.622471,
+      61.908999,
+      60.517766,
+      60.581319,
+      61.951815,
+      62.869656,
+      61.038134,
+      60.56215,
+      61.651528,
+      61.955814999999994,
+      60.60431,
+      60.572214,
+      65.72900299999999,
+      61.308215,
+      61.981959,
+      60.455574,
+      60.613446,
+      61.891528,
+      60.587014,
+      65.788938,
+      61.279351000000005,
+      62.039207,
+      61.330806,
+      60.533654,
+      62.166023,
+      61.468423,
+      65.37826600000001,
+      60.582374,
+      60.702887,
+      61.575527,
+      61.352038,
+      60.540598,
+      60.556726,
+      61.247015000000005,
+      61.939256,
+      62.084456,
+      60.589638,
+      61.470039,
+      62.344808,
+      60.609365999999994,
+      60.941174000000004,
+      61.442055,
+      61.363447,
+      62.206759,
+      60.992982,
+      62.24484,
+      62.011272,
+      60.690886,
+      60.624134000000005,
+      61.392055,
+      62.113239,
+      61.004311,
+      60.657782,
+      61.805287,
+      61.723110999999996,
+      60.673013999999995,
+      60.995718999999994,
+      60.61943,
+      62.110488,
+      60.654438,
+      60.898407,
+      60.662486,
+      60.723333999999994,
+      60.72359,
+      60.686262,
+      62.31068,
+      61.458839000000005,
+      61.33879099999999,
+      60.62519,
+      61.421767,
+      60.836262000000005,
+      60.704326,
+      65.587162,
+      60.770934,
+      60.722294000000005,
+      60.726262000000006,
+      60.752918,
+      60.957047,
+      61.453478,
+      65.76369,
+      60.742807000000006,
+      61.150327,
+      62.217206999999995,
+      60.772839000000005,
+      60.703222000000004,
+      60.809830000000005,
+      62.80092,
+      60.777463,
+      61.005815,
+      61.373559,
+      61.642055,
+      60.74999,
+      60.789158,
+      61.435927,
+      60.77015,
+      60.72071,
+      60.775926,
+      61.836151,
+      60.835574,
+      61.369062,
+      61.515190999999994,
+      60.868486,
+      61.12639,
+      62.193976,
+      61.347575,
+      60.841287,
+      62.239031,
+      61.523126999999995,
+      60.88143,
+      61.907879,
+      61.643015000000005,
+      61.415222,
+      61.911447,
+      67.55710099999999,
+      65.74559500000001,
+      64.096105,
+      64.278937,
+      64.776826,
+      63.569959999999995,
+      62.982568,
+      61.765111,
+      68.461709,
+      63.284569,
+      61.932615000000006,
+      61.166567,
+      61.264582999999995,
+      61.900327,
+      62.545607000000004,
+      66.448235,
+      64.189593,
+      64.216745,
+      61.889639,
+      61.884823,
+      61.812455,
+      61.53063,
+      65.508027,
+      60.945702,
+      62.015111999999995,
+      61.650007,
+      62.266888,
+      61.56266299999999,
+      60.853606,
+      65.404971,
+      62.379992,
+      60.993286,
+      60.906118,
+      62.389463,
+      60.986406,
+      60.893958999999995,
+      65.815962,
+      60.954134,
+      60.890566,
+      60.940647,
+      61.635558,
+      60.974662,
+      60.859078,
+      66.320987,
+      60.911989999999996,
+      60.844982,
+      61.737702999999996,
+      60.901894,
+      60.879014000000005,
+      60.908886,
+      65.289755,
+      60.90071,
+      61.058389999999996,
+      62.398952,
+      60.924726,
+      60.918934,
+      62.020568,
+      62.110198999999994,
+      61.030646000000004,
+      61.459543,
+      61.490439,
+      60.989045999999995,
+      62.327272,
+      61.589414000000005,
+      61.310247,
+      62.342951,
+      61.542471,
+      60.86511,
+      62.625048,
+      60.907462,
+      60.88935
+    ],
+    "start_timing_samples": [
+      {
+        "tokenize_wall_milliseconds": 0.12329699999999999,
+        "prompt_plan_wall_milliseconds": 0.000112,
+        "session_acquire_wall_milliseconds": 0.01408,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.014,
+        "prefill_wall_milliseconds": 18.934625,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.062208,
+        "prompt_plan_wall_milliseconds": 0.00016,
+        "session_acquire_wall_milliseconds": 0.008752,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.008608,
+        "prefill_wall_milliseconds": 18.382545,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.0408,
+        "prompt_plan_wall_milliseconds": 0.00012800000000000002,
+        "session_acquire_wall_milliseconds": 0.006384,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.006304,
+        "prefill_wall_milliseconds": 18.363585,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.038,
+        "prompt_plan_wall_milliseconds": 0.000096,
+        "session_acquire_wall_milliseconds": 0.005536,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.005472,
+        "prefill_wall_milliseconds": 18.369249,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.052656,
+        "prompt_plan_wall_milliseconds": 0.000176,
+        "session_acquire_wall_milliseconds": 0.0092,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.009120000000000001,
+        "prefill_wall_milliseconds": 18.386881000000002,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.042064000000000004,
+        "prompt_plan_wall_milliseconds": 0.000096,
+        "session_acquire_wall_milliseconds": 0.007136,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.006992,
+        "prefill_wall_milliseconds": 18.391023999999998,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.037792,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.005616,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.0055520000000000005,
+        "prefill_wall_milliseconds": 18.405776,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.057232,
+        "prompt_plan_wall_milliseconds": 0.000192,
+        "session_acquire_wall_milliseconds": 0.009552,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.009439999999999999,
+        "prefill_wall_milliseconds": 18.594257,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.049792,
+        "prompt_plan_wall_milliseconds": 0.000192,
+        "session_acquire_wall_milliseconds": 0.006608,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.006272000000000001,
+        "prefill_wall_milliseconds": 18.500048000000003,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.05184,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.00792,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.007856,
+        "prefill_wall_milliseconds": 18.384944,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.038768,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.006319999999999999,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.006272000000000001,
+        "prefill_wall_milliseconds": 18.391744000000003,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.05368,
+        "prompt_plan_wall_milliseconds": 0.000192,
+        "session_acquire_wall_milliseconds": 0.009504,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.00936,
+        "prefill_wall_milliseconds": 18.398144000000002,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.037216,
+        "prompt_plan_wall_milliseconds": 0.00012800000000000002,
+        "session_acquire_wall_milliseconds": 0.006336,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.006096,
+        "prefill_wall_milliseconds": 18.413328,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.034480000000000004,
+        "prompt_plan_wall_milliseconds": 0.000096,
+        "session_acquire_wall_milliseconds": 0.00592,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.00584,
+        "prefill_wall_milliseconds": 18.381712,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.033776,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.0057280000000000005,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.005616,
+        "prefill_wall_milliseconds": 18.617792,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.04056,
+        "prompt_plan_wall_milliseconds": 0.000096,
+        "session_acquire_wall_milliseconds": 0.0059359999999999994,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.0057599999999999995,
+        "prefill_wall_milliseconds": 18.388080000000002,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.036784,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.005408,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.005344,
+        "prefill_wall_milliseconds": 18.380144,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.035952,
+        "prompt_plan_wall_milliseconds": 0.000096,
+        "session_acquire_wall_milliseconds": 0.006208,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.006144,
+        "prefill_wall_milliseconds": 18.408448,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.047456,
+        "prompt_plan_wall_milliseconds": 0.000192,
+        "session_acquire_wall_milliseconds": 0.007024,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.00688,
+        "prefill_wall_milliseconds": 18.408912,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.036704,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.006016,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.0059359999999999994,
+        "prefill_wall_milliseconds": 18.400769,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.035519999999999996,
+        "prompt_plan_wall_milliseconds": 0.000096,
+        "session_acquire_wall_milliseconds": 0.005616,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.00552,
+        "prefill_wall_milliseconds": 18.395937,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.035648,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.016416,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.016272,
+        "prefill_wall_milliseconds": 20.305826,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.057104,
+        "prompt_plan_wall_milliseconds": 0.000176,
+        "session_acquire_wall_milliseconds": 0.007696000000000001,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.007584,
+        "prefill_wall_milliseconds": 18.545216,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.05208,
+        "prompt_plan_wall_milliseconds": 0.000192,
+        "session_acquire_wall_milliseconds": 0.008368,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.008304,
+        "prefill_wall_milliseconds": 18.396272000000003,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.046335999999999995,
+        "prompt_plan_wall_milliseconds": 0.00020800000000000001,
+        "session_acquire_wall_milliseconds": 0.00776,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.007568,
+        "prefill_wall_milliseconds": 18.457073,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.06408,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.009584,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.009504,
+        "prefill_wall_milliseconds": 18.395471999999998,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.042527999999999996,
+        "prompt_plan_wall_milliseconds": 0.000112,
+        "session_acquire_wall_milliseconds": 0.006672,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.006608,
+        "prefill_wall_milliseconds": 18.415167999999998,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.037104000000000005,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.005664000000000001,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.0056,
+        "prefill_wall_milliseconds": 18.415537,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.0376,
+        "prompt_plan_wall_milliseconds": 0.000112,
+        "session_acquire_wall_milliseconds": 0.00728,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.007216,
+        "prefill_wall_milliseconds": 20.127969999999998,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.057968,
+        "prompt_plan_wall_milliseconds": 0.000192,
+        "session_acquire_wall_milliseconds": 0.01216,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.012032,
+        "prefill_wall_milliseconds": 18.397616,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.041072000000000004,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.006128,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.00608,
+        "prefill_wall_milliseconds": 18.413712,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.035519999999999996,
+        "prompt_plan_wall_milliseconds": 0.000096,
+        "session_acquire_wall_milliseconds": 0.0066560000000000005,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.006592,
+        "prefill_wall_milliseconds": 18.380944,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.06064,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.007488,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.007424,
+        "prefill_wall_milliseconds": 18.431201,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.049153,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.0068639999999999994,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.0068000000000000005,
+        "prefill_wall_milliseconds": 18.443216,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.045552,
+        "prompt_plan_wall_milliseconds": 0.000176,
+        "session_acquire_wall_milliseconds": 0.006256,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.006096,
+        "prefill_wall_milliseconds": 18.420417,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.037904,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.006544,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.006464,
+        "prefill_wall_milliseconds": 18.715664,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.045343999999999995,
+        "prompt_plan_wall_milliseconds": 0.000096,
+        "session_acquire_wall_milliseconds": 0.008287999999999998,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.00816,
+        "prefill_wall_milliseconds": 18.414047999999998,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.038208,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.006528,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.006432,
+        "prefill_wall_milliseconds": 18.415104000000003,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.036064,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.0061600000000000005,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.006096,
+        "prefill_wall_milliseconds": 18.39816,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.05152,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.008304,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.00824,
+        "prefill_wall_milliseconds": 18.388449,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.036928,
+        "prompt_plan_wall_milliseconds": 0.000096,
+        "session_acquire_wall_milliseconds": 0.0061920000000000005,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.006128,
+        "prefill_wall_milliseconds": 18.593088,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.053551999999999995,
+        "prompt_plan_wall_milliseconds": 0.00016,
+        "session_acquire_wall_milliseconds": 0.009728,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.00952,
+        "prefill_wall_milliseconds": 18.575633,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.038144,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.006384,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.006336,
+        "prefill_wall_milliseconds": 18.418112,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.059424,
+        "prompt_plan_wall_milliseconds": 0.000096,
+        "session_acquire_wall_milliseconds": 0.010192,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.010128,
+        "prefill_wall_milliseconds": 18.422608999999998,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.039279999999999995,
+        "prompt_plan_wall_milliseconds": 0.000144,
+        "session_acquire_wall_milliseconds": 0.006912,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.006848,
+        "prefill_wall_milliseconds": 18.399089,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.036032,
+        "prompt_plan_wall_milliseconds": 0.000096,
+        "session_acquire_wall_milliseconds": 0.005648,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.005584,
+        "prefill_wall_milliseconds": 18.396096,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.051216,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.008544,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.00848,
+        "prefill_wall_milliseconds": 18.446864,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.040048,
+        "prompt_plan_wall_milliseconds": 0.000096,
+        "session_acquire_wall_milliseconds": 0.006272000000000001,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.0061920000000000005,
+        "prefill_wall_milliseconds": 18.379904999999997,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.035296,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.005984,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.00592,
+        "prefill_wall_milliseconds": 18.42376,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.035456,
+        "prompt_plan_wall_milliseconds": 0.000096,
+        "session_acquire_wall_milliseconds": 0.005392,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.005327999999999999,
+        "prefill_wall_milliseconds": 18.402609,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.060656,
+        "prompt_plan_wall_milliseconds": 0.000192,
+        "session_acquire_wall_milliseconds": 0.010624,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.010576,
+        "prefill_wall_milliseconds": 18.409681,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.039360000000000006,
+        "prompt_plan_wall_milliseconds": 0.000096,
+        "session_acquire_wall_milliseconds": 0.005472,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.00536,
+        "prefill_wall_milliseconds": 18.415217000000002,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.037616000000000004,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.005872,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.0057599999999999995,
+        "prefill_wall_milliseconds": 18.417536000000002,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.040912,
+        "prompt_plan_wall_milliseconds": 0.000096,
+        "session_acquire_wall_milliseconds": 0.00808,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.007951999999999999,
+        "prefill_wall_milliseconds": 18.498321,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.037744,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.006688,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.006608,
+        "prefill_wall_milliseconds": 18.402464000000002,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.045392,
+        "prompt_plan_wall_milliseconds": 0.000272,
+        "session_acquire_wall_milliseconds": 0.00872,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.008592,
+        "prefill_wall_milliseconds": 18.416849,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.036832000000000004,
+        "prompt_plan_wall_milliseconds": 0.000096,
+        "session_acquire_wall_milliseconds": 0.0069759999999999996,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.006912,
+        "prefill_wall_milliseconds": 18.417408,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.05864,
+        "prompt_plan_wall_milliseconds": 0.000176,
+        "session_acquire_wall_milliseconds": 0.009792,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.009648,
+        "prefill_wall_milliseconds": 18.415072000000002,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.037584,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.006768000000000001,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.006576,
+        "prefill_wall_milliseconds": 18.433743999999997,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.037152,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.00552,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.005424,
+        "prefill_wall_milliseconds": 18.412832,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.041872,
+        "prompt_plan_wall_milliseconds": 0.000144,
+        "session_acquire_wall_milliseconds": 0.007296,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.007216,
+        "prefill_wall_milliseconds": 18.633632000000002,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.041681,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.007664,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.007584,
+        "prefill_wall_milliseconds": 18.445263999999998,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.036048,
+        "prompt_plan_wall_milliseconds": 0.000096,
+        "session_acquire_wall_milliseconds": 0.006032,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.0059359999999999994,
+        "prefill_wall_milliseconds": 18.410689,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.034976,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.006895999999999999,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.0068000000000000005,
+        "prefill_wall_milliseconds": 18.385520999999997,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.056864000000000005,
+        "prompt_plan_wall_milliseconds": 0.000192,
+        "session_acquire_wall_milliseconds": 0.008943999999999999,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.008896,
+        "prefill_wall_milliseconds": 18.424080999999997,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.043343999999999994,
+        "prompt_plan_wall_milliseconds": 0.000144,
+        "session_acquire_wall_milliseconds": 0.007104,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.007024,
+        "prefill_wall_milliseconds": 18.4104,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.035840000000000004,
+        "prompt_plan_wall_milliseconds": 0.000096,
+        "session_acquire_wall_milliseconds": 0.006128,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.006064,
+        "prefill_wall_milliseconds": 18.392944,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.04416,
+        "prompt_plan_wall_milliseconds": 0.000176,
+        "session_acquire_wall_milliseconds": 0.007776,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.007696000000000001,
+        "prefill_wall_milliseconds": 18.624129,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.042912,
+        "prompt_plan_wall_milliseconds": 0.000176,
+        "session_acquire_wall_milliseconds": 0.006240000000000001,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.006176,
+        "prefill_wall_milliseconds": 18.414015999999997,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.039360000000000006,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.006384,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.006319999999999999,
+        "prefill_wall_milliseconds": 18.422896,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.034592,
+        "prompt_plan_wall_milliseconds": 0.000096,
+        "session_acquire_wall_milliseconds": 0.006016,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.005952,
+        "prefill_wall_milliseconds": 18.42352,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.054512000000000005,
+        "prompt_plan_wall_milliseconds": 0.000192,
+        "session_acquire_wall_milliseconds": 0.008287999999999998,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.008128000000000002,
+        "prefill_wall_milliseconds": 18.438016,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.038768,
+        "prompt_plan_wall_milliseconds": 0.000096,
+        "session_acquire_wall_milliseconds": 0.0057599999999999995,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.005632,
+        "prefill_wall_milliseconds": 18.400641,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.042592000000000005,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.006528,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.006384,
+        "prefill_wall_milliseconds": 18.405712,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.037759999999999995,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.006736000000000001,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.006576,
+        "prefill_wall_milliseconds": 18.615008999999997,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.051856,
+        "prompt_plan_wall_milliseconds": 0.00012800000000000002,
+        "session_acquire_wall_milliseconds": 0.008704,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.00864,
+        "prefill_wall_milliseconds": 18.409745,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.051456,
+        "prompt_plan_wall_milliseconds": 0.000176,
+        "session_acquire_wall_milliseconds": 0.007391999999999999,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.007328,
+        "prefill_wall_milliseconds": 18.484065,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.048608,
+        "prompt_plan_wall_milliseconds": 0.000192,
+        "session_acquire_wall_milliseconds": 0.006752,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.006624,
+        "prefill_wall_milliseconds": 18.415201,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.056224,
+        "prompt_plan_wall_milliseconds": 0.00020800000000000001,
+        "session_acquire_wall_milliseconds": 0.009152,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.009104,
+        "prefill_wall_milliseconds": 18.421329,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.038704,
+        "prompt_plan_wall_milliseconds": 0.00012800000000000002,
+        "session_acquire_wall_milliseconds": 0.00696,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.006895999999999999,
+        "prefill_wall_milliseconds": 18.440513,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.035407999999999995,
+        "prompt_plan_wall_milliseconds": 0.000112,
+        "session_acquire_wall_milliseconds": 0.00592,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.005856,
+        "prefill_wall_milliseconds": 18.424159999999997,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.037503999999999996,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.01136,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.011296,
+        "prefill_wall_milliseconds": 19.679538,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.040768,
+        "prompt_plan_wall_milliseconds": 0.000096,
+        "session_acquire_wall_milliseconds": 0.00712,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.007072,
+        "prefill_wall_milliseconds": 18.418801,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.037888,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.006064,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.006016,
+        "prefill_wall_milliseconds": 18.420416,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.034688,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.00552,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.005456,
+        "prefill_wall_milliseconds": 18.433056999999998,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.060048,
+        "prompt_plan_wall_milliseconds": 0.000176,
+        "session_acquire_wall_milliseconds": 0.007152,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.007088,
+        "prefill_wall_milliseconds": 18.434097,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.039472,
+        "prompt_plan_wall_milliseconds": 0.000096,
+        "session_acquire_wall_milliseconds": 0.006384,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.006288,
+        "prefill_wall_milliseconds": 18.427888,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.041488,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.00816,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.008016,
+        "prefill_wall_milliseconds": 18.431744,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.039168,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.007776,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.0076159999999999995,
+        "prefill_wall_milliseconds": 20.217698,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.060368000000000005,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.01096,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.010896000000000001,
+        "prefill_wall_milliseconds": 18.455905,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.041631999999999995,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.007312,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.0072640000000000005,
+        "prefill_wall_milliseconds": 18.46592,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.035904,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.00592,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.005856,
+        "prefill_wall_milliseconds": 18.442239999999998,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.059632000000000004,
+        "prompt_plan_wall_milliseconds": 0.000288,
+        "session_acquire_wall_milliseconds": 0.009648,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.009488,
+        "prefill_wall_milliseconds": 18.460463999999998,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.038896,
+        "prompt_plan_wall_milliseconds": 0.000144,
+        "session_acquire_wall_milliseconds": 0.0063679999999999995,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.006224,
+        "prefill_wall_milliseconds": 18.460817000000002,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.043328000000000005,
+        "prompt_plan_wall_milliseconds": 0.000192,
+        "session_acquire_wall_milliseconds": 0.007232000000000001,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.00712,
+        "prefill_wall_milliseconds": 18.417744,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.036224,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.005823999999999999,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.0057599999999999995,
+        "prefill_wall_milliseconds": 18.467376,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.050544000000000006,
+        "prompt_plan_wall_milliseconds": 0.00016,
+        "session_acquire_wall_milliseconds": 0.006832,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.0066560000000000005,
+        "prefill_wall_milliseconds": 18.452081,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.0392,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.005968,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.00592,
+        "prefill_wall_milliseconds": 18.736689000000002,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.035552,
+        "prompt_plan_wall_milliseconds": 0.000096,
+        "session_acquire_wall_milliseconds": 0.0059359999999999994,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.005872,
+        "prefill_wall_milliseconds": 18.450416,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.054816,
+        "prompt_plan_wall_milliseconds": 0.00016,
+        "session_acquire_wall_milliseconds": 0.00872,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.008624000000000001,
+        "prefill_wall_milliseconds": 18.501489,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.040576,
+        "prompt_plan_wall_milliseconds": 0.000144,
+        "session_acquire_wall_milliseconds": 0.007872,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.007776,
+        "prefill_wall_milliseconds": 18.446161,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.037024,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.006496,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.006384,
+        "prefill_wall_milliseconds": 18.549697000000002,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.035856,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.006096,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.006,
+        "prefill_wall_milliseconds": 18.432416,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.057185,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.007904,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.00784,
+        "prefill_wall_milliseconds": 18.452848,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.040689,
+        "prompt_plan_wall_milliseconds": 0.000144,
+        "session_acquire_wall_milliseconds": 0.00664,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.006576,
+        "prefill_wall_milliseconds": 18.452352,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.039904,
+        "prompt_plan_wall_milliseconds": 0.000144,
+        "session_acquire_wall_milliseconds": 0.00608,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.0059359999999999994,
+        "prefill_wall_milliseconds": 18.447392999999998,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.056159999999999995,
+        "prompt_plan_wall_milliseconds": 0.000192,
+        "session_acquire_wall_milliseconds": 0.009824,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.00976,
+        "prefill_wall_milliseconds": 18.661728999999998,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.044,
+        "prompt_plan_wall_milliseconds": 0.000192,
+        "session_acquire_wall_milliseconds": 0.007696000000000001,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.007584,
+        "prefill_wall_milliseconds": 18.439809,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.037168,
+        "prompt_plan_wall_milliseconds": 0.000096,
+        "session_acquire_wall_milliseconds": 0.006272000000000001,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.006176,
+        "prefill_wall_milliseconds": 18.461185,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.035151999999999996,
+        "prompt_plan_wall_milliseconds": 0.000096,
+        "session_acquire_wall_milliseconds": 0.00568,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.005616,
+        "prefill_wall_milliseconds": 18.458769,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.044528,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.007888,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.007824,
+        "prefill_wall_milliseconds": 18.452321,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.037184,
+        "prompt_plan_wall_milliseconds": 0.000096,
+        "session_acquire_wall_milliseconds": 0.005568,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.005488,
+        "prefill_wall_milliseconds": 18.452833,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.033984,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.005568,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.005488,
+        "prefill_wall_milliseconds": 18.459025,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.043536,
+        "prompt_plan_wall_milliseconds": 0.00025600000000000004,
+        "session_acquire_wall_milliseconds": 0.006944,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.006816,
+        "prefill_wall_milliseconds": 18.707456,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.060736000000000005,
+        "prompt_plan_wall_milliseconds": 0.00025600000000000004,
+        "session_acquire_wall_milliseconds": 0.011392000000000001,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.011184,
+        "prefill_wall_milliseconds": 18.486352,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.044879999999999996,
+        "prompt_plan_wall_milliseconds": 0.000144,
+        "session_acquire_wall_milliseconds": 0.006496,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.006432,
+        "prefill_wall_milliseconds": 18.446576,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.036511999999999996,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.0056,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.005488,
+        "prefill_wall_milliseconds": 18.46336,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.054752,
+        "prompt_plan_wall_milliseconds": 0.000272,
+        "session_acquire_wall_milliseconds": 0.009104,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.008896,
+        "prefill_wall_milliseconds": 18.48992,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.036416,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.005968,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.005888,
+        "prefill_wall_milliseconds": 18.488319999999998,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.049935999999999994,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.007312,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.007248,
+        "prefill_wall_milliseconds": 18.450049,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.041999999999999996,
+        "prompt_plan_wall_milliseconds": 0.000192,
+        "session_acquire_wall_milliseconds": 0.00664,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.00648,
+        "prefill_wall_milliseconds": 18.698609,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.047008,
+        "prompt_plan_wall_milliseconds": 0.000176,
+        "session_acquire_wall_milliseconds": 0.006912,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.0068639999999999994,
+        "prefill_wall_milliseconds": 18.450673000000002,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.036528,
+        "prompt_plan_wall_milliseconds": 0.000096,
+        "session_acquire_wall_milliseconds": 0.006224,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.0061600000000000005,
+        "prefill_wall_milliseconds": 18.469455999999997,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.035856,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.005984,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.0059359999999999994,
+        "prefill_wall_milliseconds": 18.531697,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.059824,
+        "prompt_plan_wall_milliseconds": 0.000192,
+        "session_acquire_wall_milliseconds": 0.009856,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.009792,
+        "prefill_wall_milliseconds": 18.480321,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.037856,
+        "prompt_plan_wall_milliseconds": 0.00012800000000000002,
+        "session_acquire_wall_milliseconds": 0.0074399999999999996,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.00728,
+        "prefill_wall_milliseconds": 18.461313,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.035216000000000004,
+        "prompt_plan_wall_milliseconds": 0.00012800000000000002,
+        "session_acquire_wall_milliseconds": 0.006288,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.0061920000000000005,
+        "prefill_wall_milliseconds": 18.486895999999998,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.046656,
+        "prompt_plan_wall_milliseconds": 0.000192,
+        "session_acquire_wall_milliseconds": 0.00848,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.008416,
+        "prefill_wall_milliseconds": 18.677760000000003,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.055216,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.009136,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.009056,
+        "prefill_wall_milliseconds": 18.617857,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.062593,
+        "prompt_plan_wall_milliseconds": 0.000224,
+        "session_acquire_wall_milliseconds": 0.011312,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.011248,
+        "prefill_wall_milliseconds": 20.549954,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.060017,
+        "prompt_plan_wall_milliseconds": 0.000192,
+        "session_acquire_wall_milliseconds": 0.008896,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.00872,
+        "prefill_wall_milliseconds": 19.891665,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.059840000000000004,
+        "prompt_plan_wall_milliseconds": 0.00025600000000000004,
+        "session_acquire_wall_milliseconds": 0.012480000000000002,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.012416,
+        "prefill_wall_milliseconds": 19.384097,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.0564,
+        "prompt_plan_wall_milliseconds": 0.00020800000000000001,
+        "session_acquire_wall_milliseconds": 0.011312,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.0112,
+        "prefill_wall_milliseconds": 18.933505,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.059424,
+        "prompt_plan_wall_milliseconds": 0.00020800000000000001,
+        "session_acquire_wall_milliseconds": 0.012,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.011904,
+        "prefill_wall_milliseconds": 19.670337999999997,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.066256,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.008736,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.008672,
+        "prefill_wall_milliseconds": 19.161857,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.064272,
+        "prompt_plan_wall_milliseconds": 0.000112,
+        "session_acquire_wall_milliseconds": 0.011888000000000001,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.011824000000000001,
+        "prefill_wall_milliseconds": 18.996913,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.057888,
+        "prompt_plan_wall_milliseconds": 0.000192,
+        "session_acquire_wall_milliseconds": 0.011184,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.011023999999999999,
+        "prefill_wall_milliseconds": 18.915345,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.056656,
+        "prompt_plan_wall_milliseconds": 0.000272,
+        "session_acquire_wall_milliseconds": 0.008879999999999999,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.0088,
+        "prefill_wall_milliseconds": 19.350530000000003,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.056288,
+        "prompt_plan_wall_milliseconds": 0.000192,
+        "session_acquire_wall_milliseconds": 0.008656,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.008576,
+        "prefill_wall_milliseconds": 19.180513,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.056576,
+        "prompt_plan_wall_milliseconds": 0.000176,
+        "session_acquire_wall_milliseconds": 0.009712,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.009648,
+        "prefill_wall_milliseconds": 18.693361,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.059648,
+        "prompt_plan_wall_milliseconds": 0.00023999999999999998,
+        "session_acquire_wall_milliseconds": 0.010976,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.010896000000000001,
+        "prefill_wall_milliseconds": 18.594305,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.060000000000000005,
+        "prompt_plan_wall_milliseconds": 0.000192,
+        "session_acquire_wall_milliseconds": 0.010832000000000001,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.010672000000000001,
+        "prefill_wall_milliseconds": 18.600689,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.057423999999999996,
+        "prompt_plan_wall_milliseconds": 0.000272,
+        "session_acquire_wall_milliseconds": 0.01,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.009935999999999999,
+        "prefill_wall_milliseconds": 18.775393,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.052384,
+        "prompt_plan_wall_milliseconds": 0.000192,
+        "session_acquire_wall_milliseconds": 0.010672000000000001,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.010608000000000001,
+        "prefill_wall_milliseconds": 18.896832999999997,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.05208,
+        "prompt_plan_wall_milliseconds": 0.000224,
+        "session_acquire_wall_milliseconds": 0.009456,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.009392,
+        "prefill_wall_milliseconds": 19.227569,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.0644,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.0104,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.010336000000000001,
+        "prefill_wall_milliseconds": 19.280497,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.064528,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.008496,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.008432,
+        "prefill_wall_milliseconds": 19.900993,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.064144,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.010176000000000001,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.010112000000000001,
+        "prefill_wall_milliseconds": 18.783521,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.060064,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.01136,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.011296,
+        "prefill_wall_milliseconds": 18.714305,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.055616,
+        "prompt_plan_wall_milliseconds": 0.000176,
+        "session_acquire_wall_milliseconds": 0.00832,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.008256,
+        "prefill_wall_milliseconds": 19.070977,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.060672,
+        "prompt_plan_wall_milliseconds": 0.000176,
+        "session_acquire_wall_milliseconds": 0.01008,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.01,
+        "prefill_wall_milliseconds": 18.557488,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.059488,
+        "prompt_plan_wall_milliseconds": 0.00025600000000000004,
+        "session_acquire_wall_milliseconds": 0.009584,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.009375999999999999,
+        "prefill_wall_milliseconds": 19.373330000000003,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.060656,
+        "prompt_plan_wall_milliseconds": 0.000192,
+        "session_acquire_wall_milliseconds": 0.009888,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.009824,
+        "prefill_wall_milliseconds": 18.492257000000002,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.040624,
+        "prompt_plan_wall_milliseconds": 0.000096,
+        "session_acquire_wall_milliseconds": 0.006144,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.006064,
+        "prefill_wall_milliseconds": 18.483569,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.036288,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.006144,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.006096,
+        "prefill_wall_milliseconds": 18.478816,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.060064,
+        "prompt_plan_wall_milliseconds": 0.000192,
+        "session_acquire_wall_milliseconds": 0.009024,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.008864,
+        "prefill_wall_milliseconds": 18.498832999999998,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.044832000000000004,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.006,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.0059359999999999994,
+        "prefill_wall_milliseconds": 18.496128,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.038784,
+        "prompt_plan_wall_milliseconds": 0.000096,
+        "session_acquire_wall_milliseconds": 0.0074399999999999996,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.007376000000000001,
+        "prefill_wall_milliseconds": 18.468145,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.038624,
+        "prompt_plan_wall_milliseconds": 0.000112,
+        "session_acquire_wall_milliseconds": 0.00696,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.006895999999999999,
+        "prefill_wall_milliseconds": 18.591137,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.063088,
+        "prompt_plan_wall_milliseconds": 0.00016,
+        "session_acquire_wall_milliseconds": 0.007488,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.007424,
+        "prefill_wall_milliseconds": 18.468033,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.044336,
+        "prompt_plan_wall_milliseconds": 0.000112,
+        "session_acquire_wall_milliseconds": 0.006912,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.006848,
+        "prefill_wall_milliseconds": 18.589247999999998,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.03656,
+        "prompt_plan_wall_milliseconds": 0.000096,
+        "session_acquire_wall_milliseconds": 0.005327999999999999,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.005264,
+        "prefill_wall_milliseconds": 18.479393,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.056368,
+        "prompt_plan_wall_milliseconds": 0.00016,
+        "session_acquire_wall_milliseconds": 0.0076,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.0074399999999999996,
+        "prefill_wall_milliseconds": 18.492688,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.040735999999999994,
+        "prompt_plan_wall_milliseconds": 0.000096,
+        "session_acquire_wall_milliseconds": 0.006752,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.006688,
+        "prefill_wall_milliseconds": 18.452081,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.035344,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.0056,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.005536,
+        "prefill_wall_milliseconds": 18.473537,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.035456,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.005472,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.005376,
+        "prefill_wall_milliseconds": 18.704528,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.060752,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.009744000000000001,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.009680000000000001,
+        "prefill_wall_milliseconds": 18.517169,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.03848,
+        "prompt_plan_wall_milliseconds": 0.000096,
+        "session_acquire_wall_milliseconds": 0.0066560000000000005,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.006576,
+        "prefill_wall_milliseconds": 18.487105,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.058384000000000005,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.00952,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.009456,
+        "prefill_wall_milliseconds": 18.474881,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.055791999999999994,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.009296,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.009232,
+        "prefill_wall_milliseconds": 18.476576,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.037328,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.005568,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.005504,
+        "prefill_wall_milliseconds": 18.490672999999997,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.039296,
+        "prompt_plan_wall_milliseconds": 0.000096,
+        "session_acquire_wall_milliseconds": 0.00608,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.006016,
+        "prefill_wall_milliseconds": 18.461297000000002,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.034512,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.005504,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.005456,
+        "prefill_wall_milliseconds": 18.502689,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.058336,
+        "prompt_plan_wall_milliseconds": 0.00032,
+        "session_acquire_wall_milliseconds": 0.009088,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.008943999999999999,
+        "prefill_wall_milliseconds": 18.478689,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.0384,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.0070079999999999995,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.006895999999999999,
+        "prefill_wall_milliseconds": 18.456241000000002,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.036416,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.005888,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.005823999999999999,
+        "prefill_wall_milliseconds": 18.499361,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.055472,
+        "prompt_plan_wall_milliseconds": 0.00016,
+        "session_acquire_wall_milliseconds": 0.008656,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.008608,
+        "prefill_wall_milliseconds": 18.473121,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.038784,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.006240000000000001,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.006176,
+        "prefill_wall_milliseconds": 18.485041,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.035536,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.00584,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.0056960000000000005,
+        "prefill_wall_milliseconds": 18.493201,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.034368,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.005327999999999999,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.005248,
+        "prefill_wall_milliseconds": 18.468881,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.0424,
+        "prompt_plan_wall_milliseconds": 0.000192,
+        "session_acquire_wall_milliseconds": 0.00688,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.006832,
+        "prefill_wall_milliseconds": 18.494799999999998,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.035104,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.006032,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.00592,
+        "prefill_wall_milliseconds": 18.478848,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.038383999999999995,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.006224,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.0061600000000000005,
+        "prefill_wall_milliseconds": 18.487633,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.051904000000000006,
+        "prompt_plan_wall_milliseconds": 0.00020800000000000001,
+        "session_acquire_wall_milliseconds": 0.009552,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.009488,
+        "prefill_wall_milliseconds": 18.50168,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.056608,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.008576,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.008496,
+        "prefill_wall_milliseconds": 18.477681,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.038992,
+        "prompt_plan_wall_milliseconds": 0.000288,
+        "session_acquire_wall_milliseconds": 0.006096,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.006032,
+        "prefill_wall_milliseconds": 18.481553,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.03656,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.006272000000000001,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.006208,
+        "prefill_wall_milliseconds": 18.492864,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.054976,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.008223999999999999,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.00816,
+        "prefill_wall_milliseconds": 18.561201,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.042384,
+        "prompt_plan_wall_milliseconds": 0.000096,
+        "session_acquire_wall_milliseconds": 0.006448,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.0063999999999999994,
+        "prefill_wall_milliseconds": 18.469793000000003,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.037952,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.005568,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.005488,
+        "prefill_wall_milliseconds": 18.469761000000002,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.055439999999999996,
+        "prompt_plan_wall_milliseconds": 0.00023999999999999998,
+        "session_acquire_wall_milliseconds": 0.0074399999999999996,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.00736,
+        "prefill_wall_milliseconds": 18.569649000000002,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.041648,
+        "prompt_plan_wall_milliseconds": 0.00016,
+        "session_acquire_wall_milliseconds": 0.00776,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.007696000000000001,
+        "prefill_wall_milliseconds": 18.482881,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.036848,
+        "prompt_plan_wall_milliseconds": 0.000096,
+        "session_acquire_wall_milliseconds": 0.006256,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.0061920000000000005,
+        "prefill_wall_milliseconds": 18.455408,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.036544,
+        "prompt_plan_wall_milliseconds": 0.00008,
+        "session_acquire_wall_milliseconds": 0.006304,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.006256,
+        "prefill_wall_milliseconds": 18.477919999999997,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.053344,
+        "prompt_plan_wall_milliseconds": 0.000304,
+        "session_acquire_wall_milliseconds": 0.007679999999999999,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.007552,
+        "prefill_wall_milliseconds": 18.475824,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.039375999999999994,
+        "prompt_plan_wall_milliseconds": 0.000112,
+        "session_acquire_wall_milliseconds": 0.005888,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.005776,
+        "prefill_wall_milliseconds": 18.5084,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.037232,
+        "prompt_plan_wall_milliseconds": 0.000112,
+        "session_acquire_wall_milliseconds": 0.005616,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.0055520000000000005,
+        "prefill_wall_milliseconds": 18.474384999999998,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.047472,
+        "prompt_plan_wall_milliseconds": 0.000176,
+        "session_acquire_wall_milliseconds": 0.009616000000000001,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.009552,
+        "prefill_wall_milliseconds": 18.694097,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.054928,
+        "prompt_plan_wall_milliseconds": 0.00023999999999999998,
+        "session_acquire_wall_milliseconds": 0.0104,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.010064,
+        "prefill_wall_milliseconds": 18.4752,
+        "session_pool_hit": true
+      },
+      {
+        "tokenize_wall_milliseconds": 0.037376,
+        "prompt_plan_wall_milliseconds": 0.000112,
+        "session_acquire_wall_milliseconds": 0.005616,
+        "session_create_wall_milliseconds": 0.0,
+        "session_reset_wall_milliseconds": 0.005472,
+        "prefill_wall_milliseconds": 18.456879999999998,
+        "session_pool_hit": true
+      }
+    ],
+    "tokenize_p95_milliseconds": 0.060752,
+    "prompt_plan_p95_milliseconds": 0.00025600000000000004,
+    "session_acquire_p95_milliseconds": 0.011312,
+    "session_create_p95_milliseconds": 0.0,
+    "session_reset_p95_milliseconds": 0.011184,
+    "prefill_p95_milliseconds": 19.350530000000003
+  },
+  "sampled_batches": [
+    {
+      "concurrency": 1,
+      "rounds": 3,
+      "greedy": false,
+      "exact_reference_parity": true,
+      "aggregate_session_bytes": 54901996,
+      "rounds_report": [
+        {
+          "wall_milliseconds": 321.66260600000004,
+          "aggregate_audio_seconds": 0.56,
+          "aggregate_realtime_factor": 0.5743975107142857,
+          "all_pool_hits": true,
+          "requests": [
+            {
+              "seed": 11,
+              "frame_count": 7,
+              "ended_by_eos": true,
+              "codec_hash_fnv1a64": "75d14b66701e0200",
+              "ttfa_wall_milliseconds": 61.063655000000004,
+              "request_wall_milliseconds": 321.49987000000004,
+              "start_timing": {
+                "tokenize_wall_milliseconds": 0.090593,
+                "prompt_plan_wall_milliseconds": 0.000112,
+                "session_acquire_wall_milliseconds": 0.016832,
+                "session_create_wall_milliseconds": 0.0,
+                "session_reset_wall_milliseconds": 0.016624,
+                "prefill_wall_milliseconds": 18.585456,
+                "session_pool_hit": true
+              },
+              "session_memory": {
+                "talker_kv_bytes": 33030144,
+                "predictor_kv_bytes": 327680,
+                "workspace_bytes": 21544172,
+                "max_sequence_length": 288
+              },
+              "runtime_state": {
+                "abi_version": 1,
+                "phase": "ended",
+                "talker_position": 33,
+                "semantic_history_count": 8,
+                "frames_generated": 7,
+                "device_sample_count": 113,
+                "host_sync_count": 8
+              }
+            }
+          ]
+        },
+        {
+          "wall_milliseconds": 318.389372,
+          "aggregate_audio_seconds": 0.56,
+          "aggregate_realtime_factor": 0.56855245,
+          "all_pool_hits": true,
+          "requests": [
+            {
+              "seed": 11,
+              "frame_count": 7,
+              "ended_by_eos": true,
+              "codec_hash_fnv1a64": "75d14b66701e0200",
+              "ttfa_wall_milliseconds": 62.391543,
+              "request_wall_milliseconds": 318.20615499999997,
+              "start_timing": {
+                "tokenize_wall_milliseconds": 0.147104,
+                "prompt_plan_wall_milliseconds": 0.000192,
+                "session_acquire_wall_milliseconds": 0.058832,
+                "session_create_wall_milliseconds": 0.0,
+                "session_reset_wall_milliseconds": 0.058480000000000004,
+                "prefill_wall_milliseconds": 18.842065,
+                "session_pool_hit": true
+              },
+              "session_memory": {
+                "talker_kv_bytes": 33030144,
+                "predictor_kv_bytes": 327680,
+                "workspace_bytes": 21544172,
+                "max_sequence_length": 288
+              },
+              "runtime_state": {
+                "abi_version": 1,
+                "phase": "ended",
+                "talker_position": 33,
+                "semantic_history_count": 8,
+                "frames_generated": 7,
+                "device_sample_count": 113,
+                "host_sync_count": 8
+              }
+            }
+          ]
+        },
+        {
+          "wall_milliseconds": 316.383049,
+          "aggregate_audio_seconds": 0.56,
+          "aggregate_realtime_factor": 0.5649697303571428,
+          "all_pool_hits": true,
+          "requests": [
+            {
+              "seed": 11,
+              "frame_count": 7,
+              "ended_by_eos": true,
+              "codec_hash_fnv1a64": "75d14b66701e0200",
+              "ttfa_wall_milliseconds": 61.19143,
+              "request_wall_milliseconds": 316.110729,
+              "start_timing": {
+                "tokenize_wall_milliseconds": 0.142176,
+                "prompt_plan_wall_milliseconds": 0.00012800000000000002,
+                "session_acquire_wall_milliseconds": 0.04112,
+                "session_create_wall_milliseconds": 0.0,
+                "session_reset_wall_milliseconds": 0.040832,
+                "prefill_wall_milliseconds": 18.600465,
+                "session_pool_hit": true
+              },
+              "session_memory": {
+                "talker_kv_bytes": 33030144,
+                "predictor_kv_bytes": 327680,
+                "workspace_bytes": 21544172,
+                "max_sequence_length": 288
+              },
+              "runtime_state": {
+                "abi_version": 1,
+                "phase": "ended",
+                "talker_position": 33,
+                "semantic_history_count": 8,
+                "frames_generated": 7,
+                "device_sample_count": 113,
+                "host_sync_count": 8
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "concurrency": 3,
+      "rounds": 3,
+      "greedy": false,
+      "exact_reference_parity": true,
+      "aggregate_session_bytes": 164705988,
+      "rounds_report": [
+        {
+          "wall_milliseconds": 682.524463,
+          "aggregate_audio_seconds": 1.6,
+          "aggregate_realtime_factor": 0.4265777893749999,
+          "all_pool_hits": true,
+          "requests": [
+            {
+              "seed": 11,
+              "frame_count": 7,
+              "ended_by_eos": true,
+              "codec_hash_fnv1a64": "75d14b66701e0200",
+              "ttfa_wall_milliseconds": 134.297959,
+              "request_wall_milliseconds": 660.885995,
+              "start_timing": {
+                "tokenize_wall_milliseconds": 0.14464,
+                "prompt_plan_wall_milliseconds": 0.000192,
+                "session_acquire_wall_milliseconds": 0.057712,
+                "session_create_wall_milliseconds": 0.0,
+                "session_reset_wall_milliseconds": 0.057488000000000004,
+                "prefill_wall_milliseconds": 45.040023999999995,
+                "session_pool_hit": true
+              },
+              "session_memory": {
+                "talker_kv_bytes": 33030144,
+                "predictor_kv_bytes": 327680,
+                "workspace_bytes": 21544172,
+                "max_sequence_length": 288
+              },
+              "runtime_state": {
+                "abi_version": 1,
+                "phase": "ended",
+                "talker_position": 33,
+                "semantic_history_count": 8,
+                "frames_generated": 7,
+                "device_sample_count": 113,
+                "host_sync_count": 8
+              }
+            },
+            {
+              "seed": 22,
+              "frame_count": 6,
+              "ended_by_eos": true,
+              "codec_hash_fnv1a64": "0106dcf42d07bcf7",
+              "ttfa_wall_milliseconds": 146.332962,
+              "request_wall_milliseconds": 630.434112,
+              "start_timing": {
+                "tokenize_wall_milliseconds": 0.14296,
+                "prompt_plan_wall_milliseconds": 0.00012800000000000002,
+                "session_acquire_wall_milliseconds": 0.058528,
+                "session_create_wall_milliseconds": 0.0,
+                "session_reset_wall_milliseconds": 0.058096,
+                "prefill_wall_milliseconds": 47.035849999999996,
+                "session_pool_hit": true
+              },
+              "session_memory": {
+                "talker_kv_bytes": 33030144,
+                "predictor_kv_bytes": 327680,
+                "workspace_bytes": 21544172,
+                "max_sequence_length": 288
+              },
+              "runtime_state": {
+                "abi_version": 1,
+                "phase": "ended",
+                "talker_position": 32,
+                "semantic_history_count": 7,
+                "frames_generated": 6,
+                "device_sample_count": 97,
+                "host_sync_count": 7
+              }
+            },
+            {
+              "seed": 11,
+              "frame_count": 7,
+              "ended_by_eos": true,
+              "codec_hash_fnv1a64": "75d14b66701e0200",
+              "ttfa_wall_milliseconds": 143.209823,
+              "request_wall_milliseconds": 682.406014,
+              "start_timing": {
+                "tokenize_wall_milliseconds": 0.17494400000000002,
+                "prompt_plan_wall_milliseconds": 0.000176,
+                "session_acquire_wall_milliseconds": 0.048496,
+                "session_create_wall_milliseconds": 0.0,
+                "session_reset_wall_milliseconds": 0.048256,
+                "prefill_wall_milliseconds": 46.501177,
+                "session_pool_hit": true
+              },
+              "session_memory": {
+                "talker_kv_bytes": 33030144,
+                "predictor_kv_bytes": 327680,
+                "workspace_bytes": 21544172,
+                "max_sequence_length": 288
+              },
+              "runtime_state": {
+                "abi_version": 1,
+                "phase": "ended",
+                "talker_position": 33,
+                "semantic_history_count": 8,
+                "frames_generated": 7,
+                "device_sample_count": 113,
+                "host_sync_count": 8
+              }
+            }
+          ]
+        },
+        {
+          "wall_milliseconds": 687.536451,
+          "aggregate_audio_seconds": 1.6,
+          "aggregate_realtime_factor": 0.429710281875,
+          "all_pool_hits": true,
+          "requests": [
+            {
+              "seed": 11,
+              "frame_count": 7,
+              "ended_by_eos": true,
+              "codec_hash_fnv1a64": "75d14b66701e0200",
+              "ttfa_wall_milliseconds": 133.233254,
+              "request_wall_milliseconds": 667.009137,
+              "start_timing": {
+                "tokenize_wall_milliseconds": 0.120832,
+                "prompt_plan_wall_milliseconds": 0.000112,
+                "session_acquire_wall_milliseconds": 0.024144000000000002,
+                "session_create_wall_milliseconds": 0.0,
+                "session_reset_wall_milliseconds": 0.023872,
+                "prefill_wall_milliseconds": 44.547863,
+                "session_pool_hit": true
+              },
+              "session_memory": {
+                "talker_kv_bytes": 33030144,
+                "predictor_kv_bytes": 327680,
+                "workspace_bytes": 21544172,
+                "max_sequence_length": 288
+              },
+              "runtime_state": {
+                "abi_version": 1,
+                "phase": "ended",
+                "talker_position": 33,
+                "semantic_history_count": 8,
+                "frames_generated": 7,
+                "device_sample_count": 113,
+                "host_sync_count": 8
+              }
+            },
+            {
+              "seed": 22,
+              "frame_count": 6,
+              "ended_by_eos": true,
+              "codec_hash_fnv1a64": "0106dcf42d07bcf7",
+              "ttfa_wall_milliseconds": 144.372608,
+              "request_wall_milliseconds": 632.16261,
+              "start_timing": {
+                "tokenize_wall_milliseconds": 0.134512,
+                "prompt_plan_wall_milliseconds": 0.00020800000000000001,
+                "session_acquire_wall_milliseconds": 0.028608,
+                "session_create_wall_milliseconds": 0.0,
+                "session_reset_wall_milliseconds": 0.028304,
+                "prefill_wall_milliseconds": 47.048634,
+                "session_pool_hit": true
+              },
+              "session_memory": {
+                "talker_kv_bytes": 33030144,
+                "predictor_kv_bytes": 327680,
+                "workspace_bytes": 21544172,
+                "max_sequence_length": 288
+              },
+              "runtime_state": {
+                "abi_version": 1,
+                "phase": "ended",
+                "talker_position": 32,
+                "semantic_history_count": 7,
+                "frames_generated": 6,
+                "device_sample_count": 97,
+                "host_sync_count": 7
+              }
+            },
+            {
+              "seed": 11,
+              "frame_count": 7,
+              "ended_by_eos": true,
+              "codec_hash_fnv1a64": "75d14b66701e0200",
+              "ttfa_wall_milliseconds": 143.293055,
+              "request_wall_milliseconds": 687.289187,
+              "start_timing": {
+                "tokenize_wall_milliseconds": 0.12636799999999998,
+                "prompt_plan_wall_milliseconds": 0.000112,
+                "session_acquire_wall_milliseconds": 0.020112,
+                "session_create_wall_milliseconds": 0.0,
+                "session_reset_wall_milliseconds": 0.019743999999999998,
+                "prefill_wall_milliseconds": 46.861529,
+                "session_pool_hit": true
+              },
+              "session_memory": {
+                "talker_kv_bytes": 33030144,
+                "predictor_kv_bytes": 327680,
+                "workspace_bytes": 21544172,
+                "max_sequence_length": 288
+              },
+              "runtime_state": {
+                "abi_version": 1,
+                "phase": "ended",
+                "talker_position": 33,
+                "semantic_history_count": 8,
+                "frames_generated": 7,
+                "device_sample_count": 113,
+                "host_sync_count": 8
+              }
+            }
+          ]
+        },
+        {
+          "wall_milliseconds": 685.591458,
+          "aggregate_audio_seconds": 1.6,
+          "aggregate_realtime_factor": 0.42849466124999996,
+          "all_pool_hits": true,
+          "requests": [
+            {
+              "seed": 11,
+              "frame_count": 7,
+              "ended_by_eos": true,
+              "codec_hash_fnv1a64": "75d14b66701e0200",
+              "ttfa_wall_milliseconds": 148.67808399999998,
+              "request_wall_milliseconds": 685.238673,
+              "start_timing": {
+                "tokenize_wall_milliseconds": 0.158176,
+                "prompt_plan_wall_milliseconds": 0.00016,
+                "session_acquire_wall_milliseconds": 0.080016,
+                "session_create_wall_milliseconds": 0.0,
+                "session_reset_wall_milliseconds": 0.079552,
+                "prefill_wall_milliseconds": 48.220667,
+                "session_pool_hit": true
+              },
+              "session_memory": {
+                "talker_kv_bytes": 33030144,
+                "predictor_kv_bytes": 327680,
+                "workspace_bytes": 21544172,
+                "max_sequence_length": 288
+              },
+              "runtime_state": {
+                "abi_version": 1,
+                "phase": "ended",
+                "talker_position": 33,
+                "semantic_history_count": 8,
+                "frames_generated": 7,
+                "device_sample_count": 113,
+                "host_sync_count": 8
+              }
+            },
+            {
+              "seed": 22,
+              "frame_count": 6,
+              "ended_by_eos": true,
+              "codec_hash_fnv1a64": "0106dcf42d07bcf7",
+              "ttfa_wall_milliseconds": 144.21550399999998,
+              "request_wall_milliseconds": 604.647626,
+              "start_timing": {
+                "tokenize_wall_milliseconds": 0.07836800000000001,
+                "prompt_plan_wall_milliseconds": 0.000096,
+                "session_acquire_wall_milliseconds": 0.020304,
+                "session_create_wall_milliseconds": 0.0,
+                "session_reset_wall_milliseconds": 0.020224000000000002,
+                "prefill_wall_milliseconds": 47.719051,
+                "session_pool_hit": true
+              },
+              "session_memory": {
+                "talker_kv_bytes": 33030144,
+                "predictor_kv_bytes": 327680,
+                "workspace_bytes": 21544172,
+                "max_sequence_length": 288
+              },
+              "runtime_state": {
+                "abi_version": 1,
+                "phase": "ended",
+                "talker_position": 32,
+                "semantic_history_count": 7,
+                "frames_generated": 6,
+                "device_sample_count": 97,
+                "host_sync_count": 7
+              }
+            },
+            {
+              "seed": 11,
+              "frame_count": 7,
+              "ended_by_eos": true,
+              "codec_hash_fnv1a64": "75d14b66701e0200",
+              "ttfa_wall_milliseconds": 133.589927,
+              "request_wall_milliseconds": 657.1148559999999,
+              "start_timing": {
+                "tokenize_wall_milliseconds": 0.074192,
+                "prompt_plan_wall_milliseconds": 0.000112,
+                "session_acquire_wall_milliseconds": 0.01848,
+                "session_create_wall_milliseconds": 0.0,
+                "session_reset_wall_milliseconds": 0.018368000000000002,
+                "prefill_wall_milliseconds": 44.591144,
+                "session_pool_hit": true
+              },
+              "session_memory": {
+                "talker_kv_bytes": 33030144,
+                "predictor_kv_bytes": 327680,
+                "workspace_bytes": 21544172,
+                "max_sequence_length": 288
+              },
+              "runtime_state": {
+                "abi_version": 1,
+                "phase": "ended",
+                "talker_position": 33,
+                "semantic_history_count": 8,
+                "frames_generated": 7,
+                "device_sample_count": 113,
+                "host_sync_count": 8
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "concurrency": 6,
+      "rounds": 3,
+      "greedy": false,
+      "exact_reference_parity": true,
+      "aggregate_session_bytes": 329411976,
+      "rounds_report": [
+        {
+          "wall_milliseconds": 1341.277816,
+          "aggregate_audio_seconds": 3.36,
+          "aggregate_realtime_factor": 0.3991898261904762,
+          "all_pool_hits": true,
+          "requests": [
+            {
+              "seed": 11,
+              "frame_count": 7,
+              "ended_by_eos": true,
+              "codec_hash_fnv1a64": "75d14b66701e0200",
+              "ttfa_wall_milliseconds": 257.634261,
+              "request_wall_milliseconds": 1253.5760579999999,
+              "start_timing": {
+                "tokenize_wall_milliseconds": 0.11566399999999999,
+                "prompt_plan_wall_milliseconds": 0.000112,
+                "session_acquire_wall_milliseconds": 0.027008,
+                "session_create_wall_milliseconds": 0.0,
+                "session_reset_wall_milliseconds": 0.026752,
+                "prefill_wall_milliseconds": 86.538653,
+                "session_pool_hit": true
+              },
+              "session_memory": {
+                "talker_kv_bytes": 33030144,
+                "predictor_kv_bytes": 327680,
+                "workspace_bytes": 21544172,
+                "max_sequence_length": 288
+              },
+              "runtime_state": {
+                "abi_version": 1,
+                "phase": "ended",
+                "talker_position": 33,
+                "semantic_history_count": 8,
+                "frames_generated": 7,
+                "device_sample_count": 113,
+                "host_sync_count": 8
+              }
+            },
+            {
+              "seed": 22,
+              "frame_count": 6,
+              "ended_by_eos": true,
+              "codec_hash_fnv1a64": "0106dcf42d07bcf7",
+              "ttfa_wall_milliseconds": 257.906901,
+              "request_wall_milliseconds": 1112.795005,
+              "start_timing": {
+                "tokenize_wall_milliseconds": 0.129776,
+                "prompt_plan_wall_milliseconds": 0.000192,
+                "session_acquire_wall_milliseconds": 0.042768,
+                "session_create_wall_milliseconds": 0.0,
+                "session_reset_wall_milliseconds": 0.042351999999999994,
+                "prefill_wall_milliseconds": 83.322266,
+                "session_pool_hit": true
+              },
+              "session_memory": {
+                "talker_kv_bytes": 33030144,
+                "predictor_kv_bytes": 327680,
+                "workspace_bytes": 21544172,
+                "max_sequence_length": 288
+              },
+              "runtime_state": {
+                "abi_version": 1,
+                "phase": "ended",
+                "talker_position": 32,
+                "semantic_history_count": 7,
+                "frames_generated": 6,
+                "device_sample_count": 97,
+                "host_sync_count": 7
+              }
+            },
+            {
+              "seed": 11,
+              "frame_count": 7,
+              "ended_by_eos": true,
+              "codec_hash_fnv1a64": "75d14b66701e0200",
+              "ttfa_wall_milliseconds": 257.91240500000004,
+              "request_wall_milliseconds": 1254.655947,
+              "start_timing": {
+                "tokenize_wall_milliseconds": 0.115872,
+                "prompt_plan_wall_milliseconds": 0.00012800000000000002,
+                "session_acquire_wall_milliseconds": 0.034176,
+                "session_create_wall_milliseconds": 0.0,
+                "session_reset_wall_milliseconds": 0.0336,
+                "prefill_wall_milliseconds": 84.720667,
+                "session_pool_hit": true
+              },
+              "session_memory": {
+                "talker_kv_bytes": 33030144,
+                "predictor_kv_bytes": 327680,
+                "workspace_bytes": 21544172,
+                "max_sequence_length": 288
+              },
+              "runtime_state": {
+                "abi_version": 1,
+                "phase": "ended",
+                "talker_position": 33,
+                "semantic_history_count": 8,
+                "frames_generated": 7,
+                "device_sample_count": 113,
+                "host_sync_count": 8
+              }
+            },
+            {
+              "seed": 33,
+              "frame_count": 6,
+              "ended_by_eos": true,
+              "codec_hash_fnv1a64": "fb408971272b62c6",
+              "ttfa_wall_milliseconds": 257.93453300000004,
+              "request_wall_milliseconds": 1123.5967739999999,
+              "start_timing": {
+                "tokenize_wall_milliseconds": 0.130432,
+                "prompt_plan_wall_milliseconds": 0.000192,
+                "session_acquire_wall_milliseconds": 0.067312,
+                "session_create_wall_milliseconds": 0.0,
+                "session_reset_wall_milliseconds": 0.067024,
+                "prefill_wall_milliseconds": 86.313421,
+                "session_pool_hit": true
+              },
+              "session_memory": {
+                "talker_kv_bytes": 33030144,
+                "predictor_kv_bytes": 327680,
+                "workspace_bytes": 21544172,
+                "max_sequence_length": 288
+              },
+              "runtime_state": {
+                "abi_version": 1,
+                "phase": "ended",
+                "talker_position": 32,
+                "semantic_history_count": 7,
+                "frames_generated": 6,
+                "device_sample_count": 97,
+                "host_sync_count": 7
+              }
+            },
+            {
+              "seed": 44,
+              "frame_count": 9,
+              "ended_by_eos": true,
+              "codec_hash_fnv1a64": "ced05e28779c2e4a",
+              "ttfa_wall_milliseconds": 262.143449,
+              "request_wall_milliseconds": 1340.8033349999998,
+              "start_timing": {
+                "tokenize_wall_milliseconds": 0.115952,
+                "prompt_plan_wall_milliseconds": 0.000176,
+                "session_acquire_wall_milliseconds": 0.027504,
+                "session_create_wall_milliseconds": 0.0,
+                "session_reset_wall_milliseconds": 0.02736,
+                "prefill_wall_milliseconds": 87.749582,
+                "session_pool_hit": true
+              },
+              "session_memory": {
+                "talker_kv_bytes": 33030144,
+                "predictor_kv_bytes": 327680,
+                "workspace_bytes": 21544172,
+                "max_sequence_length": 288
+              },
+              "runtime_state": {
+                "abi_version": 1,
+                "phase": "ended",
+                "talker_position": 35,
+                "semantic_history_count": 10,
+                "frames_generated": 9,
+                "device_sample_count": 145,
+                "host_sync_count": 10
+              }
+            },
+            {
+              "seed": 55,
+              "frame_count": 7,
+              "ended_by_eos": true,
+              "codec_hash_fnv1a64": "13cb4f6e181c0729",
+              "ttfa_wall_milliseconds": 257.76795699999997,
+              "request_wall_milliseconds": 1251.51324,
+              "start_timing": {
+                "tokenize_wall_milliseconds": 0.128928,
+                "prompt_plan_wall_milliseconds": 0.000192,
+                "session_acquire_wall_milliseconds": 0.063232,
+                "session_create_wall_milliseconds": 0.0,
+                "session_reset_wall_milliseconds": 0.062656,
+                "prefill_wall_milliseconds": 85.737564,
+                "session_pool_hit": true
+              },
+              "session_memory": {
+                "talker_kv_bytes": 33030144,
+                "predictor_kv_bytes": 327680,
+                "workspace_bytes": 21544172,
+                "max_sequence_length": 288
+              },
+              "runtime_state": {
+                "abi_version": 1,
+                "phase": "ended",
+                "talker_position": 33,
+                "semantic_history_count": 8,
+                "frames_generated": 7,
+                "device_sample_count": 113,
+                "host_sync_count": 8
+              }
+            }
+          ]
+        },
+        {
+          "wall_milliseconds": 1360.598793,
+          "aggregate_audio_seconds": 3.36,
+          "aggregate_realtime_factor": 0.40494011696428567,
+          "all_pool_hits": true,
+          "requests": [
+            {
+              "seed": 11,
+              "frame_count": 7,
+              "ended_by_eos": true,
+              "codec_hash_fnv1a64": "75d14b66701e0200",
+              "ttfa_wall_milliseconds": 264.255947,
+              "request_wall_milliseconds": 1270.334265,
+              "start_timing": {
+                "tokenize_wall_milliseconds": 0.12425599999999999,
+                "prompt_plan_wall_milliseconds": 0.000192,
+                "session_acquire_wall_milliseconds": 0.063408,
+                "session_create_wall_milliseconds": 0.0,
+                "session_reset_wall_milliseconds": 0.063104,
+                "prefill_wall_milliseconds": 88.113726,
+                "session_pool_hit": true
+              },
+              "session_memory": {
+                "talker_kv_bytes": 33030144,
+                "predictor_kv_bytes": 327680,
+                "workspace_bytes": 21544172,
+                "max_sequence_length": 288
+              },
+              "runtime_state": {
+                "abi_version": 1,
+                "phase": "ended",
+                "talker_position": 33,
+                "semantic_history_count": 8,
+                "frames_generated": 7,
+                "device_sample_count": 113,
+                "host_sync_count": 8
+              }
+            },
+            {
+              "seed": 22,
+              "frame_count": 6,
+              "ended_by_eos": true,
+              "codec_hash_fnv1a64": "0106dcf42d07bcf7",
+              "ttfa_wall_milliseconds": 269.96752000000004,
+              "request_wall_milliseconds": 1158.120981,
+              "start_timing": {
+                "tokenize_wall_milliseconds": 0.11216,
+                "prompt_plan_wall_milliseconds": 0.000112,
+                "session_acquire_wall_milliseconds": 0.029168,
+                "session_create_wall_milliseconds": 0.0,
+                "session_reset_wall_milliseconds": 0.029008,
+                "prefill_wall_milliseconds": 89.878,
+                "session_pool_hit": true
+              },
+              "session_memory": {
+                "talker_kv_bytes": 33030144,
+                "predictor_kv_bytes": 327680,
+                "workspace_bytes": 21544172,
+                "max_sequence_length": 288
+              },
+              "runtime_state": {
+                "abi_version": 1,
+                "phase": "ended",
+                "talker_position": 32,
+                "semantic_history_count": 7,
+                "frames_generated": 6,
+                "device_sample_count": 97,
+                "host_sync_count": 7
+              }
+            },
+            {
+              "seed": 11,
+              "frame_count": 7,
+              "ended_by_eos": true,
+              "codec_hash_fnv1a64": "75d14b66701e0200",
+              "ttfa_wall_milliseconds": 266.80796499999997,
+              "request_wall_milliseconds": 1275.711646,
+              "start_timing": {
+                "tokenize_wall_milliseconds": 0.124192,
+                "prompt_plan_wall_milliseconds": 0.000192,
+                "session_acquire_wall_milliseconds": 0.050464,
+                "session_create_wall_milliseconds": 0.0,
+                "session_reset_wall_milliseconds": 0.050096,
+                "prefill_wall_milliseconds": 89.711248,
+                "session_pool_hit": true
+              },
+              "session_memory": {
+                "talker_kv_bytes": 33030144,
+                "predictor_kv_bytes": 327680,
+                "workspace_bytes": 21544172,
+                "max_sequence_length": 288
+              },
+              "runtime_state": {
+                "abi_version": 1,
+                "phase": "ended",
+                "talker_position": 33,
+                "semantic_history_count": 8,
+                "frames_generated": 7,
+                "device_sample_count": 113,
+                "host_sync_count": 8
+              }
+            },
+            {
+              "seed": 33,
+              "frame_count": 6,
+              "ended_by_eos": true,
+              "codec_hash_fnv1a64": "fb408971272b62c6",
+              "ttfa_wall_milliseconds": 268.62919899999997,
+              "request_wall_milliseconds": 1151.251055,
+              "start_timing": {
+                "tokenize_wall_milliseconds": 0.111888,
+                "prompt_plan_wall_milliseconds": 0.000192,
+                "session_acquire_wall_milliseconds": 0.035472000000000004,
+                "session_create_wall_milliseconds": 0.0,
+                "session_reset_wall_milliseconds": 0.035344,
+                "prefill_wall_milliseconds": 89.93572800000001,
+                "session_pool_hit": true
+              },
+              "session_memory": {
+                "talker_kv_bytes": 33030144,
+                "predictor_kv_bytes": 327680,
+                "workspace_bytes": 21544172,
+                "max_sequence_length": 288
+              },
+              "runtime_state": {
+                "abi_version": 1,
+                "phase": "ended",
+                "talker_position": 32,
+                "semantic_history_count": 7,
+                "frames_generated": 6,
+                "device_sample_count": 97,
+                "host_sync_count": 7
+              }
+            },
+            {
+              "seed": 44,
+              "frame_count": 9,
+              "ended_by_eos": true,
+              "codec_hash_fnv1a64": "ced05e28779c2e4a",
+              "ttfa_wall_milliseconds": 266.809533,
+              "request_wall_milliseconds": 1359.998985,
+              "start_timing": {
+                "tokenize_wall_milliseconds": 0.124208,
+                "prompt_plan_wall_milliseconds": 0.000192,
+                "session_acquire_wall_milliseconds": 0.070224,
+                "session_create_wall_milliseconds": 0.0,
+                "session_reset_wall_milliseconds": 0.069424,
+                "prefill_wall_milliseconds": 89.872416,
+                "session_pool_hit": true
+              },
+              "session_memory": {
+                "talker_kv_bytes": 33030144,
+                "predictor_kv_bytes": 327680,
+                "workspace_bytes": 21544172,
+                "max_sequence_length": 288
+              },
+              "runtime_state": {
+                "abi_version": 1,
+                "phase": "ended",
+                "talker_position": 35,
+                "semantic_history_count": 10,
+                "frames_generated": 9,
+                "device_sample_count": 145,
+                "host_sync_count": 10
+              }
+            },
+            {
+              "seed": 55,
+              "frame_count": 7,
+              "ended_by_eos": true,
+              "codec_hash_fnv1a64": "13cb4f6e181c0729",
+              "ttfa_wall_milliseconds": 264.203131,
+              "request_wall_milliseconds": 1270.479065,
+              "start_timing": {
+                "tokenize_wall_milliseconds": 0.111216,
+                "prompt_plan_wall_milliseconds": 0.000192,
+                "session_acquire_wall_milliseconds": 0.026080000000000002,
+                "session_create_wall_milliseconds": 0.0,
+                "session_reset_wall_milliseconds": 0.025888,
+                "prefill_wall_milliseconds": 88.646207,
+                "session_pool_hit": true
+              },
+              "session_memory": {
+                "talker_kv_bytes": 33030144,
+                "predictor_kv_bytes": 327680,
+                "workspace_bytes": 21544172,
+                "max_sequence_length": 288
+              },
+              "runtime_state": {
+                "abi_version": 1,
+                "phase": "ended",
+                "talker_position": 33,
+                "semantic_history_count": 8,
+                "frames_generated": 7,
+                "device_sample_count": 113,
+                "host_sync_count": 8
+              }
+            }
+          ]
+        },
+        {
+          "wall_milliseconds": 1369.4351689999999,
+          "aggregate_audio_seconds": 3.36,
+          "aggregate_realtime_factor": 0.4075699907738095,
+          "all_pool_hits": true,
+          "requests": [
+            {
+              "seed": 11,
+              "frame_count": 7,
+              "ended_by_eos": true,
+              "codec_hash_fnv1a64": "75d14b66701e0200",
+              "ttfa_wall_milliseconds": 262.54407299999997,
+              "request_wall_milliseconds": 1283.31458,
+              "start_timing": {
+                "tokenize_wall_milliseconds": 0.111856,
+                "prompt_plan_wall_milliseconds": 0.00012800000000000002,
+                "session_acquire_wall_milliseconds": 0.058192,
+                "session_create_wall_milliseconds": 0.0,
+                "session_reset_wall_milliseconds": 0.057888,
+                "prefill_wall_milliseconds": 85.43055600000001,
+                "session_pool_hit": true
+              },
+              "session_memory": {
+                "talker_kv_bytes": 33030144,
+                "predictor_kv_bytes": 327680,
+                "workspace_bytes": 21544172,
+                "max_sequence_length": 288
+              },
+              "runtime_state": {
+                "abi_version": 1,
+                "phase": "ended",
+                "talker_position": 33,
+                "semantic_history_count": 8,
+                "frames_generated": 7,
+                "device_sample_count": 113,
+                "host_sync_count": 8
+              }
+            },
+            {
+              "seed": 22,
+              "frame_count": 6,
+              "ended_by_eos": true,
+              "codec_hash_fnv1a64": "0106dcf42d07bcf7",
+              "ttfa_wall_milliseconds": 257.28758899999997,
+              "request_wall_milliseconds": 1150.873599,
+              "start_timing": {
+                "tokenize_wall_milliseconds": 0.069216,
+                "prompt_plan_wall_milliseconds": 0.000112,
+                "session_acquire_wall_milliseconds": 0.045200000000000004,
+                "session_create_wall_milliseconds": 0.0,
+                "session_reset_wall_milliseconds": 0.044848,
+                "prefill_wall_milliseconds": 85.973613,
+                "session_pool_hit": true
+              },
+              "session_memory": {
+                "talker_kv_bytes": 33030144,
+                "predictor_kv_bytes": 327680,
+                "workspace_bytes": 21544172,
+                "max_sequence_length": 288
+              },
+              "runtime_state": {
+                "abi_version": 1,
+                "phase": "ended",
+                "talker_position": 32,
+                "semantic_history_count": 7,
+                "frames_generated": 6,
+                "device_sample_count": 97,
+                "host_sync_count": 7
+              }
+            },
+            {
+              "seed": 11,
+              "frame_count": 7,
+              "ended_by_eos": true,
+              "codec_hash_fnv1a64": "75d14b66701e0200",
+              "ttfa_wall_milliseconds": 264.299627,
+              "request_wall_milliseconds": 1281.7471710000002,
+              "start_timing": {
+                "tokenize_wall_milliseconds": 0.11305599999999999,
+                "prompt_plan_wall_milliseconds": 0.000192,
+                "session_acquire_wall_milliseconds": 0.061648,
+                "session_create_wall_milliseconds": 0.0,
+                "session_reset_wall_milliseconds": 0.061439999999999995,
+                "prefill_wall_milliseconds": 87.291582,
+                "session_pool_hit": true
+              },
+              "session_memory": {
+                "talker_kv_bytes": 33030144,
+                "predictor_kv_bytes": 327680,
+                "workspace_bytes": 21544172,
+                "max_sequence_length": 288
+              },
+              "runtime_state": {
+                "abi_version": 1,
+                "phase": "ended",
+                "talker_position": 33,
+                "semantic_history_count": 8,
+                "frames_generated": 7,
+                "device_sample_count": 113,
+                "host_sync_count": 8
+              }
+            },
+            {
+              "seed": 33,
+              "frame_count": 6,
+              "ended_by_eos": true,
+              "codec_hash_fnv1a64": "fb408971272b62c6",
+              "ttfa_wall_milliseconds": 267.364542,
+              "request_wall_milliseconds": 1164.644411,
+              "start_timing": {
+                "tokenize_wall_milliseconds": 0.06624000000000001,
+                "prompt_plan_wall_milliseconds": 0.000112,
+                "session_acquire_wall_milliseconds": 0.038832,
+                "session_create_wall_milliseconds": 0.0,
+                "session_reset_wall_milliseconds": 0.038655999999999996,
+                "prefill_wall_milliseconds": 87.619118,
+                "session_pool_hit": true
+              },
+              "session_memory": {
+                "talker_kv_bytes": 33030144,
+                "predictor_kv_bytes": 327680,
+                "workspace_bytes": 21544172,
+                "max_sequence_length": 288
+              },
+              "runtime_state": {
+                "abi_version": 1,
+                "phase": "ended",
+                "talker_position": 32,
+                "semantic_history_count": 7,
+                "frames_generated": 6,
+                "device_sample_count": 97,
+                "host_sync_count": 7
+              }
+            },
+            {
+              "seed": 44,
+              "frame_count": 9,
+              "ended_by_eos": true,
+              "codec_hash_fnv1a64": "ced05e28779c2e4a",
+              "ttfa_wall_milliseconds": 262.559241,
+              "request_wall_milliseconds": 1368.6146880000001,
+              "start_timing": {
+                "tokenize_wall_milliseconds": 0.117184,
+                "prompt_plan_wall_milliseconds": 0.000176,
+                "session_acquire_wall_milliseconds": 0.030224,
+                "session_create_wall_milliseconds": 0.0,
+                "session_reset_wall_milliseconds": 0.02968,
+                "prefill_wall_milliseconds": 87.01961399999999,
+                "session_pool_hit": true
+              },
+              "session_memory": {
+                "talker_kv_bytes": 33030144,
+                "predictor_kv_bytes": 327680,
+                "workspace_bytes": 21544172,
+                "max_sequence_length": 288
+              },
+              "runtime_state": {
+                "abi_version": 1,
+                "phase": "ended",
+                "talker_position": 35,
+                "semantic_history_count": 10,
+                "frames_generated": 9,
+                "device_sample_count": 145,
+                "host_sync_count": 10
+              }
+            },
+            {
+              "seed": 55,
+              "frame_count": 7,
+              "ended_by_eos": true,
+              "codec_hash_fnv1a64": "13cb4f6e181c0729",
+              "ttfa_wall_milliseconds": 257.38955699999997,
+              "request_wall_milliseconds": 1279.017361,
+              "start_timing": {
+                "tokenize_wall_milliseconds": 0.113136,
+                "prompt_plan_wall_milliseconds": 0.000112,
+                "session_acquire_wall_milliseconds": 0.01664,
+                "session_create_wall_milliseconds": 0.0,
+                "session_reset_wall_milliseconds": 0.016560000000000002,
+                "prefill_wall_milliseconds": 85.1343,
+                "session_pool_hit": true
+              },
+              "session_memory": {
+                "talker_kv_bytes": 33030144,
+                "predictor_kv_bytes": 327680,
+                "workspace_bytes": 21544172,
+                "max_sequence_length": 288
+              },
+              "runtime_state": {
+                "abi_version": 1,
+                "phase": "ended",
+                "talker_position": 33,
+                "semantic_history_count": 8,
+                "frames_generated": 7,
+                "device_sample_count": 113,
+                "host_sync_count": 8
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "greedy_b3": {
+    "concurrency": 3,
+    "rounds": 3,
+    "greedy": true,
+    "exact_reference_parity": true,
+    "aggregate_session_bytes": 164705988,
+    "rounds_report": [
+      {
+        "wall_milliseconds": 615.385346,
+        "aggregate_audio_seconds": 1.44,
+        "aggregate_realtime_factor": 0.4273509347222223,
+        "all_pool_hits": true,
+        "requests": [
+          {
+            "seed": 11,
+            "frame_count": 6,
+            "ended_by_eos": true,
+            "codec_hash_fnv1a64": "85e039ff72dbb8d3",
+            "ttfa_wall_milliseconds": 141.978558,
+            "request_wall_milliseconds": 612.339968,
+            "start_timing": {
+              "tokenize_wall_milliseconds": 0.11416000000000001,
+              "prompt_plan_wall_milliseconds": 0.000144,
+              "session_acquire_wall_milliseconds": 0.044975999999999995,
+              "session_create_wall_milliseconds": 0.0,
+              "session_reset_wall_milliseconds": 0.044656,
+              "prefill_wall_milliseconds": 47.75945,
+              "session_pool_hit": true
+            },
+            "session_memory": {
+              "talker_kv_bytes": 33030144,
+              "predictor_kv_bytes": 327680,
+              "workspace_bytes": 21544172,
+              "max_sequence_length": 288
+            },
+            "runtime_state": {
+              "abi_version": 1,
+              "phase": "ended",
+              "talker_position": 32,
+              "semantic_history_count": 7,
+              "frames_generated": 6,
+              "device_sample_count": 97,
+              "host_sync_count": 7
+            }
+          },
+          {
+            "seed": 22,
+            "frame_count": 6,
+            "ended_by_eos": true,
+            "codec_hash_fnv1a64": "85e039ff72dbb8d3",
+            "ttfa_wall_milliseconds": 142.20412599999997,
+            "request_wall_milliseconds": 615.0786579999999,
+            "start_timing": {
+              "tokenize_wall_milliseconds": 0.11112000000000001,
+              "prompt_plan_wall_milliseconds": 0.000112,
+              "session_acquire_wall_milliseconds": 0.028832,
+              "session_create_wall_milliseconds": 0.0,
+              "session_reset_wall_milliseconds": 0.028656,
+              "prefill_wall_milliseconds": 47.840522,
+              "session_pool_hit": true
+            },
+            "session_memory": {
+              "talker_kv_bytes": 33030144,
+              "predictor_kv_bytes": 327680,
+              "workspace_bytes": 21544172,
+              "max_sequence_length": 288
+            },
+            "runtime_state": {
+              "abi_version": 1,
+              "phase": "ended",
+              "talker_position": 32,
+              "semantic_history_count": 7,
+              "frames_generated": 6,
+              "device_sample_count": 97,
+              "host_sync_count": 7
+            }
+          },
+          {
+            "seed": 11,
+            "frame_count": 6,
+            "ended_by_eos": true,
+            "codec_hash_fnv1a64": "85e039ff72dbb8d3",
+            "ttfa_wall_milliseconds": 130.60301199999998,
+            "request_wall_milliseconds": 575.134127,
+            "start_timing": {
+              "tokenize_wall_milliseconds": 0.119904,
+              "prompt_plan_wall_milliseconds": 0.000192,
+              "session_acquire_wall_milliseconds": 0.04048,
+              "session_create_wall_milliseconds": 0.0,
+              "session_reset_wall_milliseconds": 0.040256,
+              "prefill_wall_milliseconds": 45.531639999999996,
+              "session_pool_hit": true
+            },
+            "session_memory": {
+              "talker_kv_bytes": 33030144,
+              "predictor_kv_bytes": 327680,
+              "workspace_bytes": 21544172,
+              "max_sequence_length": 288
+            },
+            "runtime_state": {
+              "abi_version": 1,
+              "phase": "ended",
+              "talker_position": 32,
+              "semantic_history_count": 7,
+              "frames_generated": 6,
+              "device_sample_count": 97,
+              "host_sync_count": 7
+            }
+          }
+        ]
+      },
+      {
+        "wall_milliseconds": 613.9843699999999,
+        "aggregate_audio_seconds": 1.44,
+        "aggregate_realtime_factor": 0.4263780347222222,
+        "all_pool_hits": true,
+        "requests": [
+          {
+            "seed": 11,
+            "frame_count": 6,
+            "ended_by_eos": true,
+            "codec_hash_fnv1a64": "85e039ff72dbb8d3",
+            "ttfa_wall_milliseconds": 141.591757,
+            "request_wall_milliseconds": 604.750425,
+            "start_timing": {
+              "tokenize_wall_milliseconds": 0.105488,
+              "prompt_plan_wall_milliseconds": 0.00012800000000000002,
+              "session_acquire_wall_milliseconds": 0.055856,
+              "session_create_wall_milliseconds": 0.0,
+              "session_reset_wall_milliseconds": 0.055568,
+              "prefill_wall_milliseconds": 47.010026,
+              "session_pool_hit": true
+            },
+            "session_memory": {
+              "talker_kv_bytes": 33030144,
+              "predictor_kv_bytes": 327680,
+              "workspace_bytes": 21544172,
+              "max_sequence_length": 288
+            },
+            "runtime_state": {
+              "abi_version": 1,
+              "phase": "ended",
+              "talker_position": 32,
+              "semantic_history_count": 7,
+              "frames_generated": 6,
+              "device_sample_count": 97,
+              "host_sync_count": 7
+            }
+          },
+          {
+            "seed": 22,
+            "frame_count": 6,
+            "ended_by_eos": true,
+            "codec_hash_fnv1a64": "85e039ff72dbb8d3",
+            "ttfa_wall_milliseconds": 141.749118,
+            "request_wall_milliseconds": 613.696993,
+            "start_timing": {
+              "tokenize_wall_milliseconds": 0.0864,
+              "prompt_plan_wall_milliseconds": 0.000112,
+              "session_acquire_wall_milliseconds": 0.01872,
+              "session_create_wall_milliseconds": 0.0,
+              "session_reset_wall_milliseconds": 0.018288,
+              "prefill_wall_milliseconds": 46.957033,
+              "session_pool_hit": true
+            },
+            "session_memory": {
+              "talker_kv_bytes": 33030144,
+              "predictor_kv_bytes": 327680,
+              "workspace_bytes": 21544172,
+              "max_sequence_length": 288
+            },
+            "runtime_state": {
+              "abi_version": 1,
+              "phase": "ended",
+              "talker_position": 32,
+              "semantic_history_count": 7,
+              "frames_generated": 6,
+              "device_sample_count": 97,
+              "host_sync_count": 7
+            }
+          },
+          {
+            "seed": 11,
+            "frame_count": 6,
+            "ended_by_eos": true,
+            "codec_hash_fnv1a64": "85e039ff72dbb8d3",
+            "ttfa_wall_milliseconds": 130.206211,
+            "request_wall_milliseconds": 571.067483,
+            "start_timing": {
+              "tokenize_wall_milliseconds": 0.11350400000000001,
+              "prompt_plan_wall_milliseconds": 0.000192,
+              "session_acquire_wall_milliseconds": 0.061439999999999995,
+              "session_create_wall_milliseconds": 0.0,
+              "session_reset_wall_milliseconds": 0.061056000000000006,
+              "prefill_wall_milliseconds": 44.702695,
+              "session_pool_hit": true
+            },
+            "session_memory": {
+              "talker_kv_bytes": 33030144,
+              "predictor_kv_bytes": 327680,
+              "workspace_bytes": 21544172,
+              "max_sequence_length": 288
+            },
+            "runtime_state": {
+              "abi_version": 1,
+              "phase": "ended",
+              "talker_position": 32,
+              "semantic_history_count": 7,
+              "frames_generated": 6,
+              "device_sample_count": 97,
+              "host_sync_count": 7
+            }
+          }
+        ]
+      },
+      {
+        "wall_milliseconds": 615.901891,
+        "aggregate_audio_seconds": 1.44,
+        "aggregate_realtime_factor": 0.42770964652777776,
+        "all_pool_hits": true,
+        "requests": [
+          {
+            "seed": 11,
+            "frame_count": 6,
+            "ended_by_eos": true,
+            "codec_hash_fnv1a64": "85e039ff72dbb8d3",
+            "ttfa_wall_milliseconds": 146.56920200000002,
+            "request_wall_milliseconds": 615.643507,
+            "start_timing": {
+              "tokenize_wall_milliseconds": 0.102272,
+              "prompt_plan_wall_milliseconds": 0.00008,
+              "session_acquire_wall_milliseconds": 0.014416,
+              "session_create_wall_milliseconds": 0.0,
+              "session_reset_wall_milliseconds": 0.01432,
+              "prefill_wall_milliseconds": 48.072539,
+              "session_pool_hit": true
+            },
+            "session_memory": {
+              "talker_kv_bytes": 33030144,
+              "predictor_kv_bytes": 327680,
+              "workspace_bytes": 21544172,
+              "max_sequence_length": 288
+            },
+            "runtime_state": {
+              "abi_version": 1,
+              "phase": "ended",
+              "talker_position": 32,
+              "semantic_history_count": 7,
+              "frames_generated": 6,
+              "device_sample_count": 97,
+              "host_sync_count": 7
+            }
+          },
+          {
+            "seed": 22,
+            "frame_count": 6,
+            "ended_by_eos": true,
+            "codec_hash_fnv1a64": "85e039ff72dbb8d3",
+            "ttfa_wall_milliseconds": 143.093743,
+            "request_wall_milliseconds": 604.011577,
+            "start_timing": {
+              "tokenize_wall_milliseconds": 0.12462399999999998,
+              "prompt_plan_wall_milliseconds": 0.00020800000000000001,
+              "session_acquire_wall_milliseconds": 0.040048,
+              "session_create_wall_milliseconds": 0.0,
+              "session_reset_wall_milliseconds": 0.039664,
+              "prefill_wall_milliseconds": 47.466282,
+              "session_pool_hit": true
+            },
+            "session_memory": {
+              "talker_kv_bytes": 33030144,
+              "predictor_kv_bytes": 327680,
+              "workspace_bytes": 21544172,
+              "max_sequence_length": 288
+            },
+            "runtime_state": {
+              "abi_version": 1,
+              "phase": "ended",
+              "talker_position": 32,
+              "semantic_history_count": 7,
+              "frames_generated": 6,
+              "device_sample_count": 97,
+              "host_sync_count": 7
+            }
+          },
+          {
+            "seed": 11,
+            "frame_count": 6,
+            "ended_by_eos": true,
+            "codec_hash_fnv1a64": "85e039ff72dbb8d3",
+            "ttfa_wall_milliseconds": 128.20880200000002,
+            "request_wall_milliseconds": 571.338428,
+            "start_timing": {
+              "tokenize_wall_milliseconds": 0.073216,
+              "prompt_plan_wall_milliseconds": 0.000112,
+              "session_acquire_wall_milliseconds": 0.036879999999999996,
+              "session_create_wall_milliseconds": 0.0,
+              "session_reset_wall_milliseconds": 0.03656,
+              "prefill_wall_milliseconds": 43.852135,
+              "session_pool_hit": true
+            },
+            "session_memory": {
+              "talker_kv_bytes": 33030144,
+              "predictor_kv_bytes": 327680,
+              "workspace_bytes": 21544172,
+              "max_sequence_length": 288
+            },
+            "runtime_state": {
+              "abi_version": 1,
+              "phase": "ended",
+              "talker_position": 32,
+              "semantic_history_count": 7,
+              "frames_generated": 6,
+              "device_sample_count": 97,
+              "host_sync_count": 7
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "lifecycle": {
+    "cancel_drop_isolated": true,
+    "round_robin_b3_exact": true,
+    "session_thread_move_exact": true,
+    "caller_arc_dropped_before_thread_completion": true
+  },
+  "qualification": {
+    "at_least_twenty_warm_requests": true,
+    "warm_ttfa_p95_under_200ms": true,
+    "sampled_seed_isolation": true,
+    "greedy_b3_exact": true,
+    "concurrent_b1_b3_b6_exact": true,
+    "corpus_completed_without_max_frame_truncation": true,
+    "cancel_drop_isolated": true,
+    "round_robin_b3_exact": true,
+    "session_thread_move_exact": true
+  }
+}
