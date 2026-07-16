@@ -16,9 +16,29 @@ cudaError_t launch_rms_norm(
     cudaStream_t stream
 );
 
+cudaError_t launch_rms_norm_rows(
+    const __nv_bfloat16* input,
+    const __nv_bfloat16* weight,
+    __nv_bfloat16* output,
+    int rows,
+    int width,
+    float epsilon,
+    cudaStream_t stream
+);
+
 cudaError_t launch_head_rms_norm(
     __nv_bfloat16* values,
     const __nv_bfloat16* weight,
+    int heads,
+    int head_dimension,
+    float epsilon,
+    cudaStream_t stream
+);
+
+cudaError_t launch_head_rms_norm_rows(
+    __nv_bfloat16* values,
+    const __nv_bfloat16* weight,
+    int rows,
     int heads,
     int head_dimension,
     float epsilon,
@@ -34,6 +54,16 @@ cudaError_t launch_rope(
     cudaStream_t stream
 );
 
+cudaError_t launch_rope_rows(
+    __nv_bfloat16* values,
+    int rows,
+    int heads,
+    int head_dimension,
+    int first_position,
+    float theta,
+    cudaStream_t stream
+);
+
 cudaError_t launch_causal_gqa_attention(
     const __nv_bfloat16* query,
     const __nv_bfloat16* key_cache,
@@ -43,6 +73,49 @@ cudaError_t launch_causal_gqa_attention(
     int key_value_heads,
     int head_dimension,
     int sequence_length,
+    cudaStream_t stream
+);
+
+cudaError_t launch_prefill_causal_gqa_attention(
+    const __nv_bfloat16* query,
+    const __nv_bfloat16* key_cache,
+    const __nv_bfloat16* value_cache,
+    __nv_bfloat16* output,
+    int rows,
+    int query_heads,
+    int key_value_heads,
+    int head_dimension,
+    cudaStream_t stream
+);
+
+cudaError_t launch_pack_gqa_heads(
+    const __nv_bfloat16* query,
+    const __nv_bfloat16* key,
+    const __nv_bfloat16* value,
+    __nv_bfloat16* packed_query,
+    __nv_bfloat16* packed_key,
+    __nv_bfloat16* packed_value,
+    int rows,
+    int query_heads,
+    int key_value_heads,
+    int head_dimension,
+    cudaStream_t stream
+);
+
+cudaError_t launch_causal_softmax(
+    __nv_bfloat16* scores,
+    int rows,
+    int heads,
+    int head_dimension,
+    cudaStream_t stream
+);
+
+cudaError_t launch_unpack_heads(
+    const __nv_bfloat16* packed,
+    __nv_bfloat16* output,
+    int rows,
+    int heads,
+    int head_dimension,
     cudaStream_t stream
 );
 

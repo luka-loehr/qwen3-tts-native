@@ -8,6 +8,7 @@ add_library(qwen3_tts_cuda SHARED
     src/gemv.cu
     src/primitive_parity.cu
     src/runtime.cu
+    src/talker.cu
     src/talker_kernels.cu
     src/weights.cu
 )
@@ -28,7 +29,6 @@ set_target_properties(qwen3_tts_cuda PROPERTIES
 )
 
 target_compile_options(qwen3_tts_cuda PRIVATE
-    $<$<COMPILE_LANGUAGE:CUDA>:--use_fast_math>
     $<$<COMPILE_LANGUAGE:CUDA>:-lineinfo>
     $<$<COMPILE_LANGUAGE:CUDA>:-Xptxas=-warn-spills>
 )
