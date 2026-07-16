@@ -14,6 +14,7 @@
 #include <cstdio>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <numeric>
 #include <stdexcept>
 #include <string>
@@ -178,10 +179,267 @@ constexpr ModelDimensions kPredictorDimensions{
     kPredictorKeyValueWidth,
 };
 
+class TalkerModel {
+public:
+    explicit TalkerModel(int device_index) : device_index_(device_index) {
+        check_cuda(cudaSetDevice(device_index_), "cudaSetDevice(model)");
+        check_cuda(
+            cudaStreamCreateWithFlags(&upload_stream_, cudaStreamNonBlocking),
+            "cudaStreamCreateWithFlags(model upload)"
+        );
+    }
+
+    ~TalkerModel() {
+        cudaSetDevice(device_index_);
+        if (upload_stream_ != nullptr) {
+            cudaStreamSynchronize(upload_stream_);
+            cudaStreamDestroy(upload_stream_);
+        }
+    }
+
+    TalkerModel(const TalkerModel&) = delete;
+    TalkerModel& operator=(const TalkerModel&) = delete;
+
+    void upload_tensor(
+        const char* name,
+        const void* data,
+        uint64_t byte_size,
+        int rank,
+        const uint64_t* shape
+    ) {
+        if (finalized_) {
+            throw std::runtime_error("model weights are already finalized");
+        }
+        if (name == nullptr || *name == '\0' || data == nullptr || shape == nullptr) {
+            throw std::runtime_error("tensor upload received a null argument");
+        }
+        if (rank <= 0 || rank > 4 || byte_size == 0) {
+            throw std::runtime_error("tensor upload has an invalid rank or byte size");
+        }
+        uint64_t elements = 1;
+        std::vector<uint64_t> dimensions;
+        dimensions.reserve(rank);
+        for (int index = 0; index < rank; ++index) {
+            if (shape[index] == 0
+                || elements > std::numeric_limits<uint64_t>::max() / shape[index]) {
+                throw std::runtime_error("tensor shape is empty or overflows");
+            }
+            elements *= shape[index];
+            dimensions.push_back(shape[index]);
+        }
+        if (elements > std::numeric_limits<uint64_t>::max() / sizeof(__nv_bfloat16)
+            || elements * sizeof(__nv_bfloat16) != byte_size) {
+            throw std::runtime_error("tensor byte size does not match BF16 shape");
+        }
+        const std::string tensor_name(name);
+        if (tensors_.find(tensor_name) != tensors_.end()) {
+            throw std::runtime_error("duplicate tensor upload: " + tensor_name);
+        }
+        DeviceTensor tensor{DeviceBuffer(static_cast<size_t>(byte_size)), std::move(dimensions)};
+        check_cuda(
+            cudaMemcpyAsync(
+                tensor.storage.as<void>(),
+                data,
+                static_cast<size_t>(byte_size),
+                cudaMemcpyHostToDevice,
+                upload_stream_
+            ),
+            "cudaMemcpyAsync(model weight H2D)"
+        );
+        weight_bytes_ += byte_size;
+        tensors_.emplace(tensor_name, std::move(tensor));
+    }
+
+    Qwen3TtsModelMemory finalize() {
+        if (finalized_) {
+            throw std::runtime_error("model weights are already finalized");
+        }
+        if (tensors_.size() != 404) {
+            throw std::runtime_error(
+                "expected exactly 404 VoiceDesign tensors, found "
+                    + std::to_string(tensors_.size())
+            );
+        }
+
+        codec_embedding_ = require(
+            "talker.model.codec_embedding.weight",
+            {kTalkerVocabulary, kTalkerHidden}
+        );
+        text_embedding_ = require(
+            "talker.model.text_embedding.weight",
+            {kTextVocabulary, kTalkerHidden}
+        );
+        text_fc1_ = require(
+            "talker.text_projection.linear_fc1.weight",
+            {kTalkerHidden, kTalkerHidden}
+        );
+        text_fc1_bias_ = require(
+            "talker.text_projection.linear_fc1.bias",
+            {kTalkerHidden}
+        );
+        text_fc2_ = require(
+            "talker.text_projection.linear_fc2.weight",
+            {kTalkerHidden, kTalkerHidden}
+        );
+        text_fc2_bias_ = require(
+            "talker.text_projection.linear_fc2.bias",
+            {kTalkerHidden}
+        );
+        talker_norm_ = require("talker.model.norm.weight", {kTalkerHidden});
+        codec_head_ = require(
+            "talker.codec_head.weight",
+            {kTalkerVocabulary, kTalkerHidden}
+        );
+
+        talker_layers_.reserve(kTalkerLayers);
+        for (int layer = 0; layer < kTalkerLayers; ++layer) {
+            talker_layers_.push_back(load_layer(
+                "talker.model.layers." + std::to_string(layer),
+                kTalkerDimensions
+            ));
+        }
+
+        small_to_predictor_ = require(
+            "talker.code_predictor.small_to_mtp_projection.weight",
+            {kPredictorHidden, kTalkerHidden}
+        );
+        small_to_predictor_bias_ = require(
+            "talker.code_predictor.small_to_mtp_projection.bias",
+            {kPredictorHidden}
+        );
+        predictor_norm_ = require(
+            "talker.code_predictor.model.norm.weight",
+            {kPredictorHidden}
+        );
+        predictor_layers_.reserve(kPredictorLayers);
+        for (int layer = 0; layer < kPredictorLayers; ++layer) {
+            predictor_layers_.push_back(load_layer(
+                "talker.code_predictor.model.layers." + std::to_string(layer),
+                kPredictorDimensions
+            ));
+        }
+        for (int group = 0; group < kResidualCodebooks; ++group) {
+            predictor_embeddings_[group] = require(
+                "talker.code_predictor.model.codec_embedding."
+                    + std::to_string(group) + ".weight",
+                {kPredictorVocabulary, kTalkerHidden}
+            );
+            predictor_heads_[group] = require(
+                "talker.code_predictor.lm_head." + std::to_string(group) + ".weight",
+                {kPredictorVocabulary, kPredictorHidden}
+            );
+        }
+
+        check_cuda(
+            cudaStreamSynchronize(upload_stream_),
+            "cudaStreamSynchronize(model weight upload)"
+        );
+        finalized_ = true;
+        Qwen3TtsModelMemory result{};
+        result.shared_weight_bytes = weight_bytes_;
+        result.tensor_count = static_cast<uint32_t>(tensors_.size());
+        result.device_index = device_index_;
+        return result;
+    }
+
+    bool finalized() const {
+        return finalized_;
+    }
+
+    int device_index() const {
+        return device_index_;
+    }
+
+private:
+    friend class TalkerContext;
+
+    const __nv_bfloat16* require(const std::string& name, std::vector<uint64_t> shape) {
+        const auto found = tensors_.find(name);
+        if (found == tensors_.end()) {
+            throw std::runtime_error("checkpoint is missing required tensor " + name);
+        }
+        if (found->second.shape != shape) {
+            throw std::runtime_error("unexpected shape for tensor " + name);
+        }
+        return found->second.storage.as<__nv_bfloat16>();
+    }
+
+    DecoderWeights load_layer(const std::string& prefix, const ModelDimensions& dimensions) {
+        return {
+            require(prefix + ".input_layernorm.weight", {
+                static_cast<uint64_t>(dimensions.hidden),
+            }),
+            require(prefix + ".self_attn.q_proj.weight", {
+                static_cast<uint64_t>(dimensions.query_width),
+                static_cast<uint64_t>(dimensions.hidden),
+            }),
+            require(prefix + ".self_attn.k_proj.weight", {
+                static_cast<uint64_t>(dimensions.key_value_width),
+                static_cast<uint64_t>(dimensions.hidden),
+            }),
+            require(prefix + ".self_attn.v_proj.weight", {
+                static_cast<uint64_t>(dimensions.key_value_width),
+                static_cast<uint64_t>(dimensions.hidden),
+            }),
+            require(prefix + ".self_attn.o_proj.weight", {
+                static_cast<uint64_t>(dimensions.hidden),
+                static_cast<uint64_t>(dimensions.query_width),
+            }),
+            require(prefix + ".self_attn.q_norm.weight", {
+                static_cast<uint64_t>(dimensions.head_dimension),
+            }),
+            require(prefix + ".self_attn.k_norm.weight", {
+                static_cast<uint64_t>(dimensions.head_dimension),
+            }),
+            require(prefix + ".post_attention_layernorm.weight", {
+                static_cast<uint64_t>(dimensions.hidden),
+            }),
+            require(prefix + ".mlp.gate_proj.weight", {
+                static_cast<uint64_t>(dimensions.intermediate),
+                static_cast<uint64_t>(dimensions.hidden),
+            }),
+            require(prefix + ".mlp.up_proj.weight", {
+                static_cast<uint64_t>(dimensions.intermediate),
+                static_cast<uint64_t>(dimensions.hidden),
+            }),
+            require(prefix + ".mlp.down_proj.weight", {
+                static_cast<uint64_t>(dimensions.hidden),
+                static_cast<uint64_t>(dimensions.intermediate),
+            }),
+        };
+    }
+
+    int device_index_;
+    bool finalized_ = false;
+    uint64_t weight_bytes_ = 0;
+    cudaStream_t upload_stream_ = nullptr;
+    std::unordered_map<std::string, DeviceTensor> tensors_;
+    std::vector<DecoderWeights> talker_layers_;
+    std::vector<DecoderWeights> predictor_layers_;
+    const __nv_bfloat16* codec_embedding_ = nullptr;
+    const __nv_bfloat16* text_embedding_ = nullptr;
+    const __nv_bfloat16* text_fc1_ = nullptr;
+    const __nv_bfloat16* text_fc1_bias_ = nullptr;
+    const __nv_bfloat16* text_fc2_ = nullptr;
+    const __nv_bfloat16* text_fc2_bias_ = nullptr;
+    const __nv_bfloat16* talker_norm_ = nullptr;
+    const __nv_bfloat16* codec_head_ = nullptr;
+    const __nv_bfloat16* small_to_predictor_ = nullptr;
+    const __nv_bfloat16* small_to_predictor_bias_ = nullptr;
+    const __nv_bfloat16* predictor_norm_ = nullptr;
+    std::array<const __nv_bfloat16*, kResidualCodebooks> predictor_embeddings_{};
+    std::array<const __nv_bfloat16*, kResidualCodebooks> predictor_heads_{};
+};
+
 class TalkerContext {
 public:
-    TalkerContext(int device_index, int max_sequence_length, uint64_t seed)
-        : device_index_(device_index),
+    TalkerContext(
+        std::shared_ptr<TalkerModel> model,
+        int max_sequence_length,
+        uint64_t seed
+    )
+        : model_(std::move(model)),
+          device_index_(model_->device_index()),
           max_sequence_length_(max_sequence_length),
           prefill_gemm_capacity_(std::min(max_sequence_length, kPrefillGemmCapacity)),
           trace_enabled_(std::getenv("QWEN3_TTS_PARITY_TRACE") != nullptr),
@@ -189,6 +447,24 @@ public:
         if (max_sequence_length < 16 || max_sequence_length > 8'192) {
             throw std::runtime_error("max sequence length must be in [16, 8192]");
         }
+        if (!model_->finalized()) {
+            throw std::runtime_error("model weights must be finalized before creating a session");
+        }
+        codec_embedding_ = model_->codec_embedding_;
+        text_embedding_ = model_->text_embedding_;
+        text_fc1_ = model_->text_fc1_;
+        text_fc1_bias_ = model_->text_fc1_bias_;
+        text_fc2_ = model_->text_fc2_;
+        text_fc2_bias_ = model_->text_fc2_bias_;
+        talker_norm_ = model_->talker_norm_;
+        codec_head_ = model_->codec_head_;
+        small_to_predictor_ = model_->small_to_predictor_;
+        small_to_predictor_bias_ = model_->small_to_predictor_bias_;
+        predictor_norm_ = model_->predictor_norm_;
+        talker_layers_ = model_->talker_layers_;
+        predictor_layers_ = model_->predictor_layers_;
+        predictor_embeddings_ = model_->predictor_embeddings_;
+        predictor_heads_ = model_->predictor_heads_;
         check_cuda(cudaSetDevice(device_index_), "cudaSetDevice");
         try {
             check_cuda(
@@ -311,6 +587,10 @@ public:
     }
 
     ~TalkerContext() {
+        cudaSetDevice(device_index_);
+        if (stream_ != nullptr) {
+            cudaStreamSynchronize(stream_);
+        }
         if (host_frame_codes_ != nullptr) {
             cudaFreeHost(host_frame_codes_);
         }
@@ -340,119 +620,17 @@ public:
     TalkerContext(const TalkerContext&) = delete;
     TalkerContext& operator=(const TalkerContext&) = delete;
 
-    void upload_tensor(
-        const char* name,
-        const void* data,
-        uint64_t byte_size,
-        int rank,
-        const uint64_t* shape
-    ) {
-        if (weights_finalized_) {
-            throw std::runtime_error("weights are already finalized");
-        }
-        if (name == nullptr || *name == '\0' || data == nullptr || shape == nullptr) {
-            throw std::runtime_error("tensor upload received a null argument");
-        }
-        if (rank <= 0 || rank > 4 || byte_size == 0) {
-            throw std::runtime_error("tensor upload has an invalid rank or byte size");
-        }
-        uint64_t elements = 1;
-        std::vector<uint64_t> dimensions;
-        dimensions.reserve(rank);
-        for (int index = 0; index < rank; ++index) {
-            if (shape[index] == 0 || elements > std::numeric_limits<uint64_t>::max() / shape[index]) {
-                throw std::runtime_error("tensor shape is empty or overflows");
-            }
-            elements *= shape[index];
-            dimensions.push_back(shape[index]);
-        }
-        if (elements > std::numeric_limits<uint64_t>::max() / sizeof(__nv_bfloat16)
-            || elements * sizeof(__nv_bfloat16) != byte_size) {
-            throw std::runtime_error("tensor byte size does not match BF16 shape");
-        }
-        const std::string tensor_name(name);
-        if (tensors_.find(tensor_name) != tensors_.end()) {
-            throw std::runtime_error("duplicate tensor upload: " + tensor_name);
-        }
-        DeviceTensor tensor{DeviceBuffer(static_cast<size_t>(byte_size)), std::move(dimensions)};
-        check_cuda(
-            cudaMemcpyAsync(
-                tensor.storage.as<void>(),
-                data,
-                static_cast<size_t>(byte_size),
-                cudaMemcpyHostToDevice,
-                stream_
-            ),
-            "cudaMemcpyAsync(weight H2D)"
-        );
-        weight_bytes_ += byte_size;
-        tensors_.emplace(tensor_name, std::move(tensor));
-    }
-
-    Qwen3TtsTalkerMemory finalize_weights() {
-        if (weights_finalized_) {
-            throw std::runtime_error("weights are already finalized");
-        }
-        if (tensors_.size() != 404) {
-            throw std::runtime_error(
-                "expected exactly 404 VoiceDesign tensors, found "
-                    + std::to_string(tensors_.size())
-            );
-        }
-
-        codec_embedding_ = require("talker.model.codec_embedding.weight", {kTalkerVocabulary, kTalkerHidden});
-        text_embedding_ = require("talker.model.text_embedding.weight", {kTextVocabulary, kTalkerHidden});
-        text_fc1_ = require("talker.text_projection.linear_fc1.weight", {kTalkerHidden, kTalkerHidden});
-        text_fc1_bias_ = require("talker.text_projection.linear_fc1.bias", {kTalkerHidden});
-        text_fc2_ = require("talker.text_projection.linear_fc2.weight", {kTalkerHidden, kTalkerHidden});
-        text_fc2_bias_ = require("talker.text_projection.linear_fc2.bias", {kTalkerHidden});
-        talker_norm_ = require("talker.model.norm.weight", {kTalkerHidden});
-        codec_head_ = require("talker.codec_head.weight", {kTalkerVocabulary, kTalkerHidden});
-
-        talker_layers_.reserve(kTalkerLayers);
-        for (int layer = 0; layer < kTalkerLayers; ++layer) {
-            talker_layers_.push_back(load_layer(
-                "talker.model.layers." + std::to_string(layer),
-                kTalkerDimensions
-            ));
-        }
-
-        small_to_predictor_ = require(
-            "talker.code_predictor.small_to_mtp_projection.weight",
-            {kPredictorHidden, kTalkerHidden}
-        );
-        small_to_predictor_bias_ = require(
-            "talker.code_predictor.small_to_mtp_projection.bias",
-            {kPredictorHidden}
-        );
-        predictor_norm_ = require("talker.code_predictor.model.norm.weight", {kPredictorHidden});
-
-        predictor_layers_.reserve(kPredictorLayers);
-        for (int layer = 0; layer < kPredictorLayers; ++layer) {
-            predictor_layers_.push_back(load_layer(
-                "talker.code_predictor.model.layers." + std::to_string(layer),
-                kPredictorDimensions
-            ));
-        }
-        for (int group = 0; group < kResidualCodebooks; ++group) {
-            predictor_embeddings_[group] = require(
-                "talker.code_predictor.model.codec_embedding." + std::to_string(group) + ".weight",
-                {kPredictorVocabulary, kTalkerHidden}
-            );
-            predictor_heads_[group] = require(
-                "talker.code_predictor.lm_head." + std::to_string(group) + ".weight",
-                {kPredictorVocabulary, kPredictorHidden}
-            );
-        }
-
-        check_cuda(cudaStreamSynchronize(stream_), "cudaStreamSynchronize(weight upload)");
-        weights_finalized_ = true;
-        return memory_stats();
-    }
-
     void reset(uint64_t seed) {
+        check_cuda(cudaSetDevice(device_index_), "cudaSetDevice(reset)");
         position_ = 0;
         generated_semantic_count_ = 0;
+        frames_generated_ = 0;
+        device_sample_count_ = 0;
+        host_sync_count_ = 0;
+        current_semantic_token_ = 0;
+        phase_ = model_->finalized()
+            ? QWEN3_TTS_TALKER_READY
+            : QWEN3_TTS_TALKER_CREATED;
         const uint64_t random_state = seed == 0 ? 0x9e3779b97f4a7c15ULL : seed;
         check_cuda(
             cudaMemcpy(
@@ -471,6 +649,7 @@ public:
         int token_count,
         const Qwen3TtsSamplingConfig& sampling
     ) {
+        check_cuda(cudaSetDevice(device_index_), "cudaSetDevice(prefill)");
         ensure_ready();
         if (text_ids == nullptr || codec_ids == nullptr || token_count <= 0) {
             throw std::runtime_error("prefill requires non-empty text and codec ID arrays");
@@ -506,6 +685,10 @@ public:
         position_ = token_count;
         sample_logits_device(kTalkerVocabulary, sampling, true);
         const int first = copy_sampled_token_to_host();
+        current_semantic_token_ = static_cast<uint16_t>(first);
+        phase_ = first == kCodecEos
+            ? QWEN3_TTS_TALKER_ENDED
+            : QWEN3_TTS_TALKER_PREFILLED;
         Qwen3TtsTalkerPrefillResult result{};
         result.first_semantic_token = static_cast<uint16_t>(first);
         result.prompt_tokens = static_cast<uint32_t>(token_count);
@@ -519,6 +702,7 @@ public:
         const Qwen3TtsSamplingConfig& talker_sampling,
         const Qwen3TtsSamplingConfig& predictor_sampling
     ) {
+        check_cuda(cudaSetDevice(device_index_), "cudaSetDevice(next frame)");
         ensure_ready();
         if (semantic_token == kCodecEos) {
             throw std::runtime_error("EOS must not be expanded into a codec frame");
@@ -645,66 +829,18 @@ public:
         );
         std::copy_n(host_frame_codes_, kPredictorSequence, result.codes);
         result.next_semantic_token = static_cast<uint16_t>(next_semantic);
+        result.ended_by_eos = next_semantic == kCodecEos ? 1 : 0;
+        current_semantic_token_ = result.next_semantic_token;
+        ++frames_generated_;
+        phase_ = result.ended_by_eos != 0
+            ? QWEN3_TTS_TALKER_ENDED
+            : QWEN3_TTS_TALKER_PREFILLED;
         return result;
     }
 
 private:
-    const __nv_bfloat16* require(const std::string& name, std::vector<uint64_t> shape) {
-        const auto found = tensors_.find(name);
-        if (found == tensors_.end()) {
-            throw std::runtime_error("checkpoint is missing required tensor " + name);
-        }
-        if (found->second.shape != shape) {
-            throw std::runtime_error("unexpected shape for tensor " + name);
-        }
-        return found->second.storage.as<__nv_bfloat16>();
-    }
-
-    DecoderWeights load_layer(const std::string& prefix, const ModelDimensions& dimensions) {
-        return {
-            require(prefix + ".input_layernorm.weight", {static_cast<uint64_t>(dimensions.hidden)}),
-            require(prefix + ".self_attn.q_proj.weight", {
-                static_cast<uint64_t>(dimensions.query_width),
-                static_cast<uint64_t>(dimensions.hidden),
-            }),
-            require(prefix + ".self_attn.k_proj.weight", {
-                static_cast<uint64_t>(dimensions.key_value_width),
-                static_cast<uint64_t>(dimensions.hidden),
-            }),
-            require(prefix + ".self_attn.v_proj.weight", {
-                static_cast<uint64_t>(dimensions.key_value_width),
-                static_cast<uint64_t>(dimensions.hidden),
-            }),
-            require(prefix + ".self_attn.o_proj.weight", {
-                static_cast<uint64_t>(dimensions.hidden),
-                static_cast<uint64_t>(dimensions.query_width),
-            }),
-            require(prefix + ".self_attn.q_norm.weight", {
-                static_cast<uint64_t>(dimensions.head_dimension),
-            }),
-            require(prefix + ".self_attn.k_norm.weight", {
-                static_cast<uint64_t>(dimensions.head_dimension),
-            }),
-            require(prefix + ".post_attention_layernorm.weight", {
-                static_cast<uint64_t>(dimensions.hidden),
-            }),
-            require(prefix + ".mlp.gate_proj.weight", {
-                static_cast<uint64_t>(dimensions.intermediate),
-                static_cast<uint64_t>(dimensions.hidden),
-            }),
-            require(prefix + ".mlp.up_proj.weight", {
-                static_cast<uint64_t>(dimensions.intermediate),
-                static_cast<uint64_t>(dimensions.hidden),
-            }),
-            require(prefix + ".mlp.down_proj.weight", {
-                static_cast<uint64_t>(dimensions.hidden),
-                static_cast<uint64_t>(dimensions.intermediate),
-            }),
-        };
-    }
-
     void ensure_ready() const {
-        if (!weights_finalized_) {
+        if (!model_->finalized()) {
             throw std::runtime_error("weights have not been finalized");
         }
     }
@@ -1903,6 +2039,7 @@ private:
             ),
             "sample logits on device"
         );
+        ++device_sample_count_;
         if (talker) {
             check_cuda(
                 qwen3_tts::launch_store_sampled_token(
@@ -1928,6 +2065,7 @@ private:
             ),
             "copy sampled token to pinned host memory"
         );
+        ++host_sync_count_;
         check_cuda(cudaStreamSynchronize(stream_), "synchronize sampled token");
         if (*host_sampled_token_ < 0 || *host_sampled_token_ >= kTalkerVocabulary) {
             throw std::runtime_error("device sampler returned an invalid token");
@@ -1935,7 +2073,20 @@ private:
         return *host_sampled_token_;
     }
 
-    Qwen3TtsTalkerMemory memory_stats() const {
+public:
+    Qwen3TtsTalkerStateInfo state_info() const {
+        Qwen3TtsTalkerStateInfo result{};
+        result.abi_version = QWEN3_TTS_TALKER_ABI_VERSION;
+        result.phase = static_cast<uint32_t>(phase_);
+        result.talker_position = static_cast<uint32_t>(position_);
+        result.semantic_history_count = static_cast<uint32_t>(generated_semantic_count_);
+        result.frames_generated = frames_generated_;
+        result.device_sample_count = device_sample_count_;
+        result.host_sync_count = host_sync_count_;
+        return result;
+    }
+
+    Qwen3TtsSessionMemory session_memory() const {
         uint64_t talker_kv = 0;
         for (const LayerCache& cache : talker_cache_) {
             talker_kv += cache.key.bytes() + cache.value.bytes();
@@ -1951,16 +2102,16 @@ private:
             + packed_value_.bytes() + packed_attention_.bytes() + attention_scores_.bytes()
             + sampled_token_.bytes() + frame_tokens_.bytes() + frame_codes_.bytes()
             + semantic_history_.bytes() + random_state_.bytes();
-        Qwen3TtsTalkerMemory result{};
-        result.weight_bytes = weight_bytes_;
+        Qwen3TtsSessionMemory result{};
         result.talker_kv_bytes = talker_kv;
         result.predictor_kv_bytes = predictor_kv;
         result.workspace_bytes = workspace;
         result.max_sequence_length = static_cast<uint32_t>(max_sequence_length_);
-        result.tensor_count = static_cast<uint32_t>(tensors_.size());
         return result;
     }
 
+private:
+    std::shared_ptr<TalkerModel> model_;
     int device_index_;
     int max_sequence_length_;
     int prefill_gemm_capacity_;
@@ -1968,9 +2119,12 @@ private:
     bool stage_dump_enabled_;
     int position_ = 0;
     bool trace_active_ = false;
-    bool weights_finalized_ = false;
-    uint64_t weight_bytes_ = 0;
     int generated_semantic_count_ = 0;
+    uint16_t current_semantic_token_ = 0;
+    Qwen3TtsTalkerPhase phase_ = QWEN3_TTS_TALKER_CREATED;
+    uint64_t frames_generated_ = 0;
+    uint64_t device_sample_count_ = 0;
+    uint64_t host_sync_count_ = 0;
     int* host_sampled_token_ = nullptr;
     uint16_t* host_frame_codes_ = nullptr;
     cudaStream_t stream_ = nullptr;
@@ -1979,7 +2133,6 @@ private:
     cudaEvent_t stop_ = nullptr;
     cudaEvent_t predictor_start_ = nullptr;
     cudaEvent_t predictor_stop_ = nullptr;
-    std::unordered_map<std::string, DeviceTensor> tensors_;
     std::vector<DecoderWeights> talker_layers_;
     std::vector<DecoderWeights> predictor_layers_;
     std::vector<LayerCache> talker_cache_;
@@ -2023,9 +2176,18 @@ private:
     DeviceBuffer random_state_;
 };
 
-TalkerContext* context(Qwen3TtsTalkerHandle handle) {
+using TalkerModelBox = std::shared_ptr<TalkerModel>;
+
+TalkerModelBox& model(Qwen3TtsModelHandle handle) {
     if (handle == nullptr) {
-        throw std::runtime_error("talker handle is null");
+        throw std::runtime_error("model handle is null");
+    }
+    return *static_cast<TalkerModelBox*>(handle);
+}
+
+TalkerContext* session(Qwen3TtsSessionHandle handle) {
+    if (handle == nullptr) {
+        throw std::runtime_error("session handle is null");
     }
     return static_cast<TalkerContext*>(handle);
 }
@@ -2044,29 +2206,31 @@ int32_t protect(Operation&& operation, char* error, size_t error_capacity) {
 
 }  // namespace
 
-extern "C" QWEN3_TTS_API int32_t qwen3_tts_talker_create(
+extern "C" QWEN3_TTS_API uint32_t qwen3_tts_talker_abi_version(void) {
+    return QWEN3_TTS_TALKER_ABI_VERSION;
+}
+
+extern "C" QWEN3_TTS_API int32_t qwen3_tts_model_create(
     int32_t device_index,
-    int32_t max_sequence_length,
-    uint64_t random_seed,
-    Qwen3TtsTalkerHandle* output,
+    Qwen3TtsModelHandle* output,
     char* error,
     size_t error_capacity
 ) {
     if (output == nullptr) {
-        write_error(error, error_capacity, "talker output handle pointer is null");
+        write_error(error, error_capacity, "model output handle pointer is null");
         return -1;
     }
     return protect([&] {
-        *output = new TalkerContext(device_index, max_sequence_length, random_seed);
+        *output = new TalkerModelBox(std::make_shared<TalkerModel>(device_index));
     }, error, error_capacity);
 }
 
-extern "C" QWEN3_TTS_API void qwen3_tts_talker_destroy(Qwen3TtsTalkerHandle handle) {
-    delete static_cast<TalkerContext*>(handle);
+extern "C" QWEN3_TTS_API void qwen3_tts_model_destroy(Qwen3TtsModelHandle handle) {
+    delete static_cast<TalkerModelBox*>(handle);
 }
 
-extern "C" QWEN3_TTS_API int32_t qwen3_tts_talker_upload_tensor(
-    Qwen3TtsTalkerHandle handle,
+extern "C" QWEN3_TTS_API int32_t qwen3_tts_model_upload_tensor(
+    Qwen3TtsModelHandle handle,
     const char* name,
     const void* bf16_data,
     uint64_t byte_size,
@@ -2076,13 +2240,13 @@ extern "C" QWEN3_TTS_API int32_t qwen3_tts_talker_upload_tensor(
     size_t error_capacity
 ) {
     return protect([&] {
-        context(handle)->upload_tensor(name, bf16_data, byte_size, rank, shape);
+        model(handle)->upload_tensor(name, bf16_data, byte_size, rank, shape);
     }, error, error_capacity);
 }
 
-extern "C" QWEN3_TTS_API int32_t qwen3_tts_talker_finalize_weights(
-    Qwen3TtsTalkerHandle handle,
-    Qwen3TtsTalkerMemory* memory,
+extern "C" QWEN3_TTS_API int32_t qwen3_tts_model_finalize(
+    Qwen3TtsModelHandle handle,
+    Qwen3TtsModelMemory* memory,
     char* error,
     size_t error_capacity
 ) {
@@ -2091,23 +2255,51 @@ extern "C" QWEN3_TTS_API int32_t qwen3_tts_talker_finalize_weights(
         return -1;
     }
     return protect([&] {
-        *memory = context(handle)->finalize_weights();
+        *memory = model(handle)->finalize();
     }, error, error_capacity);
 }
 
-extern "C" QWEN3_TTS_API int32_t qwen3_tts_talker_reset(
-    Qwen3TtsTalkerHandle handle,
+extern "C" QWEN3_TTS_API int32_t qwen3_tts_session_create(
+    Qwen3TtsModelHandle model_handle,
+    int32_t max_sequence_length,
+    uint64_t random_seed,
+    Qwen3TtsSessionHandle* output,
+    Qwen3TtsSessionMemory* memory,
+    char* error,
+    size_t error_capacity
+) {
+    if (output == nullptr || memory == nullptr) {
+        write_error(error, error_capacity, "session output or memory pointer is null");
+        return -1;
+    }
+    return protect([&] {
+        auto created = std::make_unique<TalkerContext>(
+            model(model_handle),
+            max_sequence_length,
+            random_seed
+        );
+        *memory = created->session_memory();
+        *output = created.release();
+    }, error, error_capacity);
+}
+
+extern "C" QWEN3_TTS_API void qwen3_tts_session_destroy(Qwen3TtsSessionHandle handle) {
+    delete static_cast<TalkerContext*>(handle);
+}
+
+extern "C" QWEN3_TTS_API int32_t qwen3_tts_session_reset(
+    Qwen3TtsSessionHandle handle,
     uint64_t random_seed,
     char* error,
     size_t error_capacity
 ) {
     return protect([&] {
-        context(handle)->reset(random_seed);
+        session(handle)->reset(random_seed);
     }, error, error_capacity);
 }
 
-extern "C" QWEN3_TTS_API int32_t qwen3_tts_talker_prefill(
-    Qwen3TtsTalkerHandle handle,
+extern "C" QWEN3_TTS_API int32_t qwen3_tts_session_prefill(
+    Qwen3TtsSessionHandle handle,
     const int32_t* text_token_ids,
     const int32_t* codec_token_ids,
     int32_t token_count,
@@ -2121,7 +2313,7 @@ extern "C" QWEN3_TTS_API int32_t qwen3_tts_talker_prefill(
         return -1;
     }
     return protect([&] {
-        *output = context(handle)->prefill(
+        *output = session(handle)->prefill(
             text_token_ids,
             codec_token_ids,
             token_count,
@@ -2130,26 +2322,51 @@ extern "C" QWEN3_TTS_API int32_t qwen3_tts_talker_prefill(
     }, error, error_capacity);
 }
 
-extern "C" QWEN3_TTS_API int32_t qwen3_tts_talker_next_frame(
-    Qwen3TtsTalkerHandle handle,
+extern "C" QWEN3_TTS_API int32_t qwen3_tts_session_next_frame(
+    Qwen3TtsSessionHandle handle,
     uint16_t semantic_token,
     int32_t trailing_text_token_id,
     Qwen3TtsSamplingConfig talker_sampling,
     Qwen3TtsSamplingConfig predictor_sampling,
-    Qwen3TtsCodecFrameResult* output,
+    uint16_t* output_codes,
+    size_t output_code_capacity,
+    uint16_t* next_semantic_token,
+    Qwen3TtsCodecFrameInfo* frame_info,
     char* error,
     size_t error_capacity
 ) {
-    if (output == nullptr) {
-        write_error(error, error_capacity, "codec-frame output pointer is null");
+    if (output_codes == nullptr || output_code_capacity < kPredictorSequence
+        || next_semantic_token == nullptr || frame_info == nullptr) {
+        write_error(error, error_capacity, "codec-frame outputs are null or undersized");
         return -1;
     }
     return protect([&] {
-        *output = context(handle)->next_frame(
+        const Qwen3TtsCodecFrameResult frame = session(handle)->next_frame(
             semantic_token,
             trailing_text_token_id,
             talker_sampling,
             predictor_sampling
         );
+        std::copy_n(frame.codes, kPredictorSequence, output_codes);
+        *next_semantic_token = frame.next_semantic_token;
+        frame_info->talker_position = frame.talker_position;
+        frame_info->ended_by_eos = frame.ended_by_eos;
+        frame_info->predictor_gpu_milliseconds = frame.predictor_gpu_milliseconds;
+        frame_info->talker_gpu_milliseconds = frame.talker_gpu_milliseconds;
+    }, error, error_capacity);
+}
+
+extern "C" QWEN3_TTS_API int32_t qwen3_tts_session_state_info(
+    Qwen3TtsSessionHandle handle,
+    Qwen3TtsTalkerStateInfo* output,
+    char* error,
+    size_t error_capacity
+) {
+    if (output == nullptr) {
+        write_error(error, error_capacity, "session state output pointer is null");
+        return -1;
+    }
+    return protect([&] {
+        *output = session(handle)->state_info();
     }, error, error_capacity);
 }
