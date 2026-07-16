@@ -6,6 +6,7 @@ use ffi::{Api, CODEBOOKS, MAX_PACKET_FRAMES, MAX_PACKET_SAMPLES, STATUS_STATE};
 use reference::ReferenceState;
 use serde_json::{Value, json};
 use std::error::Error;
+use std::fs;
 use std::io;
 use std::path::Path;
 
@@ -35,6 +36,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             let model = required_argument(&arguments, 3, "speech tokenizer safetensors path")?;
             load_model(Path::new(library), Path::new(model))
         }
+        "frontend-parity" => {
+            let library = required_argument(&arguments, 2, "shared library path")?;
+            let model = required_argument(&arguments, 3, "speech tokenizer safetensors path")?;
+            let fixture = required_argument(&arguments, 4, "decoder fixture directory")?;
+            frontend_parity(Path::new(library), Path::new(model), Path::new(fixture))
+        }
         _ => {
             eprintln!(
                 "usage: qwen3-tts-native-codec <parity|benchmark> <library> [iterations]\n\
@@ -44,6 +51,125 @@ fn main() -> Result<(), Box<dyn Error>> {
             Ok(())
         }
     }
+}
+
+fn frontend_parity(
+    library_path: &Path,
+    model_path: &Path,
+    fixture_path: &Path,
+) -> Result<(), Box<dyn Error>> {
+    let codes = read_u16_le(&fixture_path.join("codes.u16le"))?;
+    if codes.len() % ffi::CODEBOOKS != 0 {
+        return Err(io::Error::other("fixture code count is not divisible by 16").into());
+    }
+    let frames = codes
+        .chunks_exact(ffi::CODEBOOKS)
+        .map(|values| values.try_into().expect("chunk contains exactly 16 codes"))
+        .collect::<Vec<[u16; ffi::CODEBOOKS]>>();
+    let expected_rvq = read_f32_le(&fixture_path.join("01-rvq.f32le"))?;
+    let expected_preconv = read_f32_le(&fixture_path.join("02-pre-conv.f32le"))?;
+
+    let api = Api::load(library_path)?;
+    let model = model::SafetensorsFile::open(model_path)?;
+    let mut codec = api.create_codec(0).map_err(io::Error::other)?;
+    codec.load_model(&model).map_err(io::Error::other)?;
+    let (actual_rvq, actual_preconv) = codec.debug_frontend(&frames).map_err(io::Error::other)?;
+    let rvq = compare_f32(&actual_rvq, &expected_rvq)?;
+    let preconv = compare_f32(&actual_preconv, &expected_preconv)?;
+    let passed = rvq.maximum_absolute_error <= 1.0e-4 && preconv.maximum_absolute_error <= 1.0e-5;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "schema_version": 1,
+            "mode": "real_qwen_decoder_frontend",
+            "passed": passed,
+            "frames": frames.len(),
+            "rvq": rvq.to_json(),
+            "preconv": preconv.to_json(),
+            "thresholds": {
+                "rvq_maximum_absolute_error": 1.0e-4,
+                "preconv_maximum_absolute_error": 1.0e-5
+            }
+        }))?
+    );
+    if !passed {
+        return Err(io::Error::other("native decoder frontend parity failed").into());
+    }
+    Ok(())
+}
+
+struct Comparison {
+    count: usize,
+    maximum_absolute_error: f64,
+    root_mean_squared_error: f64,
+    maximum_error_index: usize,
+    actual_at_maximum: f32,
+    expected_at_maximum: f32,
+}
+
+impl Comparison {
+    fn to_json(&self) -> Value {
+        json!({
+            "count": self.count,
+            "maximum_absolute_error": self.maximum_absolute_error,
+            "root_mean_squared_error": self.root_mean_squared_error
+            ,"maximum_error_index": self.maximum_error_index
+            ,"actual_at_maximum": self.actual_at_maximum
+            ,"expected_at_maximum": self.expected_at_maximum
+        })
+    }
+}
+
+fn compare_f32(actual: &[f32], expected: &[f32]) -> Result<Comparison, Box<dyn Error>> {
+    if actual.len() != expected.len() {
+        return Err(io::Error::other(format!(
+            "checkpoint lengths differ: {} != {}",
+            actual.len(),
+            expected.len()
+        ))
+        .into());
+    }
+    let mut maximum_absolute_error = 0.0_f64;
+    let mut maximum_error_index = 0_usize;
+    let mut squared_error = 0.0_f64;
+    for (index, (actual, expected)) in actual.iter().zip(expected).enumerate() {
+        let error = f64::from(*actual) - f64::from(*expected);
+        if error.abs() > maximum_absolute_error {
+            maximum_absolute_error = error.abs();
+            maximum_error_index = index;
+        }
+        squared_error += error * error;
+    }
+    Ok(Comparison {
+        count: actual.len(),
+        maximum_absolute_error,
+        root_mean_squared_error: (squared_error / actual.len() as f64).sqrt(),
+        maximum_error_index,
+        actual_at_maximum: actual[maximum_error_index],
+        expected_at_maximum: expected[maximum_error_index],
+    })
+}
+
+fn read_u16_le(path: &Path) -> Result<Vec<u16>, Box<dyn Error>> {
+    let bytes = fs::read(path)?;
+    if bytes.len() % 2 != 0 {
+        return Err(io::Error::other("u16 fixture has a partial scalar").into());
+    }
+    Ok(bytes
+        .chunks_exact(2)
+        .map(|chunk| u16::from_le_bytes(chunk.try_into().expect("two bytes")))
+        .collect())
+}
+
+fn read_f32_le(path: &Path) -> Result<Vec<f32>, Box<dyn Error>> {
+    let bytes = fs::read(path)?;
+    if bytes.len() % 4 != 0 {
+        return Err(io::Error::other("f32 fixture has a partial scalar").into());
+    }
+    Ok(bytes
+        .chunks_exact(4)
+        .map(|chunk| f32::from_le_bytes(chunk.try_into().expect("four bytes")))
+        .collect())
 }
 
 fn load_model(library_path: &Path, model_path: &Path) -> Result<(), Box<dyn Error>> {

@@ -29,4 +29,4 @@ target_compile_options(qwen3_tts_codec_cuda PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>:-Xptxas=-warn-spills>
 )
 
-target_link_libraries(qwen3_tts_codec_cuda PRIVATE CUDA::cudart)
+target_link_libraries(qwen3_tts_codec_cuda PRIVATE CUDA::cudart CUDA::cublas)

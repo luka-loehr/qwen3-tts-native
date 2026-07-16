@@ -154,6 +154,20 @@ QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_model_info_v1(
     size_t error_capacity
 );
 
+/* Research-only parity hook. Output layouts match the official checkpoints:
+ * RVQ is [1, 512, frames], pre-convolution is [1, frames, 1024]. */
+QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_debug_frontend_packet_v1(
+    Qwen3TtsCodecContextV1* context,
+    const uint16_t* codec_frames,
+    uint32_t frame_count,
+    float* rvq_output,
+    size_t rvq_capacity,
+    float* preconv_output,
+    size_t preconv_capacity,
+    char* error,
+    size_t error_capacity
+);
+
 QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_process_fixture_packet_v1(
     Qwen3TtsCodecContextV1* context,
     const uint16_t* codec_frames,
