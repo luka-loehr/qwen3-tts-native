@@ -1,10 +1,11 @@
-# Native Qwen3-TTS Artifact and Weight Loader
+# Native Qwen3-TTS Model Runtime
 
 This crate builds and loads a reproducible native artifact for
-`Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign`. It is a production-oriented weight and
-ownership layer, not a complete TTS inference engine. It does not execute the
-talker, code predictor, or neural speech decoder and therefore makes no
-time-to-first-audio, real-time-factor, or audio-quality claim.
+`Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign` and executes its talker and 15-step code
+predictor. It provides the production-oriented weight, ownership, prompt,
+sampling, and incremental codec-frame layers. PCM decoding remains a separate
+native crate and end-to-end delivery remains the responsibility of the public
+runtime crate.
 
 The runtime path uses Rust and a narrow CUDA C ABI. It has no Python, Node.js,
 Candle, HTTP, or background-thread dependency.
@@ -168,7 +169,7 @@ Two independent BF16 pack runs were byte-identical:
 - VoiceDesign weights: `391e8db219f292c515297cdceeb43e4eae67cdde35fa57e79a6a8a532fca0522`;
 - BF16 decoder weights: `062caa0a31346422410e4c0d2494aec14be20553f8cb0b71a875329de99ce180`.
 
-## Limits of the result
+## Artifact-loader result boundaries
 
 The full 4.06 GB model arena was not uploaded in one test. Only about 6.58 GB of
 CUDA-managed unified memory was free before the BF16 decoder test, and later
@@ -177,6 +178,227 @@ next to unrelated live workloads would not have been a safe research action.
 VoiceDesign tensors are nevertheless fully parsed, indexed, structurally
 validated, mapped, and whole-file hashed.
 
-This milestone does not implement neural forward passes, KV caches, sampling,
-streaming PCM, multilingual quality, concurrency, cancellation, TTFA, RTF, or
-energy measurement. Those gates belong to the subsequent execution-engine work.
+These measurements qualify artifact creation, validation, and upload only. They
+must not be presented as talker TTFA, RTF, streaming, or audio-quality results;
+the execution measurements below use separate benchmark evidence.
+
+## Talker and code predictor runtime
+
+This crate is the Rust and CUDA research implementation of the
+Qwen3-TTS-12Hz-1.7B-VoiceDesign talker and its 15-step code predictor. It loads
+the official BF16 Safetensors checkpoint, prepares the official VoiceDesign
+prompt, and incrementally emits one 16-codebook codec frame per call.
+
+The component is intentionally independent of the Ephraim backend and frontend.
+It emits codec tokens, not PCM audio. The speech-tokenizer decoder and network
+transport are separate integration layers.
+
+### Architecture
+
+The runtime separates immutable model state from request state:
+
+```text
+Arc<NativeTalkerModel>
+  |-- 404 immutable BF16 tensors on the GPU
+  |-- model configuration and tokenizer
+  `-- bounded inactive-session pool
+          |
+          `-- NativeTalkerSession per request
+                |-- independent CUDA stream
+                |-- independent cuBLAS handle
+                |-- independent talker and predictor KV caches
+                |-- independent workspace, RNG, cursor, and counters
+                `-- caller-owned 16-codebook frame output
+```
+
+`NativeTalkerModel` is `Send + Sync + 'static`. `NativeTalkerSession` is
+`Send + 'static` and deliberately not `Sync`: a session may move between host
+threads, but only one thread may mutate a particular session at a time. Separate
+sessions can execute `prefill` and `next_frame` concurrently on independent CUDA
+streams. No global inference lock is used.
+
+The inactive-session pool is locked only while a handle is acquired or returned.
+The lock is never held during tokenization, prefill, sampling, predictor execution,
+or talker execution. A failed native operation makes the session non-recyclable.
+
+### Memory model
+
+The immutable model weights are uploaded once per `NativeTalkerModel`:
+
+| Allocation | Bytes |
+| --- | ---: |
+| Shared BF16 weights | 3,833,352,704 |
+| Tensor count | 404 |
+
+Each active session owns only its KV caches, workspace, RNG, and counters.
+`max_sequence_length` is a hard safety limit, not an unconditional allocation.
+The actual capacity is calculated as:
+
+```text
+prompt token count + requested maximum codec frames
+```
+
+It is rounded to a small 32-position reusable size class. A request that exceeds
+its hard limit fails explicitly instead of truncating or silently growing into an
+unbounded allocation.
+
+For the qualification fixture with 26 prompt tokens and a 256-frame safety
+budget, the allocated capacity is 288 positions:
+
+| Per-session allocation | Bytes |
+| --- | ---: |
+| Talker KV cache | 33,030,144 |
+| Predictor KV cache | 327,680 |
+| Workspace | 21,544,172 |
+| Total | 54,901,996 |
+| Six active sessions | 329,411,976 |
+
+Shared weight bytes are reported once. Per-session and aggregate session bytes
+are reported separately by `benchmark-sessions`.
+
+### Rust API
+
+```rust,no_run
+use std::sync::Arc;
+use qwen3_tts_native::native_talker::{NativeTalkerModel, VoiceDesignRequest};
+
+# fn example() -> anyhow::Result<()> {
+let model: Arc<NativeTalkerModel> = NativeTalkerModel::load(
+    "build-native/libqwen3_tts_cuda.so".as_ref(),
+    "/models/Qwen3-TTS-12Hz-1.7B-VoiceDesign".as_ref(),
+    0,
+)?;
+
+let mut request = VoiceDesignRequest::new(
+    "Hallo.",
+    "A calm male voice, clear, relaxed, and natural.",
+    "German",
+);
+request.max_frames = 256;
+request.max_sequence_length = 1_024;
+
+let mut session = model.start(request)?;
+while let Some(frame) = session.next_frame()? {
+    // frame.codes contains codebooks 0 through 15 for one 12.5 Hz frame.
+}
+# Ok(())
+# }
+```
+
+Dropping a successfully prefetched session returns its native resources to the
+bounded pool. `cancel()` marks a request as cancelled; dropping it is sufficient
+to recycle the completed native call boundary. The session retains an `Arc` to
+the model, so model weights and the dynamic library remain alive until the last
+session is gone.
+
+`SessionStartTiming` separates:
+
+- tokenization;
+- prompt-plan construction;
+- session acquisition;
+- native session creation;
+- pooled-session reset;
+- prefill.
+
+Warm pool hits report zero native creation time.
+
+### C ABI
+
+The public header is `native/include/qwen3_tts_native.h`. The request lifecycle is
+exposed through two opaque handle families.
+
+Model operations:
+
+- `qwen3_tts_model_create`
+- `qwen3_tts_model_upload_tensor`
+- `qwen3_tts_model_finalize`
+- `qwen3_tts_model_destroy`
+
+Session operations:
+
+- `qwen3_tts_session_create`
+- `qwen3_tts_session_reset`
+- `qwen3_tts_session_prefill`
+- `qwen3_tts_session_next_frame`
+- `qwen3_tts_session_state_info`
+- `qwen3_tts_session_destroy`
+
+`qwen3_tts_session_next_frame` writes into a caller-owned array with
+`QWEN3_TTS_CODEC_CODEBOOKS` entries. It returns the next semantic token and timing
+metadata separately. A session handle never owns or duplicates model weights.
+
+### Build
+
+The project is built on the DGX Spark. A CUDA 13-compatible environment with
+cuBLAS and an SM 12.1 compiler target is required.
+
+```bash
+cmake -S native -B build-native -DCMAKE_BUILD_TYPE=Release
+cmake --build build-native --parallel
+cargo build --locked --release
+cargo test --locked --all-targets
+cargo clippy --locked --all-targets -- -D warnings
+```
+
+The checkpoint path is supplied at runtime. Model files are never copied into the
+repository or container image.
+
+### Generate codec frames
+
+```bash
+target/release/qwen3-tts-native generate-codes \
+  build-native/libqwen3_tts_cuda.so \
+  /models/Qwen3-TTS-12Hz-1.7B-VoiceDesign \
+  --text "Hallo." \
+  --instruction "A calm male voice, clear, relaxed, and natural." \
+  --language German \
+  --max-frames 256 \
+  --max-sequence 1024 \
+  --seed 11
+```
+
+Official explicit language prompt IDs are covered for Chinese, English, German,
+Italian, Portuguese, Spanish, Japanese, Korean, French, and Russian. `Auto` uses
+the checkpoint's official automatic-language prefix. Languages outside that list
+must be treated as empirical best effort.
+
+### Session qualification
+
+```bash
+target/release/qwen3-tts-native benchmark-sessions \
+  build-native/libqwen3_tts_cuda.so \
+  /models/Qwen3-TTS-12Hz-1.7B-VoiceDesign \
+  --text "Hallo." \
+  --instruction "A calm male voice, clear, relaxed, and natural." \
+  --language German \
+  --max-frames 256 \
+  --max-sequence 1024 \
+  --warm-requests 200 \
+  --rounds 3 \
+  --output ../../benchmarks/results/native-talker-session-qualification.json
+```
+
+The command performs all of the following in one persistent model process:
+
+- 200 measured warm requests with TTFA p50, p95, p99, and maximum;
+- separate tokenization, prompt-plan, acquire, create, reset, and prefill timings;
+- exact sampled parity for B1, B3, and B6 on real concurrent host threads;
+- exact greedy B3 parity;
+- duplicate-seed equality and different-seed isolation;
+- cancellation and sibling-session isolation;
+- single-thread round-robin interleaving;
+- movement of an owned session to another host thread;
+- pool-hit and per-session memory accounting;
+- explicit failure when the corpus reaches the frame limit before codec EOS.
+
+Run throughput qualification only on an otherwise idle GPU. Reports produced
+while another CUDA workload is active must be labelled contaminated and must not
+be promoted as qualifying evidence.
+
+### Component boundary
+
+This crate qualifies the VoiceDesign talker and code predictor. A complete audio
+service still requires the native speech-tokenizer decoder, packetization, raw
+socket streaming verification, audio-quality fixtures, energy measurement, and
+production integration. Those layers must consume this API without moving model
+weights into per-request state.
