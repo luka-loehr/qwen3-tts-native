@@ -273,6 +273,7 @@ struct RequestState {
     packets: VecDeque<OwnedAudioPacket>,
     packet_capacity: usize,
     producer_finished: bool,
+    retired: bool,
     cancel_requested: bool,
     failure: Option<BackendError>,
     metrics: RequestMetrics,
@@ -280,6 +281,7 @@ struct RequestState {
 
 struct RequestShared {
     id: u64,
+    started_at: Instant,
     state: Mutex<RequestState>,
     free_pcm: Mutex<Vec<Vec<i16>>>,
     changed: Condvar,
@@ -292,17 +294,20 @@ impl RequestShared {
         packet_capacity: usize,
         packet_samples: usize,
         commands: SyncSender<Command>,
+        started_at: Instant,
     ) -> Self {
         let free_pcm = (0..packet_capacity)
             .map(|_| vec![0_i16; packet_samples])
             .collect();
         Self {
             id,
+            started_at,
             state: Mutex::new(RequestState {
                 phase: RequestPhase::Queued,
                 packets: VecDeque::with_capacity(packet_capacity),
                 packet_capacity,
                 producer_finished: false,
+                retired: false,
                 cancel_requested: false,
                 failure: None,
                 metrics: RequestMetrics::default(),
@@ -361,7 +366,13 @@ impl RequestShared {
         {
             return Err(());
         }
+        let first_audio_microseconds = state.metrics.first_audio_microseconds;
+        let emitted_samples = state.metrics.emitted_samples;
+        let emitted_packets = state.metrics.emitted_packets;
         state.metrics = metrics;
+        state.metrics.first_audio_microseconds = first_audio_microseconds;
+        state.metrics.emitted_samples = emitted_samples;
+        state.metrics.emitted_packets = emitted_packets;
         if packet.descriptor.is_final != 0 {
             state.phase = RequestPhase::Draining;
             state.producer_finished = true;
@@ -388,6 +399,38 @@ impl RequestShared {
         state.failure = Some(error.into());
         self.changed.notify_all();
     }
+
+    fn mark_retired(&self) {
+        let mut state = lock_unpoisoned(&self.state);
+        state.retired = true;
+        self.changed.notify_all();
+    }
+
+    fn wait_retired(&self, timeout: Duration) -> bool {
+        let deadline = Instant::now().checked_add(timeout);
+        let mut state = lock_unpoisoned(&self.state);
+        while !state.retired {
+            let Some(deadline) = deadline else {
+                return false;
+            };
+            let now = Instant::now();
+            if now >= deadline {
+                return false;
+            }
+            let waited = self
+                .changed
+                .wait_timeout(state, deadline.saturating_duration_since(now));
+            let (next_state, result) = match waited {
+                Ok(value) => value,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            state = next_state;
+            if result.timed_out() && !state.retired {
+                return false;
+            }
+        }
+        true
+    }
 }
 
 enum Command {
@@ -411,6 +454,18 @@ struct ActiveRequest<Session> {
     started_at: Instant,
     max_codec_frames: u32,
     _permit: SlotPermit,
+}
+
+fn retire_pending(request: PendingStart) {
+    let shared = Arc::clone(&request.shared);
+    drop(request);
+    shared.mark_retired();
+}
+
+fn retire_active<Session>(request: ActiveRequest<Session>) {
+    let shared = Arc::clone(&request.shared);
+    drop(request);
+    shared.mark_retired();
 }
 
 pub struct RequestHandle {
@@ -454,14 +509,21 @@ impl RequestHandle {
             }
             if let Some(packet) = state.packets.pop_front() {
                 let final_packet = packet.descriptor.is_final != 0;
+                state.metrics.emitted_samples += u64::from(packet.descriptor.sample_count);
+                state.metrics.emitted_packets += 1;
+                if state.metrics.first_audio_microseconds == 0 {
+                    state.metrics.first_audio_microseconds =
+                        duration_microseconds(self.shared.started_at.elapsed());
+                }
+                if final_packet
+                    && state.packets.is_empty()
+                    && state.failure.is_none()
+                    && !state.cancel_requested
+                {
+                    state.phase = RequestPhase::Completed;
+                }
                 drop(state);
                 let _ = self.commands.try_send(Command::Wake);
-                if final_packet {
-                    let mut terminal = lock_unpoisoned(&self.shared.state);
-                    if terminal.packets.is_empty() && terminal.failure.is_none() {
-                        terminal.phase = RequestPhase::Completed;
-                    }
-                }
                 return Ok(PollOutcome::Packet(packet));
             }
             if state.producer_finished {
@@ -507,6 +569,15 @@ impl RequestHandle {
         self.commands
             .send(Command::Cancel(self.shared.id))
             .map_err(|_| SchedulerError::Closed)
+    }
+
+    pub fn wait_retired(&self, timeout: Duration) -> bool {
+        self.shared.wait_retired(timeout)
+    }
+
+    pub fn cancel_and_wait(&self, timeout: Duration) -> Result<bool, SchedulerError> {
+        self.cancel()?;
+        Ok(self.wait_retired(timeout))
     }
 }
 
@@ -562,12 +633,14 @@ impl<B: StreamingBackend> Scheduler<B> {
         validate_generation(&generation)?;
         let permit = self.slots.try_acquire().ok_or(SchedulerError::Full)?;
         let id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
+        let enqueued_at = Instant::now();
         let packet_samples = self.config.packet_frames as usize * SAMPLES_PER_CODEC_FRAME as usize;
         let shared = Arc::new(RequestShared::new(
             id,
             self.config.pcm_ring_slots as usize,
             packet_samples,
             self.commands.clone(),
+            enqueued_at,
         ));
         let pending = PendingStart {
             request: BackendRequest {
@@ -576,7 +649,7 @@ impl<B: StreamingBackend> Scheduler<B> {
                 generation,
             },
             shared: Arc::clone(&shared),
-            enqueued_at: Instant::now(),
+            enqueued_at,
             _permit: permit,
         };
         self.commands
@@ -760,9 +833,11 @@ fn worker_loop<B: StreamingBackend>(
             let _ = backend.cancel(session);
         }
         request.shared.mark_cancelled();
+        retire_active(request);
     }
     for request in pending {
         request.shared.mark_cancelled();
+        retire_pending(request);
     }
 }
 
@@ -800,6 +875,7 @@ fn handle_command<Session>(
             if let Some(index) = pending.iter().position(|request| request.request.id == id) {
                 let request = pending.swap_remove(index);
                 request.shared.mark_cancelled();
+                retire_pending(request);
             }
             if let Some(request) = active.iter().find(|request| request.record.id == id) {
                 request.shared.mark_cancelled();
@@ -823,6 +899,7 @@ fn start_pending<B: StreamingBackend>(
     for request in pending.drain(..) {
         if request.shared.is_cancel_requested() {
             request.shared.mark_cancelled();
+            retire_pending(request);
         } else {
             ready.push(request);
         }
@@ -846,6 +923,7 @@ fn start_pending<B: StreamingBackend>(
             request
                 .shared
                 .mark_failed("backend returned the wrong number of prefill results");
+            retire_pending(request);
         }
         return;
     }
@@ -866,7 +944,10 @@ fn start_pending<B: StreamingBackend>(
                     _permit: request._permit,
                 });
             }
-            Err(error) => request.shared.mark_failed(error),
+            Err(error) => {
+                request.shared.mark_failed(error);
+                retire_pending(request);
+            }
         }
     }
 }
@@ -883,6 +964,7 @@ fn remove_cancelled<B: StreamingBackend>(
                 let _ = backend.cancel(session);
             }
             request.shared.mark_cancelled();
+            retire_active(request);
         } else {
             index += 1;
         }
@@ -985,7 +1067,6 @@ fn step_eligible<B: StreamingBackend>(
                 let elapsed = duration_microseconds(request.started_at.elapsed());
                 if request.record.metrics.first_codec_frame_microseconds == 0 {
                     request.record.metrics.first_codec_frame_microseconds = elapsed;
-                    request.record.metrics.first_audio_microseconds = elapsed;
                 }
                 request.record.metrics.wall_microseconds = elapsed;
                 request.record.metrics.peak_request_device_bytes = request
@@ -1044,6 +1125,7 @@ fn remove_finished<B: StreamingBackend>(
             if failed_or_cancelled && let Some(session) = &mut request.session {
                 let _ = backend.cancel(session);
             }
+            retire_active(request);
         } else {
             index += 1;
         }
@@ -1205,6 +1287,8 @@ mod tests {
             3 * u64::from(SAMPLES_PER_CODEC_FRAME)
         );
         assert_eq!(metrics.peak_request_device_bytes, 2_048);
+        assert!(metrics.first_audio_microseconds >= metrics.first_codec_frame_microseconds);
+        assert!(request.wait_retired(Duration::from_secs(1)));
     }
 
     #[test]
@@ -1215,11 +1299,13 @@ mod tests {
             .unwrap();
         wait_for_phase(&request, RequestPhase::Generating);
         thread::sleep(Duration::from_millis(20));
-        assert_eq!(request.metrics().emitted_packets, 1);
+        assert_eq!(request.metrics().generated_codec_frames, 1);
+        assert_eq!(request.metrics().emitted_packets, 0);
         assert!(matches!(
             request.poll(Duration::from_secs(1)).unwrap(),
             PollOutcome::Packet(_)
         ));
+        assert_eq!(request.metrics().emitted_packets, 1);
         let second = request.poll(Duration::from_secs(1)).unwrap();
         assert!(matches!(second, PollOutcome::Packet(_)));
     }
@@ -1236,20 +1322,11 @@ mod tests {
                 .unwrap_err(),
             SchedulerError::Full
         );
-        request.cancel().unwrap();
-        let deadline = Instant::now() + Duration::from_secs(1);
-        loop {
-            match scheduler.start(input(), GenerationConfig::default()) {
-                Ok(replacement) => {
-                    replacement.cancel().unwrap();
-                    break;
-                }
-                Err(SchedulerError::Full) if Instant::now() < deadline => {
-                    thread::sleep(Duration::from_millis(1));
-                }
-                other => panic!("capacity did not recover: {other:?}"),
-            }
-        }
+        assert!(request.cancel_and_wait(Duration::from_secs(1)).unwrap());
+        let replacement = scheduler
+            .start(input(), GenerationConfig::default())
+            .expect("retired request must release capacity synchronously");
+        replacement.cancel().unwrap();
         assert_eq!(request.poll(Duration::ZERO), Err(PollError::Cancelled));
     }
 

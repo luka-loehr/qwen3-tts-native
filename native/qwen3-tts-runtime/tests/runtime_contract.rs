@@ -73,7 +73,9 @@ fn packet_positions_and_metrics_are_contiguous() {
     request.record_packet(&packet(7, 1, 4, 2), 4).unwrap();
     assert_eq!(request.next_codec_frame, 6);
     assert_eq!(request.next_sample, 11_520);
-    assert_eq!(request.metrics.emitted_packets, 2);
+    assert_eq!(request.metrics.generated_codec_frames, 6);
+    assert_eq!(request.metrics.emitted_packets, 0);
+    assert_eq!(request.metrics.emitted_samples, 0);
     assert_eq!(request.metrics.talker_gpu_microseconds, 20.0);
     assert_eq!(request.metrics.codec_gpu_microseconds, 40.0);
 }
