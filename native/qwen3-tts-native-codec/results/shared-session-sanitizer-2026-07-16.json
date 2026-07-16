@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "tool": "NVIDIA Compute Sanitizer 2025.3.1.0",
+  "mode": "memcheck",
+  "leak_check": "full",
+  "error_exit_code": 99,
+  "process_exit_code": 0,
+  "target": "shared-session-parity",
+  "target_stress_rounds": 1,
+  "target_passed": true,
+  "official_pcm_maximum_absolute_error_lsb": 1,
+  "batch_three": {
+    "interleaved_bit_exact": true,
+    "concurrent_bit_exact": true,
+    "reset_replay_bit_exact": true,
+    "state_matches": true
+  },
+  "batch_six": {
+    "interleaved_bit_exact": true,
+    "concurrent_bit_exact": true,
+    "state_matches": true
+  },
+  "cancel_drop": {
+    "cancelled_session_rejected_further_processing": true,
+    "survivor_bit_exact": true,
+    "all_sessions_released": true
+  },
+  "leak_summary": {
+    "bytes_leaked": 0,
+    "allocations": 0
+  },
+  "error_summary": {
+    "errors": 0
+  },
+  "timing_note": "Compute Sanitizer instrumentation deliberately distorts latency. Performance claims come only from the uninstrumented 200-request benchmark."
+}

@@ -10,26 +10,28 @@ qwen3-tts-native-codec = { path = "../qwen3-tts-native-codec" }
 ```
 
 Load the native library and decoder-only artifact once per process, then create
-one state handle per active stream:
+one owned session per active stream:
 
 ```rust
 use qwen3_tts_native_codec::{
     CODEBOOKS, DecoderWeights, NativeCodecLibrary,
 };
 use std::path::Path;
+use std::sync::Arc;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let native = NativeCodecLibrary::load(Path::new(
+    let native = Arc::new(NativeCodecLibrary::load(Path::new(
         "build/native/libqwen3_tts_codec_cuda.so",
-    ))?;
+    ))?);
     let weights = DecoderWeights::open(Path::new(
         "speech_tokenizer/model.safetensors",
     ))?;
 
-    let mut stream = native.create_codec(0).map_err(std::io::Error::other)?;
-    let model = stream.load_model(&weights).map_err(std::io::Error::other)?;
-    assert_eq!(model.tensor_count, 271);
-    stream.warmup().map_err(std::io::Error::other)?;
+    let model = native
+        .load_shared_model(0, &weights)
+        .map_err(std::io::Error::other)?;
+    assert_eq!(model.model_info().map_err(std::io::Error::other)?.tensor_count, 271);
+    let mut stream = model.start_session().map_err(std::io::Error::other)?;
 
     let frames: [[u16; CODEBOOKS]; 1] = [[0; CODEBOOKS]];
     let (pcm, result) = stream
@@ -70,11 +72,55 @@ impl DecoderWeightProvider for NativeArtifact {
 }
 ```
 
-`NativeCodec::load_model(&artifact)` then uses the same C callback path. The
-provider view is borrowed only for the duration of the call; the native layer
-owns its CUDA copy afterward.
+`NativeCodecLibrary::load_shared_model(0, &artifact)` then uses the same C
+callback path. The provider view is borrowed only for the duration of the
+call; the shared native model owns its CUDA copy afterward.
 
-## Decode independent streams through the batch API
+## Process sessions concurrently
+
+`NativeCodecModel` is `Send + Sync`, and each owned session is `Send + 'static`
+but not `Sync`. Distinct sessions can be processed on scoped host threads:
+
+```rust
+# use qwen3_tts_native_codec::{CODEBOOKS, NativeCodecModel};
+# use std::sync::Arc;
+# fn example(model: &Arc<NativeCodecModel>) -> Result<(), Box<dyn std::error::Error>> {
+let mut sessions = (0..3)
+    .map(|_| model.start_session().map_err(std::io::Error::other))
+    .collect::<Result<Vec<_>, _>>()?;
+let packets = [
+    [[1_u16; CODEBOOKS]],
+    [[2_u16; CODEBOOKS]],
+    [[3_u16; CODEBOOKS]],
+];
+
+std::thread::scope(|scope| {
+    let workers = sessions
+        .iter_mut()
+        .zip(&packets)
+        .map(|(session, packet)| {
+            scope.spawn(move || session.process(packet, true))
+        })
+        .collect::<Vec<_>>();
+    for worker in workers {
+        let (pcm, _) = worker.join().expect("decoder worker did not panic")
+            .map_err(|(status, message)| {
+                std::io::Error::other(format!("decoder status {status}: {message}"))
+            })?;
+        assert_eq!(pcm.len(), 1_920);
+    }
+    Ok::<_, Box<dyn std::error::Error>>(())
+})?;
+# Ok(())
+# }
+```
+
+Each worker uses an independent non-blocking CUDA stream and cuBLAS handle.
+There is no global inference lock. Call `cancel()` to terminate one session;
+siblings continue unaffected. `reset()` explicitly returns a session to fresh
+state.
+
+## Legacy array-order batch API
 
 The batch method accepts mutable references to distinct state handles, packet
 slices, and final flags of equal length:
@@ -101,8 +147,8 @@ assert_eq!(output[1].0.len(), 5_760);
 # }
 ```
 
-The handles must be independent. The current implementation dispatches them in
-array order and does not claim fused-batch acceleration.
+The handles must be independent. This compatibility API dispatches them in
+array order and does not claim fused-batch acceleration or host concurrency.
 
 ## Run the real neural CLI gates
 
@@ -124,11 +170,18 @@ $BIN decoder-parity "$LIB" "$MODEL" "$FIXTURE"
 # Independent B=3 and B=6 state-handle tests.
 $BIN batch-parity "$LIB" "$MODEL" "$FIXTURE"
 
+# Shared weights, B=1/B=3/B=6 interleaving, 20 concurrent stress rounds,
+# reset/replay, cancel/drop, memory accounting, and official PCM.
+$BIN shared-session-parity "$LIB" "$MODEL" "$FIXTURE" 20
+
 # First real 80 ms packet without startup warmup.
 $BIN neural-cold-start "$LIB" "$MODEL"
 
 # Explicit startup warmup, then 20 warmups and 200 measurements per bucket.
 $BIN neural-benchmark "$LIB" "$MODEL" 200
+
+# Shared-model fresh-session TTFA and 200 measurements per packet bucket.
+$BIN shared-neural-benchmark "$LIB" "$MODEL" 200
 ```
 
 The legacy `parity` and `benchmark` commands exercise only a deterministic
@@ -139,7 +192,21 @@ from the commands above.
 ## Use the C ABI directly
 
 Include `native/include/qwen3_tts_codec.h` and link or dynamically load
-`libqwen3_tts_codec_cuda.so`. The required order is:
+`libqwen3_tts_codec_cuda.so`. The shared-model order is:
+
+1. `qwen3_tts_codec_shared_model_create_v1`
+2. `qwen3_tts_codec_shared_model_load_v1`
+3. `qwen3_tts_codec_shared_model_warmup_v1`
+4. one `qwen3_tts_codec_session_create_v1` per active request
+5. repeated `qwen3_tts_codec_session_process_packet_v1`
+6. `qwen3_tts_codec_session_destroy_v1`
+7. `qwen3_tts_codec_shared_model_destroy_v1`
+
+Sessions retain the model internally, so a model owner may be released before
+the final session; weights remain alive until the last reference is gone.
+`qwen3_tts_codec_session_memory_info_v1` excludes shared weights by design.
+
+The original ABI remains available:
 
 1. `qwen3_tts_codec_create_v1`
 2. `qwen3_tts_codec_load_model_v1`

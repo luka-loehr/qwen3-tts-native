@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "device": "NVIDIA GB10 DGX Spark",
+  "model": "Qwen3-TTS-12Hz-1.7B-VoiceDesign speech-tokenizer decoder",
+  "shared_model": {
+    "mode": "shared_immutable_real_qwen_decoder",
+    "model_load_and_warmup_milliseconds": 430.418052,
+    "tensor_count": 271,
+    "parameter_count": 114323137,
+    "source_bytes": 228646274,
+    "shared_weight_device_bytes": 457292548,
+    "fresh_session_first_80ms_chunk": {
+      "end_to_end_microseconds": 8137.64111328125,
+      "gpu_microseconds": 8130.14404296875,
+      "real_time_factor": 0.10172051391601562
+    },
+    "one_frame_80ms_packets": {
+      "iterations": 200,
+      "warmup_iterations": 20,
+      "end_to_end_microseconds": {
+        "minimum": 8042.666015625,
+        "p50": 12012.3662109375,
+        "p95": 12973.1025390625,
+        "p99": 16143.7626953125,
+        "maximum": 16264.2109375
+      },
+      "gpu_microseconds": {
+        "minimum": 8037.66455078125,
+        "p50": 12007.4248046875,
+        "p95": 12967.8720703125,
+        "p99": 16139.4560546875,
+        "maximum": 16258.9111328125
+      },
+      "p50_real_time_factor": 0.15015457763671874,
+      "p50_times_faster_than_realtime": 6.659803621967368
+    },
+    "four_frame_320ms_packets": {
+      "iterations": 200,
+      "warmup_iterations": 20,
+      "end_to_end_microseconds": {
+        "minimum": 49674.10546875,
+        "p50": 62198.96875,
+        "p95": 65965.0078125,
+        "p99": 68861.7890625,
+        "maximum": 70219.4375
+      },
+      "gpu_microseconds": {
+        "minimum": 49668.2890625,
+        "p50": 62192.4765625,
+        "p95": 65959.140625,
+        "p99": 68855.5234375,
+        "maximum": 70213.1484375
+      },
+      "p50_real_time_factor": 0.19437177734375,
+      "p50_times_faster_than_realtime": 5.144779832061122
+    },
+    "per_session_memory": {
+      "device_bytes": 35034920,
+      "host_pinned_bytes": 46080,
+      "transformer_kv_bytes": 7077888,
+      "convolution_history_bytes": 848832,
+      "codec_ring_bytes": 384,
+      "pcm_ring_bytes": 46080,
+      "workspace_device_bytes": 27061736
+    }
+  },
+  "legacy_same_build_sequential_run": {
+    "first_80ms_chunk_after_warmup_end_to_end_microseconds": 10388.4921875,
+    "one_frame_80ms_p50_end_to_end_microseconds": 16053.154296875,
+    "one_frame_80ms_p50_real_time_factor": 0.2006644287109375,
+    "four_frame_320ms_p50_end_to_end_microseconds": 71103.5546875,
+    "four_frame_320ms_p50_real_time_factor": 0.2221986083984375
+  },
+  "comparison_note": "The shared run preceded the legacy run on a non-exclusive machine. The observed values demonstrate no regression but are not a statistically controlled speedup claim.",
+  "runtime": {
+    "shared_weights_loaded_once": true,
+    "model_warmed_once": true,
+    "pcm_delivered_after_each_packet": true,
+    "python_or_node_runtime": false
+  }
+}
