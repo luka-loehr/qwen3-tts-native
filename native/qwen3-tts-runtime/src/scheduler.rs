@@ -8,7 +8,8 @@ use std::time::{Duration, Instant};
 
 use crate::{
     AudioPacketDescriptor, EngineConfig, GenerationConfig, RequestInput, RequestInputError,
-    RequestMetrics, RequestPhase, RequestRecord, SAMPLE_RATE, SAMPLES_PER_CODEC_FRAME,
+    RequestMetrics, RequestPhase, RequestRecord, RuntimeStatus, SAMPLE_RATE,
+    SAMPLES_PER_CODEC_FRAME,
 };
 
 const WORKER_IDLE_WAIT: Duration = Duration::from_millis(2);
@@ -16,18 +17,40 @@ const PCM_SENTINEL: i16 = i16::MIN;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BackendError {
+    status: RuntimeStatus,
     message: String,
 }
 
 impl BackendError {
     pub fn new(message: impl Into<String>) -> Self {
+        Self::with_status(RuntimeStatus::Internal, message)
+    }
+
+    pub fn with_status(status: RuntimeStatus, message: impl Into<String>) -> Self {
         Self {
+            status,
             message: message.into(),
         }
     }
 
+    pub fn status(&self) -> RuntimeStatus {
+        self.status
+    }
+
     pub fn message(&self) -> &str {
         &self.message
+    }
+}
+
+impl From<&str> for BackendError {
+    fn from(message: &str) -> Self {
+        Self::new(message)
+    }
+}
+
+impl From<String> for BackendError {
+    fn from(message: String) -> Self {
+        Self::new(message)
     }
 }
 
@@ -154,14 +177,14 @@ impl Drop for OwnedAudioPacket {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PollError {
     Cancelled,
-    Failed(String),
+    Failed(BackendError),
 }
 
 impl fmt::Display for PollError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Cancelled => formatter.write_str("request was cancelled"),
-            Self::Failed(message) => write!(formatter, "request failed: {message}"),
+            Self::Failed(error) => write!(formatter, "request failed: {error}"),
         }
     }
 }
@@ -250,7 +273,7 @@ struct RequestState {
     packet_capacity: usize,
     producer_finished: bool,
     cancel_requested: bool,
-    failure: Option<String>,
+    failure: Option<BackendError>,
     metrics: RequestMetrics,
 }
 
@@ -356,12 +379,12 @@ impl RequestShared {
         self.changed.notify_all();
     }
 
-    fn mark_failed(&self, message: impl Into<String>) {
+    fn mark_failed(&self, error: impl Into<BackendError>) {
         let mut state = lock_unpoisoned(&self.state);
         state.phase = RequestPhase::Failed;
         state.packets.clear();
         state.producer_finished = true;
-        state.failure = Some(message.into());
+        state.failure = Some(error.into());
         self.changed.notify_all();
     }
 }
@@ -422,8 +445,8 @@ impl RequestHandle {
         let deadline = Instant::now().checked_add(timeout);
         let mut state = lock_unpoisoned(&self.shared.state);
         loop {
-            if let Some(message) = &state.failure {
-                return Err(PollError::Failed(message.clone()));
+            if let Some(error) = &state.failure {
+                return Err(PollError::Failed(error.clone()));
             }
             if state.cancel_requested || state.phase == RequestPhase::Cancelled {
                 return Err(PollError::Cancelled);
@@ -787,7 +810,7 @@ fn start_pending<B: StreamingBackend>(
                     _permit: request._permit,
                 });
             }
-            Err(error) => request.shared.mark_failed(error.message()),
+            Err(error) => request.shared.mark_failed(error),
         }
     }
 }
@@ -940,7 +963,7 @@ fn step_eligible<B: StreamingBackend>(
             }
             Err(error) => {
                 request.shared.recycle_pcm(pcm);
-                request.shared.mark_failed(error.message());
+                request.shared.mark_failed(error);
             }
         }
     }
@@ -1217,6 +1240,48 @@ mod tests {
         let error = request.poll(Duration::from_secs(1)).unwrap_err();
         assert!(matches!(error, PollError::Failed(_)));
         assert_eq!(request.metrics().emitted_packets, 0);
+    }
+
+    #[test]
+    fn backend_failure_preserves_runtime_status_through_poll() {
+        struct FailingBackend;
+        impl StreamingBackend for FailingBackend {
+            type Session = ();
+
+            fn start(
+                &mut self,
+                _request: BackendRequest,
+            ) -> Result<BackendStarted<Self::Session>, BackendError> {
+                Ok(BackendStarted {
+                    session: (),
+                    prefill_microseconds: 0,
+                    peak_request_device_bytes: 0,
+                    peak_request_host_bytes: 0,
+                })
+            }
+
+            fn step(
+                &mut self,
+                _session: &mut Self::Session,
+                _packet_frames: u32,
+                _pcm: &mut [i16],
+            ) -> Result<BackendPacket, BackendError> {
+                Err(BackendError::with_status(
+                    RuntimeStatus::Cuda,
+                    "CUDA kernel launch failed",
+                ))
+            }
+        }
+
+        let scheduler = Scheduler::new(EngineConfig::default(), FailingBackend).unwrap();
+        let request = scheduler
+            .start(input(), GenerationConfig::default())
+            .unwrap();
+        let PollError::Failed(error) = request.poll(Duration::from_secs(1)).unwrap_err() else {
+            panic!("request did not preserve its backend failure");
+        };
+        assert_eq!(error.status(), RuntimeStatus::Cuda);
+        assert_eq!(error.message(), "CUDA kernel launch failed");
     }
 
     #[test]
