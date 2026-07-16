@@ -1,4 +1,5 @@
 mod ffi;
+mod model;
 mod reference;
 
 use ffi::{Api, CODEBOOKS, MAX_PACKET_FRAMES, MAX_PACKET_SAMPLES, STATUS_STATE};
@@ -25,11 +26,47 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .unwrap_or(200);
             benchmark(Path::new(library), iterations)
         }
+        "inspect-model" => {
+            let model = required_argument(&arguments, 2, "speech tokenizer safetensors path")?;
+            inspect_model(Path::new(model))
+        }
         _ => {
-            eprintln!("usage: qwen3-tts-native-codec <parity|benchmark> <library> [iterations]");
+            eprintln!(
+                "usage: qwen3-tts-native-codec <parity|benchmark> <library> [iterations]\n\
+                 or: qwen3-tts-native-codec inspect-model <speech-tokenizer.safetensors>"
+            );
             Ok(())
         }
     }
+}
+
+fn inspect_model(path: &Path) -> Result<(), Box<dyn Error>> {
+    let model = model::SafetensorsFile::open(path)?;
+    let (f32_tensors, bf16_tensors) = model.decoder_dtype_counts();
+    let required = [
+        "decoder.quantizer.rvq_first.vq.layers.0._codebook.embedding_sum",
+        "decoder.pre_transformer.layers.0.self_attn.q_proj.weight",
+        "decoder.decoder.6.conv.weight",
+    ];
+    for name in required {
+        if model.tensor(name).is_none() {
+            return Err(io::Error::other(format!("missing required tensor {name}")).into());
+        }
+    }
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "schema_version": 1,
+            "format": "safetensors",
+            "tensor_count": model.tensor_count(),
+            "decoder_tensor_count": model.decoder_tensor_count(),
+            "decoder_payload_bytes": model.decoder_payload_bytes(),
+            "decoder_dtype_counts": { "F32": f32_tensors, "BF16": bf16_tensors },
+            "accepted_dtypes": ["F32", "BF16"],
+            "runtime_dependency": "Rust standard library and serde_json; no Python or Node.js"
+        }))?
+    );
+    Ok(())
 }
 
 fn parity(library_path: &Path) -> Result<(), Box<dyn Error>> {
