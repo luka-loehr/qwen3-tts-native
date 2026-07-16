@@ -217,6 +217,23 @@ QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_debug_decoder_checkpoint_v1(
     size_t error_capacity
 );
 
+/* Decode one real Qwen3-TTS speech-tokenizer packet. Input is frame-major
+ * [frame_count, 16]. Output is mono 24 kHz signed 16-bit PCM and contains
+ * exactly frame_count * 1920 samples. State persists until reset. */
+QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_process_packet_v1(
+    Qwen3TtsCodecContextV1* context,
+    const uint16_t* codec_frames,
+    uint32_t frame_count,
+    int32_t is_final,
+    int16_t* pcm_output,
+    size_t pcm_capacity_samples,
+    Qwen3TtsCodecPacketResultV1* result,
+    char* error,
+    size_t error_capacity
+);
+
+/* Deterministic state-machine fixture. This does not execute neural weights
+ * and must never be used as a model-quality or model-latency measurement. */
 QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_process_fixture_packet_v1(
     Qwen3TtsCodecContextV1* context,
     const uint16_t* codec_frames,

@@ -60,6 +60,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             let fixture = required_argument(&arguments, 4, "decoder fixture directory")?;
             decoder_parity(Path::new(library), Path::new(model), Path::new(fixture))
         }
+        "neural-parity" => {
+            let library = required_argument(&arguments, 2, "shared library path")?;
+            let model = required_argument(&arguments, 3, "speech tokenizer safetensors path")?;
+            let fixture = required_argument(&arguments, 4, "decoder fixture directory")?;
+            neural_parity(Path::new(library), Path::new(model), Path::new(fixture))
+        }
         _ => {
             eprintln!(
                 "usage: qwen3-tts-native-codec <parity|benchmark> <library> [iterations]\n\
@@ -69,6 +75,149 @@ fn main() -> Result<(), Box<dyn Error>> {
             Ok(())
         }
     }
+}
+
+fn neural_parity(
+    library_path: &Path,
+    model_path: &Path,
+    fixture_path: &Path,
+) -> Result<(), Box<dyn Error>> {
+    let codes = read_u16_le(&fixture_path.join("codes.u16le"))?;
+    if codes.len() % ffi::CODEBOOKS != 0 {
+        return Err(io::Error::other("fixture code count is not divisible by 16").into());
+    }
+    let frames = codes
+        .chunks_exact(ffi::CODEBOOKS)
+        .map(|values| values.try_into().expect("chunk contains exactly 16 codes"))
+        .collect::<Vec<[u16; ffi::CODEBOOKS]>>();
+    let expected = read_i16_le(&fixture_path.join("reference-pcm.s16le"))?;
+    if expected.len() != frames.len() * ffi::SAMPLES_PER_FRAME {
+        return Err(io::Error::other("official PCM fixture has an invalid length").into());
+    }
+
+    let api = Api::load(library_path)?;
+    let model = model::SafetensorsFile::open(model_path)?;
+    let mut codec = api.create_codec(0).map_err(io::Error::other)?;
+    codec.load_model(&model).map_err(io::Error::other)?;
+
+    let (single, single_result) = codec.process(&frames, true).map_err(|(status, message)| {
+        io::Error::other(format!("single status {status}: {message}"))
+    })?;
+    let single_comparison = compare_pcm(&single, &expected)?;
+    let post_final_rejected = match codec.process(&frames[..1], false) {
+        Err((status, _)) => status == STATUS_STATE,
+        Ok(_) => false,
+    };
+
+    codec.reset().map_err(io::Error::other)?;
+    let mut split = Vec::with_capacity(expected.len());
+    let mut split_results = Vec::new();
+    let mut frame_position = 0_usize;
+    for count in [1_usize, 3] {
+        let end = frame_position + count;
+        let (pcm, result) = codec
+            .process(&frames[frame_position..end], end == frames.len())
+            .map_err(|(status, message)| {
+                io::Error::other(format!("split status {status}: {message}"))
+            })?;
+        split.extend_from_slice(&pcm);
+        split_results.push(result);
+        frame_position = end;
+    }
+    let split_comparison = compare_pcm(&split, &expected)?;
+    let split_vs_single = compare_pcm(&split, &single)?;
+
+    codec.reset().map_err(io::Error::other)?;
+    let mut wrapped = Vec::with_capacity(expected.len());
+    let mut wrapped_slots = Vec::new();
+    for (index, frame) in frames.iter().enumerate() {
+        let (pcm, result) = codec
+            .process(std::slice::from_ref(frame), index + 1 == frames.len())
+            .map_err(|(status, message)| {
+                io::Error::other(format!("slot-wrap status {status}: {message}"))
+            })?;
+        wrapped.extend_from_slice(&pcm);
+        wrapped_slots.push(result.ring_slot);
+    }
+    let wrapped_comparison = compare_pcm(&wrapped, &expected)?;
+    let wrapped_state = codec.state_info().map_err(io::Error::other)?;
+
+    codec.reset().map_err(io::Error::other)?;
+    let (replay, replay_result) = codec.process(&frames, true).map_err(|(status, message)| {
+        io::Error::other(format!("replay status {status}: {message}"))
+    })?;
+    let replay_comparison = compare_pcm(&replay, &single)?;
+
+    codec.reset().map_err(io::Error::other)?;
+    const SENTINEL: i16 = 0x5a5a;
+    let mut poisoned_output = vec![SENTINEL; MAX_PACKET_SAMPLES];
+    let short_result = codec
+        .process_into(&frames[..1], true, &mut poisoned_output)
+        .map_err(|(status, message)| {
+            io::Error::other(format!("short-final status {status}: {message}"))
+        })?;
+    let short_comparison = compare_pcm(
+        &poisoned_output[..ffi::SAMPLES_PER_FRAME],
+        &expected[..ffi::SAMPLES_PER_FRAME],
+    )?;
+    let stale_tail_unchanged = poisoned_output[ffi::SAMPLES_PER_FRAME..]
+        .iter()
+        .all(|sample| *sample == SENTINEL);
+
+    let metadata_matches = single_result.first_frame_position == 0
+        && single_result.first_sample_position == 0
+        && single_result.frame_count == frames.len() as u32
+        && single_result.sample_count == expected.len() as u32
+        && single_result.ring_slot == 0
+        && single_result.is_final == 1
+        && split_results[0].sample_count == ffi::SAMPLES_PER_FRAME as u32
+        && split_results[1].first_frame_position == 1
+        && split_results[1].first_sample_position == ffi::SAMPLES_PER_FRAME as u64
+        && replay_result.sample_count == expected.len() as u32
+        && short_result.sample_count == ffi::SAMPLES_PER_FRAME as u32
+        && short_result.is_final == 1;
+    let wrapped_state_matches = wrapped_slots == [0, 1, 2, 0]
+        && wrapped_state.frame_position == frames.len() as u64
+        && wrapped_state.emitted_samples == expected.len() as u64
+        && wrapped_state.kv_ring_head == frames.len() as u32
+        && wrapped_state.next_ring_slot == 1;
+    let passed = single_comparison.maximum_absolute_error <= 1
+        && split_comparison.maximum_absolute_error <= 1
+        && split_vs_single.maximum_absolute_error <= 1
+        && wrapped_comparison.maximum_absolute_error <= 1
+        && replay_comparison.maximum_absolute_error == 0
+        && short_comparison.maximum_absolute_error <= 1
+        && stale_tail_unchanged
+        && post_final_rejected
+        && metadata_matches
+        && wrapped_state_matches;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "schema_version": 1,
+            "mode": "real_qwen_speech_tokenizer_decoder",
+            "passed": passed,
+            "frames": frames.len(),
+            "expected_samples": expected.len(),
+            "single_packet_vs_official": single_comparison.to_json(),
+            "split_1_3_vs_official": split_comparison.to_json(),
+            "split_1_3_vs_single": split_vs_single.to_json(),
+            "single_frame_packets_vs_official": wrapped_comparison.to_json(),
+            "reset_replay_vs_single": replay_comparison.to_json(),
+            "short_final_vs_official_prefix": short_comparison.to_json(),
+            "ring_slots": wrapped_slots,
+            "ring_slot_reuse_verified": wrapped_state_matches,
+            "short_final_samples": short_result.sample_count,
+            "stale_tail_sentinel_unchanged": stale_tail_unchanged,
+            "post_final_packet_rejected": post_final_rejected,
+            "packet_metadata_matches": metadata_matches,
+            "pcm_maximum_absolute_error_threshold": 1
+        }))?
+    );
+    if !passed {
+        return Err(io::Error::other("real neural decoder parity failed").into());
+    }
+    Ok(())
 }
 
 fn decoder_parity(
@@ -374,6 +523,50 @@ fn frontend_parity(
     Ok(())
 }
 
+struct PcmComparison {
+    count: usize,
+    maximum_absolute_error: i32,
+    mean_squared_error: f64,
+    exact_samples: usize,
+}
+
+impl PcmComparison {
+    fn to_json(&self) -> Value {
+        json!({
+            "count": self.count,
+            "maximum_absolute_error": self.maximum_absolute_error,
+            "mean_squared_error": self.mean_squared_error,
+            "exact_samples": self.exact_samples
+        })
+    }
+}
+
+fn compare_pcm(actual: &[i16], expected: &[i16]) -> Result<PcmComparison, Box<dyn Error>> {
+    if actual.len() != expected.len() {
+        return Err(io::Error::other(format!(
+            "PCM lengths differ: {} != {}",
+            actual.len(),
+            expected.len()
+        ))
+        .into());
+    }
+    let mut maximum_absolute_error = 0_i32;
+    let mut squared_error = 0_f64;
+    let mut exact_samples = 0_usize;
+    for (actual, expected) in actual.iter().zip(expected) {
+        let difference = i32::from(*actual) - i32::from(*expected);
+        maximum_absolute_error = maximum_absolute_error.max(difference.abs());
+        squared_error += f64::from(difference).powi(2);
+        exact_samples += usize::from(difference == 0);
+    }
+    Ok(PcmComparison {
+        count: actual.len(),
+        maximum_absolute_error,
+        mean_squared_error: squared_error / actual.len() as f64,
+        exact_samples,
+    })
+}
+
 struct Comparison {
     count: usize,
     maximum_absolute_error: f64,
@@ -434,6 +627,17 @@ fn read_u16_le(path: &Path) -> Result<Vec<u16>, Box<dyn Error>> {
     Ok(bytes
         .chunks_exact(2)
         .map(|chunk| u16::from_le_bytes(chunk.try_into().expect("two bytes")))
+        .collect())
+}
+
+fn read_i16_le(path: &Path) -> Result<Vec<i16>, Box<dyn Error>> {
+    let bytes = fs::read(path)?;
+    if bytes.len() % 2 != 0 {
+        return Err(io::Error::other("i16 fixture has a partial scalar").into());
+    }
+    Ok(bytes
+        .chunks_exact(2)
+        .map(|chunk| i16::from_le_bytes(chunk.try_into().expect("two bytes")))
         .collect())
 }
 
@@ -533,7 +737,7 @@ fn parity(library_path: &Path) -> Result<(), Box<dyn Error>> {
         let count = requested.min(frames.len() - position);
         let is_final = position + count == frames.len();
         let (pcm, result) = codec
-            .process(&frames[position..position + count], is_final)
+            .process_fixture(&frames[position..position + count], is_final)
             .map_err(|(status, message)| {
                 io::Error::other(format!("process status {status}: {message}"))
             })?;
@@ -547,7 +751,7 @@ fn parity(library_path: &Path) -> Result<(), Box<dyn Error>> {
     }
 
     let final_state = codec.state_info().map_err(io::Error::other)?;
-    let post_final_rejection = match codec.process(&frames[..1], false) {
+    let post_final_rejection = match codec.process_fixture(&frames[..1], false) {
         Err((status, _)) => status == STATUS_STATE,
         Ok(_) => false,
     };
@@ -666,9 +870,11 @@ fn benchmark(library_path: &Path, iterations: usize) -> Result<(), Box<dyn Error
 
     codec.reset().map_err(io::Error::other)?;
     for _ in 0..20 {
-        codec.process(&frames, false).map_err(|(status, message)| {
-            io::Error::other(format!("warmup status {status}: {message}"))
-        })?;
+        codec
+            .process_fixture(&frames, false)
+            .map_err(|(status, message)| {
+                io::Error::other(format!("warmup status {status}: {message}"))
+            })?;
     }
 
     codec.reset().map_err(io::Error::other)?;
@@ -676,7 +882,7 @@ fn benchmark(library_path: &Path, iterations: usize) -> Result<(), Box<dyn Error
     let mut end_to_end_microseconds = Vec::with_capacity(iterations);
     for iteration in 0..iterations {
         let (pcm, result) = codec
-            .process(&frames, iteration + 1 == iterations)
+            .process_fixture(&frames, iteration + 1 == iterations)
             .map_err(|(status, message)| {
                 io::Error::other(format!("benchmark status {status}: {message}"))
             })?;
