@@ -113,6 +113,7 @@ type AbiVersionFn = unsafe extern "C" fn() -> i32;
 type CreateFn = unsafe extern "C" fn(*const Config, *mut *mut Context, *mut c_char, usize) -> i32;
 type DestroyFn = unsafe extern "C" fn(*mut Context, *mut c_char, usize) -> i32;
 type ResetFn = unsafe extern "C" fn(*mut Context, *mut c_char, usize) -> i32;
+type WarmupFn = unsafe extern "C" fn(*mut Context, *mut c_char, usize) -> i32;
 type StateInfoFn = unsafe extern "C" fn(*const Context, *mut StateInfo, *mut c_char, usize) -> i32;
 type ProcessFn = unsafe extern "C" fn(
     *mut Context,
@@ -175,6 +176,7 @@ pub struct Api {
     create: CreateFn,
     destroy: DestroyFn,
     reset: ResetFn,
+    warmup: WarmupFn,
     state_info: StateInfoFn,
     load_model: LoadModelFn,
     model_info: ModelInfoFn,
@@ -199,6 +201,7 @@ impl Api {
         let create = unsafe { load_symbol(&library, b"qwen3_tts_codec_create_v1\0")? };
         let destroy = unsafe { load_symbol(&library, b"qwen3_tts_codec_destroy_v1\0")? };
         let reset = unsafe { load_symbol(&library, b"qwen3_tts_codec_reset_v1\0")? };
+        let warmup = unsafe { load_symbol(&library, b"qwen3_tts_codec_warmup_v1\0")? };
         let state_info = unsafe { load_symbol(&library, b"qwen3_tts_codec_state_info_v1\0")? };
         let load_model = unsafe { load_symbol(&library, b"qwen3_tts_codec_load_model_v1\0")? };
         let model_info = unsafe { load_symbol(&library, b"qwen3_tts_codec_model_info_v1\0")? };
@@ -220,6 +223,7 @@ impl Api {
             create,
             destroy,
             reset,
+            warmup,
             state_info,
             load_model,
             model_info,
@@ -437,6 +441,12 @@ impl Codec<'_> {
     pub fn reset(&mut self) -> Result<(), String> {
         let mut error = [0 as c_char; 512];
         let status = unsafe { (self.api.reset)(self.context, error.as_mut_ptr(), error.len()) };
+        status_result(status, &error)
+    }
+
+    pub fn warmup(&mut self) -> Result<(), String> {
+        let mut error = [0 as c_char; 512];
+        let status = unsafe { (self.api.warmup)(self.context, error.as_mut_ptr(), error.len()) };
         status_result(status, &error)
     }
 
