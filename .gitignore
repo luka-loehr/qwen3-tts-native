@@ -1,0 +1,8 @@
+.cargo-cache/
+artifacts/
+build/
+native/qwen3-tts-native/target/
+
+*.pcm
+*.plan
+*.wav

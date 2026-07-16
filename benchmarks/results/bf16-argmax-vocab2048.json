@@ -1,0 +1,11 @@
+{
+  "cold_launch_microseconds": 73.85600280761719,
+  "device_index": 0,
+  "expected_token": 1729,
+  "iterations": 10000,
+  "mean_launch_microseconds": 4.098137378692627,
+  "operation": "benchmark-bf16-argmax",
+  "schema_version": 1,
+  "selected_token": 1729,
+  "vocabulary_size": 2048
+}

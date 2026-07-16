@@ -1,0 +1,12 @@
+{
+  "cold_launch_microseconds": 208227.609375,
+  "device_index": 0,
+  "input_features": 2048,
+  "iterations": 5000,
+  "mean_launch_microseconds": 8.317517280578613,
+  "operation": "benchmark-bf16-gemv",
+  "output_features": 1024,
+  "schema_version": 1,
+  "tera_operations_per_second": 0.504273533821106,
+  "weight_bytes": 4194304
+}
