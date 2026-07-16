@@ -1,0 +1,43 @@
+{
+  "allocation_bytes": 228646274,
+  "allocation_initial_metrics": {
+    "allocation_bytes": 228646274,
+    "pinned_staging_bytes": 8388608
+  },
+  "allocation_microseconds": 12264.9736328125,
+  "artifact": "/artifacts/qwen3-tts-1.7b-voice-design-bf16-indexed",
+  "artifact_open_milliseconds": 2.619395,
+  "device_index": 0,
+  "device_pointer_exposed": true,
+  "device_state": {
+    "allocation_bytes": 228646274,
+    "finished": true,
+    "upload_calls": 277,
+    "uploaded_bytes": 228646274
+  },
+  "effective_gib_per_second": 13.955595033282632,
+  "free_after_allocation_bytes": 6250115072,
+  "free_before_bytes": 6483668992,
+  "memory_bytes": {
+    "device_allocation": 228646274,
+    "host_committed_weight_copy": 0,
+    "host_mapped_weight_files_before_release": 4062081058,
+    "host_tensor_payload_views_before_release": 4061998978,
+    "pinned_staging": 8388608,
+    "runtime_dtype_conversion": 0
+  },
+  "native_upload_microseconds": 15258.642578125,
+  "operation": "upload-native-qwen3-tts-artifact",
+  "pinned_staging_bytes": 8388608,
+  "readback_exact": true,
+  "readback_probe_bytes": 7168,
+  "reported_free_memory_delta_bytes": 233553920,
+  "revision": "5ecdb67327fd37bb2e042aab12ff7391903235d3",
+  "schema_version": 1,
+  "scope": "decoder",
+  "source_mappings_released_before_readback": true,
+  "tensor_count": 271,
+  "upload_calls": 277,
+  "upload_wall_milliseconds": 54.259949,
+  "uploaded_bytes": 228646274
+}
