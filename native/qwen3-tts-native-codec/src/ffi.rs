@@ -168,6 +168,7 @@ pub struct Api {
     latent: LatentFn,
     decoder_checkpoint: DecoderCheckpointFn,
     process: ProcessFn,
+    fixture_process: ProcessFn,
 }
 
 unsafe fn load_symbol<T: Copy>(library: &Library, symbol: &[u8]) -> Result<T, Box<dyn Error>> {
@@ -192,7 +193,8 @@ impl Api {
         let latent = unsafe { load_symbol(&library, b"qwen3_tts_codec_debug_latent_packet_v1\0")? };
         let decoder_checkpoint =
             unsafe { load_symbol(&library, b"qwen3_tts_codec_debug_decoder_checkpoint_v1\0")? };
-        let process =
+        let process = unsafe { load_symbol(&library, b"qwen3_tts_codec_process_packet_v1\0")? };
+        let fixture_process =
             unsafe { load_symbol(&library, b"qwen3_tts_codec_process_fixture_packet_v1\0")? };
         Ok(Self {
             _library: library,
@@ -208,6 +210,7 @@ impl Api {
             latent,
             decoder_checkpoint,
             process,
+            fixture_process,
         })
     }
 
@@ -386,10 +389,47 @@ impl Codec<'_> {
         is_final: bool,
     ) -> Result<(Vec<i16>, PacketResult), (i32, String)> {
         let mut pcm = vec![0_i16; frames.len() * SAMPLES_PER_FRAME];
+        let result = self.process_into(frames, is_final, &mut pcm)?;
+        Ok((pcm, result))
+    }
+
+    pub fn process_into(
+        &mut self,
+        frames: &[[u16; CODEBOOKS]],
+        is_final: bool,
+        pcm: &mut [i16],
+    ) -> Result<PacketResult, (i32, String)> {
         let mut result = PacketResult::default();
         let mut error = [0 as c_char; 512];
         let status = unsafe {
             (self.api.process)(
+                self.context,
+                frames.as_ptr().cast::<u16>(),
+                frames.len() as u32,
+                i32::from(is_final),
+                pcm.as_mut_ptr(),
+                pcm.len(),
+                &mut result,
+                error.as_mut_ptr(),
+                error.len(),
+            )
+        };
+        if status != 0 {
+            return Err((status, error_text(&error)));
+        }
+        Ok(result)
+    }
+
+    pub fn process_fixture(
+        &mut self,
+        frames: &[[u16; CODEBOOKS]],
+        is_final: bool,
+    ) -> Result<(Vec<i16>, PacketResult), (i32, String)> {
+        let mut pcm = vec![0_i16; frames.len() * SAMPLES_PER_FRAME];
+        let mut result = PacketResult::default();
+        let mut error = [0 as c_char; 512];
+        let status = unsafe {
+            (self.api.fixture_process)(
                 self.context,
                 frames.as_ptr().cast::<u16>(),
                 frames.len() as u32,

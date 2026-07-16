@@ -2741,6 +2741,203 @@ extern "C" QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_model_info_v1(
     return kStatusOk;
 }
 
+namespace {
+
+int32_t run_frontend_device(
+    Qwen3TtsCodecContextV1* context,
+    const uint16_t* codec_frames,
+    uint16_t* device_codes,
+    uint32_t frame_count,
+    char* error,
+    size_t error_capacity
+) noexcept {
+    cudaError_t status = cudaMemcpyAsync(
+        device_codes,
+        codec_frames,
+        static_cast<size_t>(frame_count) * QWEN3_TTS_CODEC_CODEBOOKS * sizeof(uint16_t),
+        cudaMemcpyHostToDevice,
+        context->stream
+    );
+    if (status != cudaSuccess) {
+        return cuda_error(error, error_capacity, "upload frontend codes", status);
+    }
+
+    float* semantic = context->frontend_quantized;
+    float* acoustic = context->frontend_quantized +
+                      QWEN3_TTS_CODEC_MAX_PACKET_FRAMES * 256;
+    const float* first_embedding = require_f32_weight(
+        context,
+        "decoder.quantizer.rvq_first.vq.layers.0._codebook.embedding_sum",
+        error,
+        error_capacity
+    );
+    const float* first_usage = require_f32_weight(
+        context,
+        "decoder.quantizer.rvq_first.vq.layers.0._codebook.cluster_usage",
+        error,
+        error_capacity
+    );
+    const float* first_projection = require_f32_weight(
+        context,
+        "decoder.quantizer.rvq_first.output_proj.weight",
+        error,
+        error_capacity
+    );
+    const float* rest_projection = require_f32_weight(
+        context,
+        "decoder.quantizer.rvq_rest.output_proj.weight",
+        error,
+        error_capacity
+    );
+    if (first_embedding == nullptr || first_usage == nullptr ||
+        first_projection == nullptr || rest_projection == nullptr) {
+        return kStatusModel;
+    }
+    gather_codebook_kernel<<<
+        blocks_for(static_cast<size_t>(frame_count) * 256),
+        256,
+        0,
+        context->stream>>>(
+        device_codes,
+        frame_count,
+        0,
+        first_embedding,
+        first_usage,
+        semantic,
+        0
+    );
+    status = cudaGetLastError();
+    if (status != cudaSuccess) {
+        return cuda_error(error, error_capacity, "launch semantic codebook", status);
+    }
+    for (uint32_t codebook = 1; codebook < QWEN3_TTS_CODEC_CODEBOOKS; ++codebook) {
+        char embedding_name[128];
+        char usage_name[128];
+        std::snprintf(
+            embedding_name,
+            sizeof(embedding_name),
+            "decoder.quantizer.rvq_rest.vq.layers.%u._codebook.embedding_sum",
+            codebook - 1
+        );
+        std::snprintf(
+            usage_name,
+            sizeof(usage_name),
+            "decoder.quantizer.rvq_rest.vq.layers.%u._codebook.cluster_usage",
+            codebook - 1
+        );
+        const float* embedding = require_f32_weight(
+            context, embedding_name, error, error_capacity
+        );
+        const float* usage = require_f32_weight(
+            context, usage_name, error, error_capacity
+        );
+        if (embedding == nullptr || usage == nullptr) {
+            return kStatusModel;
+        }
+        gather_codebook_kernel<<<
+            blocks_for(static_cast<size_t>(frame_count) * 256),
+            256,
+            0,
+            context->stream>>>(
+            device_codes,
+            frame_count,
+            codebook,
+            embedding,
+            usage,
+            acoustic,
+            codebook == 1 ? 0 : 1
+        );
+        status = cudaGetLastError();
+        if (status != cudaSuccess) {
+            return cuda_error(error, error_capacity, "launch acoustic codebook", status);
+        }
+    }
+    constexpr float kOne = 1.0F;
+    constexpr float kZero = 0.0F;
+    cublasStatus_t cublas_status = cublasSgemm(
+        context->cublas,
+        CUBLAS_OP_T,
+        CUBLAS_OP_N,
+        512,
+        static_cast<int>(frame_count),
+        256,
+        &kOne,
+        first_projection,
+        256,
+        semantic,
+        256,
+        &kZero,
+        context->frontend_rvq,
+        512
+    );
+    float* rest_projected = context->frontend_preconv;
+    if (cublas_status == CUBLAS_STATUS_SUCCESS) {
+        cublas_status = cublasSgemm(
+            context->cublas,
+            CUBLAS_OP_T,
+            CUBLAS_OP_N,
+            512,
+            static_cast<int>(frame_count),
+            256,
+            &kOne,
+            rest_projection,
+            256,
+            acoustic,
+            256,
+            &kZero,
+            rest_projected,
+            512
+        );
+    }
+    if (cublas_status != CUBLAS_STATUS_SUCCESS) {
+        return cublas_error(
+            error, error_capacity, "project split RVQ", cublas_status
+        );
+    }
+    add_rvq_projection_kernel<<<
+        blocks_for(static_cast<size_t>(frame_count) * 512),
+        256,
+        0,
+        context->stream>>>(rest_projected, frame_count, context->frontend_rvq);
+    status = cudaGetLastError();
+    if (status != cudaSuccess) {
+        return cuda_error(error, error_capacity, "combine split RVQ", status);
+    }
+    const float* preconv_weight = require_f32_weight(
+        context, "decoder.pre_conv.conv.weight", error, error_capacity
+    );
+    const float* preconv_bias = require_f32_weight(
+        context, "decoder.pre_conv.conv.bias", error, error_capacity
+    );
+    if (preconv_weight == nullptr || preconv_bias == nullptr) {
+        return kStatusModel;
+    }
+    causal_preconv_kernel<<<
+        blocks_for(static_cast<size_t>(frame_count) * 1024),
+        256,
+        0,
+        context->stream>>>(
+        context->frontend_rvq,
+        context->frontend_history,
+        frame_count,
+        preconv_weight,
+        preconv_bias,
+        context->frontend_preconv
+    );
+    status = cudaGetLastError();
+    if (status == cudaSuccess) {
+        update_frontend_history_kernel<<<2, 256, 0, context->stream>>>(
+            context->frontend_rvq, frame_count, context->frontend_history
+        );
+        status = cudaGetLastError();
+    }
+    return status == cudaSuccess
+               ? kStatusOk
+               : cuda_error(error, error_capacity, "launch causal pre-convolution", status);
+}
+
+}  // namespace
+
 extern "C" QWEN3_TTS_CODEC_API int32_t
 qwen3_tts_codec_debug_frontend_packet_v1(
     Qwen3TtsCodecContextV1* context,
@@ -3186,6 +3383,193 @@ qwen3_tts_codec_debug_decoder_checkpoint_v1(
         error,
         error_capacity
     );
+}
+
+extern "C" QWEN3_TTS_CODEC_API int32_t
+qwen3_tts_codec_process_packet_v1(
+    Qwen3TtsCodecContextV1* context,
+    const uint16_t* codec_frames,
+    uint32_t frame_count,
+    int32_t is_final,
+    int16_t* pcm_output,
+    size_t pcm_capacity_samples,
+    Qwen3TtsCodecPacketResultV1* result,
+    char* error,
+    size_t error_capacity
+) {
+    clear_error(error, error_capacity);
+    if (context == nullptr || codec_frames == nullptr || pcm_output == nullptr ||
+        result == nullptr) {
+        write_error(
+            error,
+            error_capacity,
+            "context, codec frames, PCM output, and result are required"
+        );
+        return kStatusInvalidArgument;
+    }
+    if (frame_count == 0 ||
+        frame_count > QWEN3_TTS_CODEC_MAX_PACKET_FRAMES ||
+        (is_final != 0 && is_final != 1)) {
+        write_error(error, error_capacity, "packet must contain 1-4 frames");
+        return kStatusInvalidArgument;
+    }
+    const size_t sample_count =
+        static_cast<size_t>(frame_count) * QWEN3_TTS_CODEC_SAMPLES_PER_FRAME;
+    if (pcm_capacity_samples < sample_count) {
+        write_error(error, error_capacity, "PCM output capacity is too small");
+        return kStatusInvalidArgument;
+    }
+    if (context->model_info.loaded == 0) {
+        write_error(error, error_capacity, "decoder model is not loaded");
+        return kStatusState;
+    }
+    if (context->finalized) {
+        write_error(error, error_capacity, "stream is finalized; reset is required");
+        return kStatusState;
+    }
+    cudaError_t status = cudaSetDevice(context->device_index);
+    if (status != cudaSuccess) {
+        return cuda_error(error, error_capacity, "select CUDA device", status);
+    }
+
+    const auto end_to_end_start = std::chrono::steady_clock::now();
+    const uint32_t slot = context->next_ring_slot;
+    uint16_t* codec_slot =
+        context->codec_ring +
+        static_cast<size_t>(slot) * QWEN3_TTS_CODEC_MAX_PACKET_FRAMES *
+            QWEN3_TTS_CODEC_CODEBOOKS;
+    int16_t* pcm_slot =
+        context->pcm_ring +
+        static_cast<size_t>(slot) * QWEN3_TTS_CODEC_MAX_PACKET_SAMPLES;
+    int16_t* host_pcm_slot =
+        context->host_pcm_ring +
+        static_cast<size_t>(slot) * QWEN3_TTS_CODEC_MAX_PACKET_SAMPLES;
+
+    status = cudaEventRecord(context->start_event, context->stream);
+    if (status != cudaSuccess) {
+        return cuda_error(error, error_capacity, "start packet timing", status);
+    }
+    int32_t pipeline_status = run_frontend_device(
+        context,
+        codec_frames,
+        codec_slot,
+        frame_count,
+        error,
+        error_capacity
+    );
+    if (pipeline_status != kStatusOk) {
+        return pipeline_status;
+    }
+    for (uint32_t frame = 0; frame < frame_count; ++frame) {
+        pipeline_status = run_transformer_frame(
+            context,
+            context->frontend_preconv + static_cast<size_t>(frame) * 1024,
+            context->neural_frame_position,
+            context->transformer_packet + static_cast<size_t>(frame) * 1024,
+            error,
+            error_capacity
+        );
+        if (pipeline_status != kStatusOk) {
+            return pipeline_status;
+        }
+        context->neural_frame_position += 1;
+    }
+    float* latent = nullptr;
+    size_t latent_positions = 0;
+    pipeline_status = run_latent_upsampling(
+        context,
+        context->transformer_packet,
+        frame_count,
+        nullptr,
+        &latent,
+        &latent_positions,
+        error,
+        error_capacity
+    );
+    if (pipeline_status != kStatusOk) {
+        return pipeline_status;
+    }
+    float* waveform = nullptr;
+    size_t waveform_positions = 0;
+    pipeline_status = run_waveform_decoder(
+        context,
+        latent,
+        latent_positions,
+        0,
+        nullptr,
+        0,
+        &waveform,
+        &waveform_positions,
+        error,
+        error_capacity
+    );
+    if (pipeline_status != kStatusOk) {
+        return pipeline_status;
+    }
+    if (waveform_positions != sample_count) {
+        write_error(error, error_capacity, "waveform decoder returned an invalid length");
+        return kStatusState;
+    }
+    waveform_to_pcm_kernel<<<
+        blocks_for(sample_count), 256, 0, context->stream>>>(
+        waveform, sample_count, pcm_slot
+    );
+    status = cudaGetLastError();
+    if (status == cudaSuccess) {
+        status = cudaMemcpyAsync(
+            host_pcm_slot,
+            pcm_slot,
+            sample_count * sizeof(int16_t),
+            cudaMemcpyDeviceToHost,
+            context->stream
+        );
+    }
+    if (status == cudaSuccess) {
+        status = cudaEventRecord(context->stop_event, context->stream);
+    }
+    if (status == cudaSuccess) {
+        status = cudaEventSynchronize(context->stop_event);
+    }
+    if (status != cudaSuccess) {
+        return cuda_error(error, error_capacity, "complete neural decoder packet", status);
+    }
+
+    float gpu_milliseconds = 0.0F;
+    status = cudaEventElapsedTime(
+        &gpu_milliseconds, context->start_event, context->stop_event
+    );
+    if (status != cudaSuccess) {
+        return cuda_error(error, error_capacity, "measure packet GPU time", status);
+    }
+    std::memcpy(pcm_output, host_pcm_slot, sample_count * sizeof(int16_t));
+
+    const uint64_t first_frame = context->frame_position;
+    const uint64_t first_sample = context->emitted_samples;
+    context->frame_position += frame_count;
+    context->emitted_samples += sample_count;
+    context->kv_ring_head =
+        static_cast<uint32_t>(context->neural_frame_position % QWEN3_TTS_CODEC_KV_WINDOW);
+    context->next_ring_slot =
+        (context->next_ring_slot + 1) % context->ring_slots;
+    context->finalized = is_final != 0;
+
+    const auto end_to_end_stop = std::chrono::steady_clock::now();
+    const float end_to_end_microseconds =
+        std::chrono::duration<float, std::micro>(
+            end_to_end_stop - end_to_end_start
+        )
+            .count();
+    *result = Qwen3TtsCodecPacketResultV1{
+        first_frame,
+        first_sample,
+        frame_count,
+        static_cast<uint32_t>(sample_count),
+        slot,
+        static_cast<uint32_t>(is_final),
+        gpu_milliseconds * 1000.0F,
+        end_to_end_microseconds,
+    };
+    return kStatusOk;
 }
 
 extern "C" QWEN3_TTS_CODEC_API int32_t
