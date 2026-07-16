@@ -63,9 +63,14 @@ cargo run --release --locked --bin native_e2e_smoke -- \
   --report /tmp/native-e2e.json
 ```
 
-This command is intentionally reported as a non-qualifying whole-sequence
-smoke: the current public talker API completes code generation before decoder
-polling starts. It proves real model execution and WAV correctness, but its
-first-audio measurement is not the incremental streaming TTFA gate. The final
-runtime must use a persistent incremental talker session and pass the separate
-200-request qualification harness.
+This command uses the incremental talker session directly. It decodes the first
+codec frame immediately, then groups follow-up frames into packets no larger
+than `--packet-frames`. The JSON report records caller-observed first-audio
+latency, every packet arrival, inter-packet gaps, talker and decoder timings,
+contiguous frame/sample positions, PCM statistics, and end-of-stream state.
+
+The command remains a non-qualifying single-request smoke. Release evidence
+must come from the public runtime ABI and the separate qualification harness,
+including warmup, at least 200 completed requests at each concurrency level 1,
+3, and 6, bounded backpressure, cancellation and recovery, p95 first audio
+below 200 ms, and real-time factor below 1.
