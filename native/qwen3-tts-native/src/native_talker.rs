@@ -202,6 +202,32 @@ pub struct FrameTiming {
     pub talker_gpu_milliseconds: f32,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionEndReason {
+    CodecEos,
+    MaxFrames,
+    Cancelled,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct StreamingCodecFrame {
+    pub codes: [u16; CODEBOOKS],
+    pub frame_index: usize,
+    pub next_semantic_token: u16,
+    pub talker_position: u32,
+    pub predictor_gpu_milliseconds: f32,
+    pub talker_gpu_milliseconds: f32,
+    pub ended_by_eos: bool,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct SessionPrefillInfo {
+    pub first_semantic_token: u16,
+    pub prompt_tokens: u32,
+    pub talker_gpu_milliseconds: f32,
+}
+
 #[derive(Clone, Copy, Debug, Serialize)]
 pub struct MemoryUsage {
     pub weight_bytes: u64,
@@ -233,6 +259,19 @@ pub struct NativeTalker {
     config: ModelConfig,
     tokenizer: Qwen2Tokenizer,
     memory: MemoryUsage,
+}
+
+pub struct NativeTalkerSession<'engine> {
+    engine: &'engine mut NativeTalker,
+    trailing_text: Vec<TextSource>,
+    current_semantic: u16,
+    codec_eos_token: u16,
+    frames_emitted: usize,
+    max_frames: usize,
+    talker_sampling: NativeSamplingConfig,
+    predictor_sampling: NativeSamplingConfig,
+    prefill: SessionPrefillInfo,
+    end_reason: Option<SessionEndReason>,
 }
 
 impl NativeTalker {
@@ -311,57 +350,87 @@ impl NativeTalker {
         )
     }
 
+    pub fn start(&mut self, request: VoiceDesignRequest) -> Result<NativeTalkerSession<'_>> {
+        let prompt = VoiceDesignPrompt::tokenize(
+            &self.tokenizer,
+            &self.config,
+            &request.text,
+            &request.instruction,
+            &request.language,
+            request.text_mode,
+        )?;
+        self.start_prompt(
+            &prompt,
+            GenerationSettings {
+                max_frames: request.max_frames,
+                random_seed: request.random_seed,
+                talker_sampling: request.talker_sampling,
+                predictor_sampling: request.predictor_sampling,
+            },
+        )
+    }
+
+    pub fn start_prompt(
+        &mut self,
+        prompt: &VoiceDesignPrompt,
+        settings: GenerationSettings,
+    ) -> Result<NativeTalkerSession<'_>> {
+        ensure!(settings.max_frames > 0, "max_frames must be positive");
+        self.reset(settings.random_seed)?;
+        let (text_ids, codec_ids) = self.native_prompt_steps(prompt)?;
+        ensure!(text_ids.len() <= i32::MAX as usize, "prompt is too long");
+        let prefill = self.prefill(&text_ids, &codec_ids, settings.talker_sampling.native()?)?;
+        let codec_eos_token = self.config.talker_config.codec_eos_token_id as u16;
+        let end_reason =
+            (prefill.first_semantic_token == codec_eos_token).then_some(SessionEndReason::CodecEos);
+        Ok(NativeTalkerSession {
+            engine: self,
+            trailing_text: prompt.trailing_text.clone(),
+            current_semantic: prefill.first_semantic_token,
+            codec_eos_token,
+            frames_emitted: 0,
+            max_frames: settings.max_frames,
+            talker_sampling: settings.talker_sampling.native()?,
+            predictor_sampling: settings.predictor_sampling.native()?,
+            prefill: SessionPrefillInfo {
+                first_semantic_token: prefill.first_semantic_token,
+                prompt_tokens: prefill.prompt_tokens,
+                talker_gpu_milliseconds: prefill.talker_gpu_milliseconds,
+            },
+            end_reason,
+        })
+    }
+
     pub fn generate_prompt(
         &mut self,
         prompt: &VoiceDesignPrompt,
         settings: GenerationSettings,
     ) -> Result<GenerationOutput> {
-        ensure!(settings.max_frames > 0, "max_frames must be positive");
-        self.reset(settings.random_seed)?;
-        let (text_ids, codec_ids) = self.native_prompt_steps(prompt)?;
-        ensure!(text_ids.len() <= i32::MAX as usize, "prompt is too long");
-
-        let prefill = self.prefill(&text_ids, &codec_ids, settings.talker_sampling.native()?)?;
-        let mut current_semantic = prefill.first_semantic_token;
+        let memory = self.memory;
+        let mut session = self.start_prompt(prompt, settings)?;
+        let prefill = session.prefill_result();
         let mut codec_codes = Vec::with_capacity(settings.max_frames * CODEBOOKS);
         let mut frame_timings = Vec::with_capacity(settings.max_frames);
-
-        for frame_index in 0..settings.max_frames {
-            if current_semantic == self.config.talker_config.codec_eos_token_id as u16 {
-                break;
-            }
-            let text = prompt
-                .trailing_text
-                .get(frame_index)
-                .copied()
-                .unwrap_or(TextSource::TtsPad);
-            let text_id = self.text_source_id(text)?;
-            let frame = self.next_frame(
-                current_semantic,
-                text_id,
-                settings.talker_sampling.native()?,
-                settings.predictor_sampling.native()?,
-            )?;
+        while let Some(frame) = session.next_frame()? {
             codec_codes.extend_from_slice(&frame.codes);
             frame_timings.push(FrameTiming {
                 talker_position: frame.talker_position,
                 predictor_gpu_milliseconds: frame.predictor_gpu_milliseconds,
                 talker_gpu_milliseconds: frame.talker_gpu_milliseconds,
             });
-            current_semantic = frame.next_semantic_token;
         }
-
-        let ended_by_eos = current_semantic == self.config.talker_config.codec_eos_token_id as u16;
+        let ended_by_eos = session.end_reason() == Some(SessionEndReason::CodecEos);
+        let final_semantic_token = session.current_semantic_token();
         Ok(GenerationOutput {
             frame_count: codec_codes.len() / CODEBOOKS,
             codec_codes,
             ended_by_eos,
             first_semantic_token: prefill.first_semantic_token,
-            final_semantic_token: current_semantic,
+            final_semantic_token,
             prompt_tokens: prefill.prompt_tokens,
             prefill_talker_gpu_milliseconds: prefill.talker_gpu_milliseconds,
             frame_timings,
-            memory: self.memory,
+            memory,
         })
     }
 
@@ -508,6 +577,80 @@ impl NativeTalker {
             TextSource::TtsPad => self.config.tts_pad_token_id,
         };
         i32::try_from(token).context("text token exceeds i32")
+    }
+}
+
+impl NativeTalkerSession<'_> {
+    pub fn prefill_result(&self) -> SessionPrefillInfo {
+        self.prefill
+    }
+
+    pub fn current_semantic_token(&self) -> u16 {
+        self.current_semantic
+    }
+
+    pub fn frames_emitted(&self) -> usize {
+        self.frames_emitted
+    }
+
+    pub fn end_reason(&self) -> Option<SessionEndReason> {
+        self.end_reason
+    }
+
+    pub fn is_ended(&self) -> bool {
+        self.end_reason.is_some()
+    }
+
+    pub fn cancel(&mut self) {
+        if self.end_reason.is_none() {
+            self.end_reason = Some(SessionEndReason::Cancelled);
+        }
+    }
+
+    pub fn next_frame(&mut self) -> Result<Option<StreamingCodecFrame>> {
+        if self.end_reason.is_some() {
+            return Ok(None);
+        }
+        if self.frames_emitted >= self.max_frames {
+            self.end_reason = Some(SessionEndReason::MaxFrames);
+            return Ok(None);
+        }
+        if self.current_semantic == self.codec_eos_token {
+            self.end_reason = Some(SessionEndReason::CodecEos);
+            return Ok(None);
+        }
+
+        let text = self
+            .trailing_text
+            .get(self.frames_emitted)
+            .copied()
+            .unwrap_or(TextSource::TtsPad);
+        let text_id = self.engine.text_source_id(text)?;
+        let native = self.engine.next_frame(
+            self.current_semantic,
+            text_id,
+            self.talker_sampling,
+            self.predictor_sampling,
+        )?;
+        let frame_index = self.frames_emitted;
+        self.frames_emitted += 1;
+        self.current_semantic = native.next_semantic_token;
+        let ended_by_eos = self.current_semantic == self.codec_eos_token;
+        if ended_by_eos {
+            self.end_reason = Some(SessionEndReason::CodecEos);
+        } else if self.frames_emitted >= self.max_frames {
+            self.end_reason = Some(SessionEndReason::MaxFrames);
+        }
+
+        Ok(Some(StreamingCodecFrame {
+            codes: native.codes,
+            frame_index,
+            next_semantic_token: native.next_semantic_token,
+            talker_position: native.talker_position,
+            predictor_gpu_milliseconds: native.predictor_gpu_milliseconds,
+            talker_gpu_milliseconds: native.talker_gpu_milliseconds,
+            ended_by_eos,
+        }))
     }
 }
 
