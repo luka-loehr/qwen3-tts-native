@@ -16,6 +16,15 @@ extern "C" {
 #define QWEN3_TTS_TALKER_ABI_VERSION 1U
 #define QWEN3_TTS_CODEC_CODEBOOKS 16U
 
+enum {
+    QWEN3_TTS_TALKER_STATUS_OK = 0,
+    QWEN3_TTS_TALKER_STATUS_INVALID_ARGUMENT = -1,
+    QWEN3_TTS_TALKER_STATUS_CUDA = -2,
+    QWEN3_TTS_TALKER_STATUS_STATE = -3,
+    QWEN3_TTS_TALKER_STATUS_ALLOCATION = -4,
+    QWEN3_TTS_TALKER_STATUS_MODEL = -5,
+};
+
 typedef struct Qwen3TtsDeviceInfo {
     int32_t device_index;
     int32_t compute_major;

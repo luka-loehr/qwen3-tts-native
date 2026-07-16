@@ -15,6 +15,7 @@
 #include <cstring>
 #include <limits>
 #include <memory>
+#include <new>
 #include <numeric>
 #include <stdexcept>
 #include <string>
@@ -55,9 +56,14 @@ void write_error(char* destination, size_t capacity, const char* message) {
     }
 }
 
+class CudaFailure final : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
+
 void check_cuda(cudaError_t status, const char* operation) {
     if (status != cudaSuccess) {
-        throw std::runtime_error(
+        throw CudaFailure(
             std::string(operation) + " failed: " + cudaGetErrorString(status)
         );
     }
@@ -65,7 +71,7 @@ void check_cuda(cudaError_t status, const char* operation) {
 
 void check_cublas(cublasStatus_t status, const char* operation) {
     if (status != CUBLAS_STATUS_SUCCESS) {
-        throw std::runtime_error(
+        throw CudaFailure(
             std::string(operation) + " failed with cuBLAS status "
                 + std::to_string(static_cast<int>(status))
         );
@@ -2195,14 +2201,25 @@ TalkerContext* session(Qwen3TtsSessionHandle handle) {
 }
 
 template <typename Operation>
-int32_t protect(Operation&& operation, char* error, size_t error_capacity) {
+int32_t protect(
+    Operation&& operation,
+    int32_t failure_status,
+    char* error,
+    size_t error_capacity
+) {
     try {
         operation();
         write_error(error, error_capacity, "");
-        return 0;
+        return QWEN3_TTS_TALKER_STATUS_OK;
+    } catch (const CudaFailure& exception) {
+        write_error(error, error_capacity, exception.what());
+        return QWEN3_TTS_TALKER_STATUS_CUDA;
+    } catch (const std::bad_alloc& exception) {
+        write_error(error, error_capacity, exception.what());
+        return QWEN3_TTS_TALKER_STATUS_ALLOCATION;
     } catch (const std::exception& exception) {
         write_error(error, error_capacity, exception.what());
-        return -1;
+        return failure_status;
     }
 }
 
@@ -2220,11 +2237,11 @@ extern "C" QWEN3_TTS_API int32_t qwen3_tts_model_create(
 ) {
     if (output == nullptr) {
         write_error(error, error_capacity, "model output handle pointer is null");
-        return -1;
+        return QWEN3_TTS_TALKER_STATUS_INVALID_ARGUMENT;
     }
     return protect([&] {
         *output = new TalkerModelBox(std::make_shared<TalkerModel>(device_index));
-    }, error, error_capacity);
+    }, QWEN3_TTS_TALKER_STATUS_MODEL, error, error_capacity);
 }
 
 extern "C" QWEN3_TTS_API void qwen3_tts_model_destroy(Qwen3TtsModelHandle handle) {
@@ -2243,7 +2260,7 @@ extern "C" QWEN3_TTS_API int32_t qwen3_tts_model_upload_tensor(
 ) {
     return protect([&] {
         model(handle)->upload_tensor(name, bf16_data, byte_size, rank, shape);
-    }, error, error_capacity);
+    }, QWEN3_TTS_TALKER_STATUS_MODEL, error, error_capacity);
 }
 
 extern "C" QWEN3_TTS_API int32_t qwen3_tts_model_finalize(
@@ -2254,11 +2271,11 @@ extern "C" QWEN3_TTS_API int32_t qwen3_tts_model_finalize(
 ) {
     if (memory == nullptr) {
         write_error(error, error_capacity, "talker memory output pointer is null");
-        return -1;
+        return QWEN3_TTS_TALKER_STATUS_INVALID_ARGUMENT;
     }
     return protect([&] {
         *memory = model(handle)->finalize();
-    }, error, error_capacity);
+    }, QWEN3_TTS_TALKER_STATUS_MODEL, error, error_capacity);
 }
 
 extern "C" QWEN3_TTS_API int32_t qwen3_tts_session_create(
@@ -2272,7 +2289,7 @@ extern "C" QWEN3_TTS_API int32_t qwen3_tts_session_create(
 ) {
     if (output == nullptr || memory == nullptr) {
         write_error(error, error_capacity, "session output or memory pointer is null");
-        return -1;
+        return QWEN3_TTS_TALKER_STATUS_INVALID_ARGUMENT;
     }
     return protect([&] {
         auto created = std::make_unique<TalkerContext>(
@@ -2282,7 +2299,7 @@ extern "C" QWEN3_TTS_API int32_t qwen3_tts_session_create(
         );
         *memory = created->session_memory();
         *output = created.release();
-    }, error, error_capacity);
+    }, QWEN3_TTS_TALKER_STATUS_STATE, error, error_capacity);
 }
 
 extern "C" QWEN3_TTS_API void qwen3_tts_session_destroy(Qwen3TtsSessionHandle handle) {
@@ -2297,7 +2314,7 @@ extern "C" QWEN3_TTS_API int32_t qwen3_tts_session_reset(
 ) {
     return protect([&] {
         session(handle)->reset(random_seed);
-    }, error, error_capacity);
+    }, QWEN3_TTS_TALKER_STATUS_STATE, error, error_capacity);
 }
 
 extern "C" QWEN3_TTS_API int32_t qwen3_tts_session_prefill(
@@ -2312,7 +2329,7 @@ extern "C" QWEN3_TTS_API int32_t qwen3_tts_session_prefill(
 ) {
     if (output == nullptr) {
         write_error(error, error_capacity, "prefill output pointer is null");
-        return -1;
+        return QWEN3_TTS_TALKER_STATUS_INVALID_ARGUMENT;
     }
     return protect([&] {
         *output = session(handle)->prefill(
@@ -2321,7 +2338,7 @@ extern "C" QWEN3_TTS_API int32_t qwen3_tts_session_prefill(
             token_count,
             sampling
         );
-    }, error, error_capacity);
+    }, QWEN3_TTS_TALKER_STATUS_STATE, error, error_capacity);
 }
 
 extern "C" QWEN3_TTS_API int32_t qwen3_tts_session_next_frame(
@@ -2340,7 +2357,7 @@ extern "C" QWEN3_TTS_API int32_t qwen3_tts_session_next_frame(
     if (output_codes == nullptr || output_code_capacity < kPredictorSequence
         || next_semantic_token == nullptr || frame_info == nullptr) {
         write_error(error, error_capacity, "codec-frame outputs are null or undersized");
-        return -1;
+        return QWEN3_TTS_TALKER_STATUS_INVALID_ARGUMENT;
     }
     return protect([&] {
         const Qwen3TtsCodecFrameResult frame = session(handle)->next_frame(
@@ -2355,7 +2372,7 @@ extern "C" QWEN3_TTS_API int32_t qwen3_tts_session_next_frame(
         frame_info->ended_by_eos = frame.ended_by_eos;
         frame_info->predictor_gpu_milliseconds = frame.predictor_gpu_milliseconds;
         frame_info->talker_gpu_milliseconds = frame.talker_gpu_milliseconds;
-    }, error, error_capacity);
+    }, QWEN3_TTS_TALKER_STATUS_STATE, error, error_capacity);
 }
 
 extern "C" QWEN3_TTS_API int32_t qwen3_tts_session_state_info(
@@ -2366,9 +2383,9 @@ extern "C" QWEN3_TTS_API int32_t qwen3_tts_session_state_info(
 ) {
     if (output == nullptr) {
         write_error(error, error_capacity, "session state output pointer is null");
-        return -1;
+        return QWEN3_TTS_TALKER_STATUS_INVALID_ARGUMENT;
     }
     return protect([&] {
         *output = session(handle)->state_info();
-    }, error, error_capacity);
+    }, QWEN3_TTS_TALKER_STATUS_STATE, error, error_capacity);
 }
