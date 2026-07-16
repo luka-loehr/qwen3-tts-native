@@ -9,6 +9,7 @@ use std::error::Error;
 use std::fs;
 use std::io;
 use std::path::Path;
+use std::time::Instant;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let arguments = std::env::args().collect::<Vec<_>>();
@@ -26,6 +27,16 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .transpose()?
                 .unwrap_or(200);
             benchmark(Path::new(library), iterations)
+        }
+        "neural-benchmark" => {
+            let library = required_argument(&arguments, 2, "shared library path")?;
+            let model = required_argument(&arguments, 3, "speech tokenizer safetensors path")?;
+            let iterations = arguments
+                .get(4)
+                .map(|value| value.parse::<usize>())
+                .transpose()?
+                .unwrap_or(200);
+            neural_benchmark(Path::new(library), Path::new(model), iterations)
         }
         "inspect-model" => {
             let model = required_argument(&arguments, 2, "speech tokenizer safetensors path")?;
@@ -858,6 +869,107 @@ fn parity(library_path: &Path) -> Result<(), Box<dyn Error>> {
         return Err(io::Error::other("incremental parity validation failed").into());
     }
     Ok(())
+}
+
+fn neural_benchmark(
+    library_path: &Path,
+    model_path: &Path,
+    iterations: usize,
+) -> Result<(), Box<dyn Error>> {
+    if iterations < 200 {
+        return Err(io::Error::other("neural benchmark requires at least 200 iterations").into());
+    }
+    let api = Api::load(library_path)?;
+    let model = model::SafetensorsFile::open(model_path)?;
+    let mut codec = api.create_codec(0).map_err(io::Error::other)?;
+    let load_start = Instant::now();
+    let model_info = codec.load_model(&model).map_err(io::Error::other)?;
+    let model_load_milliseconds = load_start.elapsed().as_secs_f64() * 1000.0;
+
+    let cold_frame = deterministic_frames(1);
+    let (_, cold_result) = codec
+        .process(&cold_frame, false)
+        .map_err(|(status, message)| {
+            io::Error::other(format!("first-chunk status {status}: {message}"))
+        })?;
+    codec.reset().map_err(io::Error::other)?;
+    let one_frame = neural_benchmark_case(&mut codec, 1, iterations)?;
+    codec.reset().map_err(io::Error::other)?;
+    let four_frames = neural_benchmark_case(&mut codec, 4, iterations)?;
+    let state = codec.state_info().map_err(io::Error::other)?;
+
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "schema_version": 1,
+            "mode": "real_qwen_speech_tokenizer_decoder",
+            "model_load_milliseconds": model_load_milliseconds,
+            "model": {
+                "tensor_count": model_info.tensor_count,
+                "parameter_count": model_info.parameter_count,
+                "source_bytes": model_info.source_bytes,
+                "device_bytes": model_info.device_bytes,
+                "source_f32_tensors": model_info.source_dtype_f32_count,
+                "source_bf16_tensors": model_info.source_dtype_bf16_count
+            },
+            "first_80ms_chunk_after_model_load": {
+                "gpu_microseconds": cold_result.gpu_microseconds,
+                "end_to_end_microseconds": cold_result.end_to_end_microseconds
+            },
+            "one_frame_80ms_packets": one_frame,
+            "four_frame_320ms_packets": four_frames,
+            "runtime_state_bytes": state_json(state),
+            "weights_loaded_before_timing": true,
+            "pcm_delivered_after_each_packet": true,
+            "python_or_node_runtime": false
+        }))?
+    );
+    Ok(())
+}
+
+fn neural_benchmark_case(
+    codec: &mut ffi::Codec<'_>,
+    frames_per_packet: usize,
+    iterations: usize,
+) -> Result<Value, Box<dyn Error>> {
+    let frames = deterministic_frames(frames_per_packet);
+    for _ in 0..10 {
+        codec.process(&frames, false).map_err(|(status, message)| {
+            io::Error::other(format!("neural warmup status {status}: {message}"))
+        })?;
+    }
+    codec.reset().map_err(io::Error::other)?;
+    let mut gpu_microseconds = Vec::with_capacity(iterations);
+    let mut end_to_end_microseconds = Vec::with_capacity(iterations);
+    for iteration in 0..iterations {
+        let (pcm, result) = codec
+            .process(&frames, iteration + 1 == iterations)
+            .map_err(|(status, message)| {
+                io::Error::other(format!("neural benchmark status {status}: {message}"))
+            })?;
+        if pcm.len() != frames_per_packet * ffi::SAMPLES_PER_FRAME {
+            return Err(io::Error::other("unexpected neural benchmark sample count").into());
+        }
+        gpu_microseconds.push(f64::from(result.gpu_microseconds));
+        end_to_end_microseconds.push(f64::from(result.end_to_end_microseconds));
+    }
+    gpu_microseconds.sort_by(f64::total_cmp);
+    end_to_end_microseconds.sort_by(f64::total_cmp);
+    let audio_microseconds = frames_per_packet as f64 * 80_000.0;
+    let end_to_end_p50 = percentile(&end_to_end_microseconds, 0.50);
+    Ok(json!({
+        "iterations": iterations,
+        "warmup_iterations": 10,
+        "continuous_stream": true,
+        "reset_between_measured_packets": false,
+        "frames_per_packet": frames_per_packet,
+        "samples_per_packet": frames_per_packet * ffi::SAMPLES_PER_FRAME,
+        "audio_milliseconds_per_packet": audio_microseconds / 1000.0,
+        "gpu_microseconds": latency_json(&gpu_microseconds),
+        "end_to_end_microseconds": latency_json(&end_to_end_microseconds),
+        "p50_real_time_factor": end_to_end_p50 / audio_microseconds,
+        "p50_times_faster_than_realtime": audio_microseconds / end_to_end_p50
+    }))
 }
 
 fn benchmark(library_path: &Path, iterations: usize) -> Result<(), Box<dyn Error>> {
