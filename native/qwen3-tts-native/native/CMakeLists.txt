@@ -6,7 +6,9 @@ find_package(CUDAToolkit 13.0 REQUIRED)
 
 add_library(qwen3_tts_cuda SHARED
     src/gemv.cu
+    src/primitive_parity.cu
     src/runtime.cu
+    src/talker_kernels.cu
     src/weights.cu
 )
 

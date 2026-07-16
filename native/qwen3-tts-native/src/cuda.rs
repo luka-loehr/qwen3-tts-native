@@ -63,6 +63,15 @@ struct GemvBenchmark {
     tera_operations_per_second: f32,
 }
 
+#[repr(C)]
+#[derive(Default)]
+struct PrimitiveParity {
+    rms_norm_max_absolute_error: f32,
+    rope_max_absolute_error: f32,
+    attention_max_absolute_error: f32,
+    silu_gate_max_absolute_error: f32,
+}
+
 type ProbeDevice = unsafe extern "C" fn(c_int, *mut DeviceInfo, *mut c_char, usize) -> c_int;
 
 type BenchmarkArgmax =
@@ -77,6 +86,9 @@ type BenchmarkGemv = unsafe extern "C" fn(
     *mut c_char,
     usize,
 ) -> c_int;
+
+type ValidateTransformerPrimitives =
+    unsafe extern "C" fn(c_int, *mut PrimitiveParity, *mut c_char, usize) -> c_int;
 
 pub fn run_probe(mut arguments: impl Iterator<Item = OsString>) -> Result<()> {
     let library_path = PathBuf::from(
@@ -166,6 +178,27 @@ pub fn run_gemv_benchmark(mut arguments: impl Iterator<Item = OsString>) -> Resu
             iterations,
         )?
     };
+    emit_report(report, output_path.as_deref())
+}
+
+pub fn run_primitive_validation(mut arguments: impl Iterator<Item = OsString>) -> Result<()> {
+    let library_path = PathBuf::from(
+        arguments
+            .next()
+            .context("validate-transformer-primitives requires a shared-library path")?,
+    );
+    let mut device = DEFAULT_DEVICE;
+    let mut output_path = None;
+
+    while let Some(argument) = arguments.next() {
+        match argument.to_str() {
+            Some("--device") => device = parse_i32(&mut arguments, "--device")?,
+            Some("--output") => output_path = Some(next_path(&mut arguments, "--output")?),
+            _ => bail!("unknown validate-transformer-primitives argument {argument:?}"),
+        }
+    }
+
+    let report = unsafe { validate_transformer_primitives(&library_path, device)? };
     emit_report(report, output_path.as_deref())
 }
 
@@ -277,6 +310,29 @@ unsafe fn benchmark_gemv(
         "cold_launch_microseconds": output.cold_launch_microseconds,
         "mean_launch_microseconds": output.mean_launch_microseconds,
         "tera_operations_per_second": output.tera_operations_per_second,
+    }))
+}
+
+unsafe fn validate_transformer_primitives(library_path: &Path, device: i32) -> Result<Value> {
+    let library = unsafe { Library::new(library_path) }
+        .with_context(|| format!("failed to load {}", library_path.display()))?;
+    let validate: Symbol<'_, ValidateTransformerPrimitives> =
+        unsafe { library.get(b"qwen3_tts_validate_transformer_primitives\0") }
+            .context("missing qwen3_tts_validate_transformer_primitives symbol")?;
+
+    let mut output = PrimitiveParity::default();
+    let mut error = [0 as c_char; ERROR_CAPACITY];
+    let status = unsafe { validate(device, &mut output, error.as_mut_ptr(), error.len()) };
+    ensure_success(status, &error)?;
+
+    Ok(json!({
+        "schema_version": 1,
+        "operation": "validate-transformer-primitives",
+        "device_index": device,
+        "rms_norm_max_absolute_error": output.rms_norm_max_absolute_error,
+        "rope_max_absolute_error": output.rope_max_absolute_error,
+        "attention_max_absolute_error": output.attention_max_absolute_error,
+        "silu_gate_max_absolute_error": output.silu_gate_max_absolute_error,
     }))
 }
 

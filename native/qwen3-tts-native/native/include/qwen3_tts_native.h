@@ -58,6 +58,13 @@ typedef struct Qwen3TtsWeightUploadMetrics {
     float upload_microseconds;
 } Qwen3TtsWeightUploadMetrics;
 
+typedef struct Qwen3TtsPrimitiveParity {
+    float rms_norm_max_absolute_error;
+    float rope_max_absolute_error;
+    float attention_max_absolute_error;
+    float silu_gate_max_absolute_error;
+} Qwen3TtsPrimitiveParity;
+
 QWEN3_TTS_API int32_t qwen3_tts_probe_device(
     int32_t device_index,
     Qwen3TtsDeviceInfo* output,
@@ -94,6 +101,13 @@ QWEN3_TTS_API int32_t qwen3_tts_device_buffer_create(
     size_t error_capacity
 );
 
+QWEN3_TTS_API int32_t qwen3_tts_validate_transformer_primitives(
+    int32_t device_index,
+    Qwen3TtsPrimitiveParity* output,
+    char* error,
+    size_t error_capacity
+);
+
 QWEN3_TTS_API int32_t qwen3_tts_device_buffer_upload(
     Qwen3TtsDeviceBuffer* buffer,
     uint64_t offset_bytes,
@@ -126,7 +140,6 @@ QWEN3_TTS_API const void* qwen3_tts_device_buffer_data(
 QWEN3_TTS_API void qwen3_tts_device_buffer_destroy(
     Qwen3TtsDeviceBuffer* buffer
 );
-
 #ifdef __cplusplus
 }
 #endif

@@ -32,6 +32,9 @@ fn run() -> Result<()> {
         Some("probe-cuda") => return cuda::run_probe(arguments),
         Some("benchmark-argmax") => return cuda::run_argmax_benchmark(arguments),
         Some("benchmark-gemv") => return cuda::run_gemv_benchmark(arguments),
+        Some("validate-transformer-primitives") => {
+            return cuda::run_primitive_validation(arguments);
+        }
         _ => {}
     }
 
@@ -75,7 +78,7 @@ fn run() -> Result<()> {
 
 fn usage(program: &OsString) -> String {
     format!(
-        "usage: {} <inspect|validate-voice-design> <model.safetensors> [options]\n       {} <probe-cuda|benchmark-argmax|benchmark-gemv> <libqwen3_tts_cuda.so> [options]",
+        "usage: {} <inspect|validate-voice-design> <model.safetensors> [options]\n       {} <probe-cuda|benchmark-argmax|benchmark-gemv|validate-transformer-primitives> <libqwen3_tts_cuda.so> [options]",
         Path::new(program).display(),
         Path::new(program).display()
     )

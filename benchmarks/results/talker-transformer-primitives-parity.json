@@ -1,0 +1,9 @@
+{
+  "attention_max_absolute_error": 0.0,
+  "device_index": 0,
+  "operation": "validate-transformer-primitives",
+  "rms_norm_max_absolute_error": 0.0,
+  "rope_max_absolute_error": 0.0,
+  "schema_version": 1,
+  "silu_gate_max_absolute_error": 0.0
+}
