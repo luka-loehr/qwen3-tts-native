@@ -53,6 +53,9 @@ def main() -> None:
     args.output.mkdir(parents=True, exist_ok=True)
     torch.manual_seed(0)
     torch.set_grad_enabled(False)
+    torch.set_float32_matmul_precision("highest")
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
 
     model = Qwen3TTSTokenizerV2Model.from_pretrained(
         args.model,
@@ -72,6 +75,7 @@ def main() -> None:
         "model": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign speech_tokenizer",
         "device": torch.cuda.get_device_name(0),
         "torch_dtype": "float32",
+        "float32_precision": "TF32 disabled for deterministic kernel parity",
         "attention": "eager causal sliding-window 72",
         "frame_count": args.frames,
         "codebook_count": 16,
