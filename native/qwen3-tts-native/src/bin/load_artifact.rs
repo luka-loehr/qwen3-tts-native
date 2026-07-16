@@ -6,6 +6,7 @@ use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
 use qwen3_tts_native::loader::{NativeArtifact, VerificationMode};
+use qwen3_tts_native::sha256::to_hex;
 use serde_json::json;
 
 const TALKER_PROBE: &str = "talker.model.layers.0.self_attn.q_proj.weight";
@@ -82,6 +83,8 @@ fn run() -> Result<()> {
                 "dtype": format!("{:?}", tensor.dtype),
                 "shape": tensor.shape,
                 "bytes": tensor.bytes.len(),
+                "sha256": to_hex(tensor.sha256),
+                "arena_offset_bytes": tensor.arena_offset_bytes,
                 "staging_chunks": chunks.len(),
             }))
         })
@@ -106,6 +109,8 @@ fn run() -> Result<()> {
             "decoder_tensor_payload_bytes": memory.decoder_tensor_payload_bytes,
             "total_mapped_file_bytes": memory.total_mapped_file_bytes,
             "total_tensor_payload_bytes": memory.total_tensor_payload_bytes,
+            "host_committed_weight_copy_bytes": memory.host_committed_weight_copy_bytes,
+            "runtime_dtype_conversion_bytes": memory.runtime_dtype_conversion_bytes,
         },
         "zero_copy_probe_tensors": probes,
     });

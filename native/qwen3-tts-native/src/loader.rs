@@ -53,10 +53,15 @@ struct ManifestFile {
 struct MappedCheckpoint {
     mapping: Mmap,
     contract: TensorContract,
+    descriptors: BTreeMap<String, TensorDescriptor>,
 }
 
 impl MappedCheckpoint {
-    fn open(path: &Path, contract: TensorContract) -> Result<Self> {
+    fn open(
+        path: &Path,
+        contract: TensorContract,
+        descriptors: BTreeMap<String, TensorDescriptor>,
+    ) -> Result<Self> {
         ensure_regular_material(path)?;
         let file =
             File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
@@ -79,7 +84,11 @@ impl MappedCheckpoint {
         let tensors = SafeTensors::deserialize(&mapping)
             .with_context(|| format!("invalid SafeTensors checkpoint {}", path.display()))?;
         validate_tensors(&tensors, &contract)?;
-        Ok(Self { mapping, contract })
+        Ok(Self {
+            mapping,
+            contract,
+            descriptors,
+        })
     }
 
     fn tensor<'a>(&'a self, name: &str) -> Result<TensorRef<'a>> {
@@ -93,16 +102,28 @@ impl MappedCheckpoint {
         let tensor = tensors
             .tensor(name)
             .with_context(|| format!("{} is missing tensor {name}", self.contract.label))?;
+        let descriptor = self
+            .descriptors
+            .get(name)
+            .with_context(|| format!("{} has no descriptor for {name}", self.contract.label))?;
         Ok(TensorRef {
             name: spec.name.as_str(),
             dtype: spec.dtype,
             shape: spec.shape.as_slice(),
+            sha256: &descriptor.sha256,
+            arena_offset_bytes: descriptor.arena_offset_bytes,
             bytes: tensor.data(),
         })
     }
 
     fn names(&self) -> impl Iterator<Item = &str> {
         self.contract.tensors.keys().map(String::as_str)
+    }
+
+    fn descriptor(&self, name: &str) -> Result<&TensorDescriptor> {
+        self.descriptors
+            .get(name)
+            .with_context(|| format!("{} has no tensor descriptor {name}", self.contract.label))
     }
 }
 
@@ -123,6 +144,71 @@ pub struct ModelMemoryMetrics {
     pub decoder_tensor_payload_bytes: u64,
     pub total_mapped_file_bytes: u64,
     pub total_tensor_payload_bytes: u64,
+    /// Weight bytes copied into ordinary host heap allocations by the loader.
+    /// This remains zero because tensor payloads are borrowed from read-only mappings.
+    pub host_committed_weight_copy_bytes: u64,
+    /// Runtime conversion scratch. Conversion is intentionally offline-only.
+    pub runtime_dtype_conversion_bytes: u64,
+}
+
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TensorDtypeCode {
+    Bf16 = 1,
+    F32 = 2,
+}
+
+impl TensorDtypeCode {
+    fn from_safetensors(dtype: Dtype) -> Result<Self> {
+        match dtype {
+            Dtype::BF16 => Ok(Self::Bf16),
+            Dtype::F32 => Ok(Self::F32),
+            other => bail!("unsupported native tensor dtype {other:?}"),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TensorDescriptor {
+    pub name: String,
+    pub sha256: [u8; 32],
+    pub dtype: Dtype,
+    pub shape: Vec<u64>,
+    pub arena_offset_bytes: u64,
+    pub bytes: u64,
+}
+
+/// Borrowed C-compatible tensor metadata.
+///
+/// `name_ptr` and `shape_ptr` remain valid only while the originating
+/// [`TensorDescriptor`] is alive and is not mutated. The view never owns or
+/// releases either pointer.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct TensorDescriptorView {
+    pub name_ptr: *const u8,
+    pub name_len: usize,
+    pub sha256: [u8; 32],
+    pub dtype: TensorDtypeCode,
+    pub rank: usize,
+    pub shape_ptr: *const u64,
+    pub arena_offset_bytes: u64,
+    pub bytes: u64,
+}
+
+impl TensorDescriptor {
+    pub fn as_c_view(&self) -> Result<TensorDescriptorView> {
+        Ok(TensorDescriptorView {
+            name_ptr: self.name.as_ptr(),
+            name_len: self.name.len(),
+            sha256: self.sha256,
+            dtype: TensorDtypeCode::from_safetensors(self.dtype)?,
+            rank: self.shape.len(),
+            shape_ptr: self.shape.as_ptr(),
+            arena_offset_bytes: self.arena_offset_bytes,
+            bytes: self.bytes,
+        })
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -130,6 +216,8 @@ pub struct TensorRef<'data> {
     pub name: &'data str,
     pub dtype: Dtype,
     pub shape: &'data [usize],
+    pub sha256: &'data [u8; 32],
+    pub arena_offset_bytes: u64,
     pub bytes: &'data [u8],
 }
 
@@ -210,6 +298,7 @@ impl NativeArtifact {
         let root = root
             .canonicalize()
             .with_context(|| format!("failed to resolve {}", root.display()))?;
+        ensure_regular_tree(&root)?;
         let manifest = read_manifest(&root.join("manifest.json"))?;
         validate_manifest_identity(&manifest)?;
 
@@ -233,9 +322,21 @@ impl NativeArtifact {
         let decoder_contract = speech_decoder_contract(decoder_dtype)?;
         validate_manifest_contract(&manifest, "/weights/voice_design", &voice_contract)?;
         validate_manifest_contract(&manifest, "/weights/speech_decoder", &decoder_contract)?;
+        let voice_descriptors =
+            validate_manifest_tensor_index(&manifest, "/weights/voice_design", &voice_contract)?;
+        let decoder_descriptors = validate_manifest_tensor_index(
+            &manifest,
+            "/weights/speech_decoder",
+            &decoder_contract,
+        )?;
 
-        let voice = MappedCheckpoint::open(&root.join(VOICE_PATH), voice_contract)?;
-        let decoder = MappedCheckpoint::open(&root.join(CODEC_PATH), decoder_contract)?;
+        let voice =
+            MappedCheckpoint::open(&root.join(VOICE_PATH), voice_contract, voice_descriptors)?;
+        let decoder = MappedCheckpoint::open(
+            &root.join(CODEC_PATH),
+            decoder_contract,
+            decoder_descriptors,
+        )?;
         let revision = manifest
             .pointer("/model/revision")
             .and_then(Value::as_str)
@@ -284,6 +385,8 @@ impl NativeArtifact {
             total_tensor_payload_bytes: voice_tensor_payload_bytes
                 .checked_add(decoder_tensor_payload_bytes)
                 .expect("validated model payload byte total fits u64"),
+            host_committed_weight_copy_bytes: 0,
+            runtime_dtype_conversion_bytes: 0,
         }
     }
 
@@ -310,6 +413,14 @@ impl NativeArtifact {
             bail!("tensor {name} is not in the speech-decoder namespace");
         }
         self.decoder.tensor(name)
+    }
+
+    pub fn voice_tensor_descriptor(&self, name: &str) -> Result<&TensorDescriptor> {
+        self.voice.descriptor(name)
+    }
+
+    pub fn decoder_tensor_descriptor(&self, name: &str) -> Result<&TensorDescriptor> {
+        self.decoder.descriptor(name)
     }
 
     pub fn voice_tensor_names(&self) -> impl Iterator<Item = &str> {
@@ -458,6 +569,144 @@ fn validate_manifest_contract(
     )
 }
 
+fn validate_manifest_tensor_index(
+    manifest: &Value,
+    pointer: &str,
+    contract: &TensorContract,
+) -> Result<BTreeMap<String, TensorDescriptor>> {
+    let index_pointer = format!("{pointer}/tensors");
+    let entries = manifest
+        .pointer(&index_pointer)
+        .and_then(Value::as_array)
+        .with_context(|| format!("manifest field {index_pointer} is missing or not an array"))?;
+    if entries.len() != contract.tensor_count {
+        bail!(
+            "manifest field {index_pointer}: expected {} tensors, found {}",
+            contract.tensor_count,
+            entries.len()
+        );
+    }
+
+    let mut descriptors = BTreeMap::new();
+    let mut expected_offset = 0_u64;
+    for (position, (entry, (expected_name, spec))) in
+        entries.iter().zip(&contract.tensors).enumerate()
+    {
+        let context = format!("manifest tensor {index_pointer}[{position}]");
+        let name = entry["name"]
+            .as_str()
+            .with_context(|| format!("{context} has no name"))?;
+        if name != expected_name {
+            bail!("{context} name mismatch: expected {expected_name:?}, found {name:?}");
+        }
+        let expected_component = tensor_component(expected_name);
+        let component = entry["component"]
+            .as_str()
+            .with_context(|| format!("{context} has no component"))?;
+        if component != expected_component {
+            bail!(
+                "{context} component mismatch: expected {expected_component:?}, found {component:?}"
+            );
+        }
+        let expected_dtype = format!("{:?}", spec.dtype);
+        let dtype = entry["dtype"]
+            .as_str()
+            .with_context(|| format!("{context} has no dtype"))?;
+        if dtype != expected_dtype {
+            bail!("{context} dtype mismatch: expected {expected_dtype:?}, found {dtype:?}");
+        }
+        let shape = entry["shape"]
+            .as_array()
+            .with_context(|| format!("{context} shape is not an array"))?
+            .iter()
+            .enumerate()
+            .map(|(dimension, value)| {
+                value
+                    .as_u64()
+                    .with_context(|| format!("{context} shape[{dimension}] is not a u64"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let expected_shape = spec
+            .shape
+            .iter()
+            .map(|&dimension| u64::try_from(dimension).context("tensor dimension exceeds u64"))
+            .collect::<Result<Vec<_>>>()?;
+        if shape != expected_shape {
+            bail!(
+                "{context} shape mismatch: expected {:?}, found {shape:?}",
+                spec.shape
+            );
+        }
+        expect_tensor_u64(entry, "parameters", spec.parameters, &context)?;
+        expect_tensor_u64(entry, "arena_offset_bytes", expected_offset, &context)?;
+        expect_tensor_u64(entry, "bytes", spec.bytes, &context)?;
+        let sha256 = parse_sha256(
+            entry["sha256"]
+                .as_str()
+                .with_context(|| format!("{context} has no SHA-256"))?,
+        )
+        .with_context(|| format!("{context} has an invalid SHA-256"))?;
+
+        let descriptor = TensorDescriptor {
+            name: name.to_owned(),
+            sha256,
+            dtype: spec.dtype,
+            shape,
+            arena_offset_bytes: expected_offset,
+            bytes: spec.bytes,
+        };
+        if descriptors.insert(name.to_owned(), descriptor).is_some() {
+            bail!("{context} duplicates tensor {name}");
+        }
+        expected_offset = expected_offset
+            .checked_add(spec.bytes)
+            .context("tensor arena byte offset overflowed")?;
+    }
+    if expected_offset != contract.payload_bytes {
+        bail!(
+            "manifest tensor index covers {expected_offset} bytes, expected {}",
+            contract.payload_bytes
+        );
+    }
+    Ok(descriptors)
+}
+
+fn expect_tensor_u64(entry: &Value, field: &str, expected: u64, context: &str) -> Result<()> {
+    let actual = entry[field]
+        .as_u64()
+        .with_context(|| format!("{context} field {field} is not a u64"))?;
+    if actual != expected {
+        bail!("{context} field {field}: expected {expected}, found {actual}");
+    }
+    Ok(())
+}
+
+fn parse_sha256(encoded: &str) -> Result<[u8; 32]> {
+    if encoded.len() != 64
+        || !encoded
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        bail!("SHA-256 must be exactly 64 lowercase hexadecimal characters");
+    }
+    let mut digest = [0_u8; 32];
+    for (destination, pair) in digest.iter_mut().zip(encoded.as_bytes().chunks_exact(2)) {
+        let pair = std::str::from_utf8(pair).expect("validated ASCII hexadecimal");
+        *destination = u8::from_str_radix(pair, 16).expect("validated hexadecimal byte");
+    }
+    Ok(digest)
+}
+
+fn tensor_component(name: &str) -> &'static str {
+    if name.starts_with("talker.code_predictor.") {
+        "code-predictor"
+    } else if name.starts_with("talker.") {
+        "talker"
+    } else {
+        "speech-decoder"
+    }
+}
+
 fn safe_relative_path(encoded: &str) -> Result<PathBuf> {
     let path = Path::new(encoded);
     if path.as_os_str().is_empty() || path.is_absolute() {
@@ -485,6 +734,32 @@ fn ensure_regular_material(path: &Path) -> Result<()> {
             "artifact material is not a regular file: {}",
             path.display()
         );
+    }
+    Ok(())
+}
+
+fn ensure_regular_tree(root: &Path) -> Result<()> {
+    let mut pending = vec![root.to_owned()];
+    while let Some(directory) = pending.pop() {
+        for entry in fs::read_dir(&directory)
+            .with_context(|| format!("failed to list {}", directory.display()))?
+        {
+            let entry = entry?;
+            let path = entry.path();
+            let metadata = fs::symlink_metadata(&path)
+                .with_context(|| format!("failed to inspect {}", path.display()))?;
+            if metadata.file_type().is_symlink() {
+                bail!("artifact tree contains a symlink: {}", path.display());
+            }
+            if metadata.is_dir() {
+                pending.push(path);
+            } else if !metadata.is_file() {
+                bail!(
+                    "artifact tree contains non-regular material: {}",
+                    path.display()
+                );
+            }
+        }
     }
     Ok(())
 }
@@ -527,6 +802,8 @@ fn expect_manifest_u64(root: &Value, pointer: &str, expected: u64) -> Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::contract::TensorSpec;
+    use serde_json::json;
 
     #[test]
     fn relative_material_paths_are_strict() {
@@ -547,10 +824,13 @@ mod tests {
     #[test]
     fn tensor_chunks_preserve_alignment_and_offsets() {
         let bytes = [0_u8; 22];
+        let sha256 = [7_u8; 32];
         let tensor = TensorRef {
             name: "test",
             dtype: Dtype::BF16,
             shape: &[11],
+            sha256: &sha256,
+            arena_offset_bytes: 42,
             bytes: &bytes,
         };
         let chunks = tensor
@@ -564,6 +844,61 @@ mod tests {
     }
 
     #[test]
+    fn tensor_index_is_ordered_and_exact() {
+        let name = "decoder.test".to_owned();
+        let spec = TensorSpec {
+            name: name.clone(),
+            dtype: Dtype::BF16,
+            shape: vec![2, 3],
+            parameters: 6,
+            bytes: 12,
+        };
+        let contract = TensorContract {
+            label: "test".to_owned(),
+            tensors: BTreeMap::from([(name.clone(), spec)]),
+            tensor_count: 1,
+            parameter_count: 6,
+            payload_bytes: 12,
+            exact_file_bytes: None,
+        };
+        let mut manifest = json!({
+            "weights": {
+                "test": {
+                    "tensors": [{
+                        "name": name,
+                        "component": "speech-decoder",
+                        "dtype": "BF16",
+                        "shape": [2, 3],
+                        "parameters": 6,
+                        "arena_offset_bytes": 0,
+                        "bytes": 12,
+                        "sha256": "42".repeat(32),
+                    }]
+                }
+            }
+        });
+        let descriptors =
+            validate_manifest_tensor_index(&manifest, "/weights/test", &contract).unwrap();
+        let descriptor = &descriptors["decoder.test"];
+        assert_eq!(descriptor.sha256, [0x42; 32]);
+        assert_eq!(descriptor.shape, [2, 3]);
+        assert_eq!(descriptor.as_c_view().unwrap().dtype, TensorDtypeCode::Bf16);
+
+        manifest["weights"]["test"]["tensors"][0]["arena_offset_bytes"] = json!(4);
+        let error =
+            validate_manifest_tensor_index(&manifest, "/weights/test", &contract).unwrap_err();
+        assert!(error.to_string().contains("arena_offset_bytes"));
+    }
+
+    #[test]
+    fn sha256_parser_rejects_noncanonical_text() {
+        assert_eq!(parse_sha256(&"ab".repeat(32)).unwrap(), [0xab; 32]);
+        assert!(parse_sha256(&"AB".repeat(32)).is_err());
+        assert!(parse_sha256("abc").is_err());
+        assert!(parse_sha256(&"xz".repeat(32)).is_err());
+    }
+
+    #[test]
     fn verification_mode_parser_is_strict() {
         assert_eq!(
             VerificationMode::parse("full").unwrap(),
@@ -574,5 +909,74 @@ mod tests {
             VerificationMode::ContractsOnly
         );
         assert!(VerificationMode::parse("none").is_err());
+    }
+
+    #[test]
+    fn full_verification_rejects_hash_tampering() {
+        let root = TestDirectory::new("hash-tamper");
+        let relative = PathBuf::from("tiny.bin");
+        fs::write(root.path.join(&relative), b"verified bytes").unwrap();
+        let mut files = BTreeMap::new();
+        files.insert(
+            relative,
+            ManifestFile {
+                bytes: 14,
+                sha256: "00".repeat(32),
+            },
+        );
+        let error = verify_manifest_files(&root.path, &files, VerificationMode::Full).unwrap_err();
+        assert!(error.to_string().contains("SHA-256 mismatch"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn regular_material_check_rejects_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let root = TestDirectory::new("symlink");
+        let target = root.path.join("target");
+        let link = root.path.join("link");
+        fs::write(&target, b"material").unwrap();
+        symlink(&target, &link).unwrap();
+        let error = ensure_regular_material(&link).unwrap_err();
+        assert!(error.to_string().contains("must not be a symlink"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn artifact_tree_rejects_unlisted_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let root = TestDirectory::new("tree-symlink");
+        let target = root.path.join("target");
+        let link = root.path.join("unlisted-link");
+        fs::write(&target, b"material").unwrap();
+        symlink(&target, &link).unwrap();
+        let error = ensure_regular_tree(&root.path).unwrap_err();
+        assert!(error.to_string().contains("tree contains a symlink"));
+    }
+
+    struct TestDirectory {
+        path: PathBuf,
+    }
+
+    impl TestDirectory {
+        fn new(label: &str) -> Self {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let sequence = NEXT.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "qwen3-tts-native-loader-{label}-{}-{sequence}",
+                std::process::id()
+            ));
+            fs::create_dir(&path).unwrap();
+            Self { path }
+        }
+    }
+
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
     }
 }

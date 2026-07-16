@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstring>
 #include <limits>
+#include <new>
 
 struct Qwen3TtsDeviceBuffer {
     int32_t device_index;

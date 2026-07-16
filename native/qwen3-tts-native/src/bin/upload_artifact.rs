@@ -94,6 +94,9 @@ fn run() -> Result<()> {
     let started = Instant::now();
     let artifact = NativeArtifact::open(&artifact_path, VerificationMode::ContractsOnly)?;
     let open_milliseconds = started.elapsed().as_secs_f64() * 1_000.0;
+    let artifact_root = artifact.root().display().to_string();
+    let revision = artifact.revision().to_owned();
+    let model_memory = artifact.model_memory_metrics();
     let staging_bytes = staging_mib
         .checked_mul(1024 * 1024)
         .context("staging bytes overflow usize")?;
@@ -136,10 +139,17 @@ fn run() -> Result<()> {
         bail!("uploaded byte total {offset} differs from planned {allocation_bytes}");
     }
     let metrics = buffer.finish()?;
+    let finished_state = buffer.state_info();
+    if !finished_state.finished {
+        bail!("device buffer did not enter the finished state");
+    }
     let upload_wall_milliseconds = upload_started.elapsed().as_secs_f64() * 1_000.0;
 
     let (first_offset, first_expected) = first_probe.context("no first readback probe")?;
     let (final_offset, final_expected) = final_probe.context("no final readback probe")?;
+    // The upload ABI synchronizes each staged copy. Release every source
+    // SafeTensors mapping before probing the independent device allocation.
+    drop(artifact);
     let first_actual = buffer.readback(first_offset, first_expected.len())?;
     let final_actual = buffer.readback(final_offset, final_expected.len())?;
     if first_actual != first_expected || final_actual != final_expected {
@@ -156,8 +166,8 @@ fn run() -> Result<()> {
     let report = json!({
         "schema_version": 1,
         "operation": "upload-native-qwen3-tts-artifact",
-        "artifact": artifact.root().display().to_string(),
-        "revision": artifact.revision(),
+        "artifact": artifact_root,
+        "revision": revision,
         "scope": scope.label(),
         "device_index": metrics.device_index,
         "tensor_count": names.len(),
@@ -176,8 +186,23 @@ fn run() -> Result<()> {
             .free_before_bytes
             .saturating_sub(metrics.free_after_allocation_bytes),
         "device_pointer_exposed": true,
+        "source_mappings_released_before_readback": true,
         "readback_probe_bytes": first_expected.len() + final_expected.len(),
         "readback_exact": true,
+        "memory_bytes": {
+            "host_mapped_weight_files_before_release": model_memory.total_mapped_file_bytes,
+            "host_tensor_payload_views_before_release": model_memory.total_tensor_payload_bytes,
+            "host_committed_weight_copy": model_memory.host_committed_weight_copy_bytes,
+            "runtime_dtype_conversion": model_memory.runtime_dtype_conversion_bytes,
+            "pinned_staging": metrics.pinned_staging_bytes,
+            "device_allocation": metrics.allocation_bytes,
+        },
+        "device_state": {
+            "finished": finished_state.finished,
+            "allocation_bytes": finished_state.allocation.allocation_bytes,
+            "uploaded_bytes": finished_state.allocation.uploaded_bytes,
+            "upload_calls": finished_state.allocation.upload_calls,
+        },
         "allocation_initial_metrics": {
             "allocation_bytes": allocation_metrics.allocation_bytes,
             "pinned_staging_bytes": allocation_metrics.pinned_staging_bytes,

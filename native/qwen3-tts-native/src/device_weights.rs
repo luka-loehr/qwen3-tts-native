@@ -35,6 +35,12 @@ pub struct WeightUploadMetrics {
     pub upload_microseconds: f32,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct DeviceWeightStateInfo {
+    pub allocation: WeightUploadMetrics,
+    pub finished: bool,
+}
+
 impl From<RawUploadMetrics> for WeightUploadMetrics {
     fn from(raw: RawUploadMetrics) -> Self {
         Self {
@@ -154,6 +160,13 @@ impl DeviceWeightBuffer {
         self.allocation_metrics
     }
 
+    pub const fn state_info(&self) -> DeviceWeightStateInfo {
+        DeviceWeightStateInfo {
+            allocation: self.allocation_metrics,
+            finished: self.finished,
+        }
+    }
+
     pub fn device_pointer(&self) -> NonNull<c_void> {
         // SAFETY: The buffer handle is valid until Drop.
         let pointer = unsafe { (self.data_fn)(self.handle.as_ptr()) };
@@ -194,8 +207,9 @@ impl DeviceWeightBuffer {
             )
         };
         ensure_success(status, &error)?;
+        self.allocation_metrics = metrics.into();
         self.finished = true;
-        Ok(metrics.into())
+        Ok(self.allocation_metrics)
     }
 
     pub fn readback(&self, offset_bytes: u64, bytes: usize) -> Result<Vec<u8>> {
@@ -216,6 +230,12 @@ impl DeviceWeightBuffer {
         };
         ensure_success(status, &error)?;
         Ok(output)
+    }
+
+    /// Explicitly releases the CUDA allocation and pinned staging buffer.
+    /// Dropping the value has identical behavior.
+    pub fn release(self) {
+        drop(self);
     }
 }
 

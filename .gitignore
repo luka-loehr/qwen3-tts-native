@@ -1,6 +1,7 @@
 .cargo-cache/
 artifacts/
 build/
+native/qwen3-tts-native/build-*/
 native/qwen3-tts-native/target/
 
 *.pcm
