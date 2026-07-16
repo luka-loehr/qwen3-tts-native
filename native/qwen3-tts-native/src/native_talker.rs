@@ -1,7 +1,7 @@
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::path::Path;
 use std::ptr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use anyhow::{Context, Result, bail, ensure};
@@ -16,6 +16,9 @@ use crate::weights::{SafeTensorProvider, WeightProvider};
 
 const ERROR_CAPACITY: usize = 1_024;
 const CODEBOOKS: usize = 16;
+const MIN_SESSION_CAPACITY: usize = 16;
+const SESSION_CAPACITY_BLOCK: usize = 32;
+const MAX_POOLED_SESSIONS: usize = 8;
 
 type ModelHandle = *mut c_void;
 type SessionHandle = *mut c_void;
@@ -102,6 +105,7 @@ type SessionCreate = unsafe extern "C" fn(
     usize,
 ) -> c_int;
 type SessionDestroy = unsafe extern "C" fn(SessionHandle);
+type SessionReset = unsafe extern "C" fn(SessionHandle, u64, *mut c_char, usize) -> c_int;
 type SessionPrefill = unsafe extern "C" fn(
     SessionHandle,
     *const c_int,
@@ -196,6 +200,8 @@ pub struct VoiceDesignRequest {
     pub language: String,
     pub text_mode: TextMode,
     pub max_frames: usize,
+    /// Hard safety limit. The native session allocates only enough capacity for
+    /// the prompt plus `max_frames`, rounded to a small reusable size class.
     pub max_sequence_length: usize,
     pub random_seed: u64,
     pub talker_sampling: SamplingConfig,
@@ -225,6 +231,7 @@ impl VoiceDesignRequest {
 #[derive(Clone, Copy, Debug)]
 pub struct GenerationSettings {
     pub max_frames: usize,
+    /// Hard safety limit rather than an unconditional KV-cache allocation.
     pub max_sequence_length: usize,
     pub random_seed: u64,
     pub talker_sampling: SamplingConfig,
@@ -268,8 +275,11 @@ pub struct SessionPrefillInfo {
 pub struct SessionStartTiming {
     pub tokenize_wall_milliseconds: f64,
     pub prompt_plan_wall_milliseconds: f64,
+    pub session_acquire_wall_milliseconds: f64,
     pub session_create_wall_milliseconds: f64,
+    pub session_reset_wall_milliseconds: f64,
     pub prefill_wall_milliseconds: f64,
+    pub session_pool_hit: bool,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -338,6 +348,7 @@ pub struct NativeTalkerModel {
     config: ModelConfig,
     tokenizer: Qwen2Tokenizer,
     memory: SharedModelMemory,
+    session_pool: Mutex<Vec<PooledSession>>,
 }
 
 pub type NativeTalker = NativeTalkerModel;
@@ -356,7 +367,24 @@ pub struct NativeTalkerSession {
     prefill: SessionPrefillInfo,
     start_timing: SessionStartTiming,
     end_reason: Option<SessionEndReason>,
+    recyclable: bool,
 }
+
+struct PooledSession {
+    handle: SessionHandle,
+    memory: SessionMemory,
+}
+
+struct AcquiredSession {
+    pooled: PooledSession,
+    pool_hit: bool,
+    create_wall_milliseconds: f64,
+    reset_wall_milliseconds: f64,
+}
+
+// SAFETY: a pooled handle is uniquely owned by the pool while inactive. It is
+// moved out before reset or inference and never accessed through two threads.
+unsafe impl Send for PooledSession {}
 
 // SAFETY: after finalization the model handle exposes immutable device weights only.
 // The native library is process-global and each session creates its own CUDA stream,
@@ -397,6 +425,7 @@ impl NativeTalkerModel {
                 tensor_count: 0,
                 device_index,
             },
+            session_pool: Mutex::new(Vec::new()),
         };
         model.upload_weights(&provider)?;
         model.finalize_weights()?;
@@ -467,45 +496,29 @@ impl NativeTalkerModel {
         let (text_ids, codec_ids) = self.native_prompt_steps(prompt)?;
         let prompt_plan_wall_milliseconds = prompt_plan_started.elapsed().as_secs_f64() * 1_000.0;
         ensure!(text_ids.len() <= i32::MAX as usize, "prompt is too long");
-
-        let create_started = Instant::now();
-        let create: Symbol<'_, SessionCreate> =
-            unsafe { self.library.get(b"qwen3_tts_session_create\0") }
-                .context("missing qwen3_tts_session_create symbol")?;
-        let mut handle = ptr::null_mut();
-        let mut native_memory = NativeSessionMemory::default();
-        let mut error = [0 as c_char; ERROR_CAPACITY];
-        let status = unsafe {
-            create(
-                self.handle,
-                settings.max_sequence_length as i32,
-                settings.random_seed,
-                &mut handle,
-                &mut native_memory,
-                error.as_mut_ptr(),
-                error.len(),
-            )
-        };
-        ensure_native_success(status, &error)?;
-        let session_create_wall_milliseconds = create_started.elapsed().as_secs_f64() * 1_000.0;
+        let capacity = session_capacity(
+            text_ids.len(),
+            settings.max_frames,
+            settings.max_sequence_length,
+        )?;
+        let talker_sampling = settings.talker_sampling.native()?;
+        let predictor_sampling = settings.predictor_sampling.native()?;
+        let acquire_started = Instant::now();
+        let acquired = self.acquire_session(capacity, settings.random_seed)?;
+        let session_acquire_wall_milliseconds = acquire_started.elapsed().as_secs_f64() * 1_000.0;
 
         let codec_eos_token = self.config.talker_config.codec_eos_token_id as u16;
         let mut session = NativeTalkerSession {
             model: Arc::clone(self),
-            handle,
-            memory: SessionMemory {
-                talker_kv_bytes: native_memory.talker_kv_bytes,
-                predictor_kv_bytes: native_memory.predictor_kv_bytes,
-                workspace_bytes: native_memory.workspace_bytes,
-                max_sequence_length: native_memory.max_sequence_length,
-            },
+            handle: acquired.pooled.handle,
+            memory: acquired.pooled.memory,
             trailing_text: prompt.trailing_text.clone(),
             current_semantic: 0,
             codec_eos_token,
             frames_emitted: 0,
             max_frames: settings.max_frames,
-            talker_sampling: settings.talker_sampling.native()?,
-            predictor_sampling: settings.predictor_sampling.native()?,
+            talker_sampling,
+            predictor_sampling,
             prefill: SessionPrefillInfo {
                 first_semantic_token: 0,
                 prompt_tokens: 0,
@@ -514,10 +527,14 @@ impl NativeTalkerModel {
             start_timing: SessionStartTiming {
                 tokenize_wall_milliseconds: 0.0,
                 prompt_plan_wall_milliseconds,
-                session_create_wall_milliseconds,
+                session_acquire_wall_milliseconds,
+                session_create_wall_milliseconds: acquired.create_wall_milliseconds,
+                session_reset_wall_milliseconds: acquired.reset_wall_milliseconds,
                 prefill_wall_milliseconds: 0.0,
+                session_pool_hit: acquired.pool_hit,
             },
             end_reason: None,
+            recyclable: false,
         };
         let prefill_started = Instant::now();
         let prefill =
@@ -532,6 +549,7 @@ impl NativeTalkerModel {
         };
         session.end_reason =
             (prefill.first_semantic_token == codec_eos_token).then_some(SessionEndReason::CodecEos);
+        session.recyclable = true;
         Ok(session)
     }
 
@@ -626,6 +644,112 @@ impl NativeTalkerModel {
             device_index: output.device_index,
         };
         Ok(())
+    }
+
+    fn acquire_session(&self, capacity: usize, random_seed: u64) -> Result<AcquiredSession> {
+        let pooled = {
+            let mut pool = self
+                .session_pool
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            pool.iter()
+                .rposition(|entry| entry.memory.max_sequence_length as usize == capacity)
+                .map(|index| pool.swap_remove(index))
+        };
+
+        if let Some(pooled) = pooled {
+            let reset_started = Instant::now();
+            let reset: Symbol<'_, SessionReset> =
+                match unsafe { self.library.get(b"qwen3_tts_session_reset\0") } {
+                    Ok(reset) => reset,
+                    Err(error) => {
+                        self.destroy_session(pooled.handle);
+                        return Err(error).context("missing qwen3_tts_session_reset symbol");
+                    }
+                };
+            let mut native_error = [0 as c_char; ERROR_CAPACITY];
+            let status = unsafe {
+                reset(
+                    pooled.handle,
+                    random_seed,
+                    native_error.as_mut_ptr(),
+                    native_error.len(),
+                )
+            };
+            if let Err(error) = ensure_native_success(status, &native_error) {
+                self.destroy_session(pooled.handle);
+                return Err(error).context("failed to reset a pooled talker session");
+            }
+            return Ok(AcquiredSession {
+                pooled,
+                pool_hit: true,
+                create_wall_milliseconds: 0.0,
+                reset_wall_milliseconds: reset_started.elapsed().as_secs_f64() * 1_000.0,
+            });
+        }
+
+        let create_started = Instant::now();
+        let create: Symbol<'_, SessionCreate> =
+            unsafe { self.library.get(b"qwen3_tts_session_create\0") }
+                .context("missing qwen3_tts_session_create symbol")?;
+        let mut handle = ptr::null_mut();
+        let mut native_memory = NativeSessionMemory::default();
+        let mut native_error = [0 as c_char; ERROR_CAPACITY];
+        let status = unsafe {
+            create(
+                self.handle,
+                capacity as i32,
+                random_seed,
+                &mut handle,
+                &mut native_memory,
+                native_error.as_mut_ptr(),
+                native_error.len(),
+            )
+        };
+        ensure_native_success(status, &native_error)?;
+        ensure!(
+            !handle.is_null(),
+            "native session creation returned a null handle"
+        );
+        Ok(AcquiredSession {
+            pooled: PooledSession {
+                handle,
+                memory: SessionMemory {
+                    talker_kv_bytes: native_memory.talker_kv_bytes,
+                    predictor_kv_bytes: native_memory.predictor_kv_bytes,
+                    workspace_bytes: native_memory.workspace_bytes,
+                    max_sequence_length: native_memory.max_sequence_length,
+                },
+            },
+            pool_hit: false,
+            create_wall_milliseconds: create_started.elapsed().as_secs_f64() * 1_000.0,
+            reset_wall_milliseconds: 0.0,
+        })
+    }
+
+    fn recycle_session(&self, pooled: PooledSession) {
+        let mut pool = self
+            .session_pool
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if pool.len() < MAX_POOLED_SESSIONS {
+            pool.push(pooled);
+            return;
+        }
+        drop(pool);
+        self.destroy_session(pooled.handle);
+    }
+
+    fn destroy_session(&self, handle: SessionHandle) {
+        if handle.is_null() {
+            return;
+        }
+        if let Ok(destroy) = unsafe {
+            self.library
+                .get::<SessionDestroy>(b"qwen3_tts_session_destroy\0")
+        } {
+            unsafe { destroy(handle) };
+        }
     }
 
     fn native_prompt_steps(&self, prompt: &VoiceDesignPrompt) -> Result<(Vec<i32>, Vec<i32>)> {
@@ -736,12 +860,19 @@ impl NativeTalkerSession {
             .copied()
             .unwrap_or(TextSource::TtsPad);
         let text_id = self.model.text_source_id(text)?;
-        let (codes, next_semantic_token, native) = self.next_native(
+        let native_result = self.next_native(
             self.current_semantic,
             text_id,
             self.talker_sampling,
             self.predictor_sampling,
-        )?;
+        );
+        let (codes, next_semantic_token, native) = match native_result {
+            Ok(frame) => frame,
+            Err(error) => {
+                self.recyclable = false;
+                return Err(error);
+            }
+        };
         let frame_index = self.frames_emitted;
         self.frames_emitted += 1;
         self.current_semantic = next_semantic_token;
@@ -833,19 +964,28 @@ impl Drop for NativeTalkerSession {
         if self.handle.is_null() {
             return;
         }
-        if let Ok(destroy) = unsafe {
-            self.model
-                .library
-                .get::<SessionDestroy>(b"qwen3_tts_session_destroy\0")
-        } {
-            unsafe { destroy(self.handle) };
+        let pooled = PooledSession {
+            handle: std::mem::replace(&mut self.handle, ptr::null_mut()),
+            memory: self.memory,
+        };
+        if self.recyclable {
+            self.model.recycle_session(pooled);
+        } else {
+            self.model.destroy_session(pooled.handle);
         }
-        self.handle = ptr::null_mut();
     }
 }
 
 impl Drop for NativeTalkerModel {
     fn drop(&mut self) {
+        let pool = self
+            .session_pool
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let pooled_handles: Vec<_> = pool.drain(..).map(|entry| entry.handle).collect();
+        for handle in pooled_handles {
+            self.destroy_session(handle);
+        }
         if self.handle.is_null() {
             return;
         }
@@ -857,6 +997,32 @@ impl Drop for NativeTalkerModel {
         }
         self.handle = ptr::null_mut();
     }
+}
+
+fn session_capacity(
+    prompt_tokens: usize,
+    max_frames: usize,
+    max_sequence_length: usize,
+) -> Result<usize> {
+    ensure!(
+        max_sequence_length >= MIN_SESSION_CAPACITY,
+        "max_sequence_length must be at least {MIN_SESSION_CAPACITY}"
+    );
+    let required = prompt_tokens
+        .checked_add(max_frames)
+        .context("prompt and frame count overflow the session capacity")?;
+    ensure!(
+        required <= max_sequence_length,
+        "request needs {required} talker positions ({prompt_tokens} prompt tokens + \
+         {max_frames} codec frames), exceeding max_sequence_length={max_sequence_length}"
+    );
+    let rounded = required
+        .max(MIN_SESSION_CAPACITY)
+        .checked_add(SESSION_CAPACITY_BLOCK - 1)
+        .context("session capacity overflow")?
+        / SESSION_CAPACITY_BLOCK
+        * SESSION_CAPACITY_BLOCK;
+    Ok(rounded.min(max_sequence_length))
 }
 
 fn ensure_native_success(status: i32, error: &[c_char]) -> Result<()> {
@@ -894,5 +1060,28 @@ mod tests {
         let sampling = SamplingConfig::greedy();
         assert!(!sampling.do_sample);
         assert_eq!(sampling.top_p, 1.0);
+    }
+
+    #[test]
+    fn session_capacity_tracks_prompt_and_requested_frames() {
+        assert_eq!(session_capacity(30, 2, 1_024).unwrap(), 32);
+        assert_eq!(session_capacity(32, 40, 1_024).unwrap(), 96);
+        assert_eq!(session_capacity(30, 256, 1_024).unwrap(), 288);
+    }
+
+    #[test]
+    fn session_capacity_respects_a_non_aligned_hard_limit() {
+        assert_eq!(session_capacity(16, 1, 17).unwrap(), 17);
+    }
+
+    #[test]
+    fn session_capacity_rejects_truncation() {
+        let error = session_capacity(32, 40, 64).unwrap_err().to_string();
+        assert!(error.contains("request needs 72 talker positions"));
+    }
+
+    #[test]
+    fn session_capacity_rejects_integer_overflow() {
+        assert!(session_capacity(usize::MAX, 1, usize::MAX).is_err());
     }
 }

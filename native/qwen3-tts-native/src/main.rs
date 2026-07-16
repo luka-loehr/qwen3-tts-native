@@ -38,6 +38,9 @@ fn run() -> Result<()> {
         Some("generate-codes") => {
             return qwen3_tts_native::talker_cli::run_generate_codes(arguments);
         }
+        Some("benchmark-sessions") => {
+            return qwen3_tts_native::session_bench::run_session_benchmark(arguments);
+        }
         _ => {}
     }
 
@@ -81,7 +84,7 @@ fn run() -> Result<()> {
 
 fn usage(program: &OsString) -> String {
     format!(
-        "usage: {} <inspect|validate-voice-design> <model.safetensors> [options]\n       {} <probe-cuda|benchmark-argmax|benchmark-gemv|validate-transformer-primitives> <libqwen3_tts_cuda.so> [options]\n       {} generate-codes <libqwen3_tts_cuda.so> <model-directory> --text <text> --instruction <description> [options]",
+        "usage: {} <inspect|validate-voice-design> <model.safetensors> [options]\n       {} <probe-cuda|benchmark-argmax|benchmark-gemv|validate-transformer-primitives> <libqwen3_tts_cuda.so> [options]\n       {} <generate-codes|benchmark-sessions> <libqwen3_tts_cuda.so> <model-directory> [options]",
         Path::new(program).display(),
         Path::new(program).display(),
         Path::new(program).display()

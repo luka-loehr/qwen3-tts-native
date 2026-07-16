@@ -633,14 +633,16 @@ public:
             : QWEN3_TTS_TALKER_CREATED;
         const uint64_t random_state = seed == 0 ? 0x9e3779b97f4a7c15ULL : seed;
         check_cuda(
-            cudaMemcpy(
+            cudaMemcpyAsync(
                 random_state_.as<uint64_t>(),
                 &random_state,
                 sizeof(random_state),
-                cudaMemcpyHostToDevice
+                cudaMemcpyHostToDevice,
+                stream_
             ),
             "reset device random state"
         );
+        check_cuda(cudaStreamSynchronize(stream_), "synchronize reset random state");
     }
 
     Qwen3TtsTalkerPrefillResult prefill(
