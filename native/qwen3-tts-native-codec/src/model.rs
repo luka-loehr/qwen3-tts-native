@@ -57,6 +57,25 @@ impl TensorEntry {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct DecoderWeightTensor<'a> {
+    pub dtype: TensorDType,
+    pub shape: &'a [u64],
+    pub data: &'a [u8],
+}
+
+/// Supplies canonical decoder tensors to the native execution layer.
+///
+/// Implementations may be backed by a safetensors file, an mmap arena, or an
+/// indexed artifact. Returned views need to remain valid only for the duration
+/// of `NativeCodec::load_model`, because the C ABI copies every tensor into an
+/// owned CUDA allocation before returning.
+pub trait DecoderWeightProvider {
+    fn decoder_tensor_names(&self) -> Box<dyn Iterator<Item = &str> + '_>;
+
+    fn decoder_tensor(&self, name: &str) -> Option<DecoderWeightTensor<'_>>;
+}
+
 pub struct SafetensorsFile {
     storage: Vec<u8>,
     tensors: BTreeMap<String, TensorEntry>,
@@ -240,6 +259,26 @@ impl SafetensorsFile {
                     TensorDType::Bf16 => (f32_count, bf16_count + 1),
                 }
             })
+    }
+}
+
+impl DecoderWeightProvider for SafetensorsFile {
+    fn decoder_tensor_names(&self) -> Box<dyn Iterator<Item = &str> + '_> {
+        Box::new(
+            self.tensors
+                .keys()
+                .filter(|name| name.starts_with("decoder."))
+                .map(String::as_str),
+        )
+    }
+
+    fn decoder_tensor(&self, name: &str) -> Option<DecoderWeightTensor<'_>> {
+        let (entry, data) = self.tensor(name)?;
+        Some(DecoderWeightTensor {
+            dtype: entry.dtype,
+            shape: &entry.shape,
+            data,
+        })
     }
 }
 

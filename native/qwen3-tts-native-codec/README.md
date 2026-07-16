@@ -56,7 +56,13 @@ transposed-convolution overlap tails, the final convolution window, frame
 positions, sample positions, and ring-slot positions persist in the opaque
 state handle. Prefix audio is never recomputed.
 
-## Public C ABI
+## Public Rust library and C ABI
+
+The crate also builds a reusable Rust library. It exports
+`NativeCodecLibrary`, `NativeCodec`, `DecoderWeights`, and the object-safe
+`DecoderWeightProvider` trait. An external mmap/indexed artifact loader can
+implement that trait and feed tensor views directly into `load_model`; the CLI
+uses the same public library path.
 
 The versioned ABI is declared in
 [`native/include/qwen3_tts_codec.h`](native/include/qwen3_tts_codec.h).

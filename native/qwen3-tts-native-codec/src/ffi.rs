@@ -1,4 +1,4 @@
-use crate::model::{SafetensorsFile, TensorDType};
+use crate::model::{DecoderWeightProvider, TensorDType};
 use libloading::Library;
 use std::error::Error;
 use std::ffi::{CStr, CString, c_char, c_void};
@@ -314,7 +314,7 @@ pub struct Codec<'a> {
 }
 
 impl Codec<'_> {
-    pub fn load_model(&mut self, model: &SafetensorsFile) -> Result<ModelInfo, String> {
+    pub fn load_model(&mut self, model: &dyn DecoderWeightProvider) -> Result<ModelInfo, String> {
         let mut provider_state = ModelProvider::new(model)?;
         let provider = WeightProvider {
             abi_version: 1,
@@ -526,14 +526,14 @@ impl Codec<'_> {
 }
 
 struct ModelProvider<'a> {
-    model: &'a SafetensorsFile,
+    model: &'a dyn DecoderWeightProvider,
     names: Vec<CString>,
 }
 
 impl<'a> ModelProvider<'a> {
-    fn new(model: &'a SafetensorsFile) -> Result<Self, String> {
+    fn new(model: &'a dyn DecoderWeightProvider) -> Result<Self, String> {
         let names = model
-            .tensor_names()
+            .decoder_tensor_names()
             .map(|name| CString::new(name).map_err(|_| format!("tensor name contains NUL: {name}")))
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Self { model, names })
@@ -558,22 +558,22 @@ unsafe extern "C" fn model_tensor_at(
     let Ok(name_str) = name_value.to_str() else {
         return STATUS_MODEL;
     };
-    let Some((entry, data)) = provider.model.tensor(name_str) else {
+    let Some(tensor) = provider.model.decoder_tensor(name_str) else {
         return STATUS_MODEL;
     };
-    if entry.shape.len() > 4 {
+    if tensor.shape.len() > 4 {
         return STATUS_MODEL;
     }
     let mut shape = [0_u64; 4];
-    shape[..entry.shape.len()].copy_from_slice(&entry.shape);
+    shape[..tensor.shape.len()].copy_from_slice(tensor.shape);
     unsafe {
         *name = name_value.as_ptr();
         *output = TensorView {
-            data: data.as_ptr().cast::<c_void>(),
-            byte_length: data.len() as u64,
+            data: tensor.data.as_ptr().cast::<c_void>(),
+            byte_length: tensor.data.len() as u64,
             shape,
-            rank: entry.shape.len() as u32,
-            dtype: match entry.dtype {
+            rank: tensor.shape.len() as u32,
+            dtype: match tensor.dtype {
                 TensorDType::F32 => 1,
                 TensorDType::Bf16 => 2,
             },

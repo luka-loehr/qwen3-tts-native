@@ -1,12 +1,26 @@
 use qwen3_tts_native_codec::{
-    CODEBOOKS, DecoderTensorDType, DecoderWeights, MAX_BATCH_STREAMS, MAX_PACKET_FRAMES,
-    NativeCodecLibrary, PacketResult, SAMPLES_PER_FRAME,
+    CODEBOOKS, DecoderTensorDType, DecoderWeightProvider, DecoderWeightTensor, DecoderWeights,
+    MAX_BATCH_STREAMS, MAX_PACKET_FRAMES, NativeCodecLibrary, PacketResult, SAMPLES_PER_FRAME,
 };
+
+struct ExternalArtifactProvider;
+
+impl DecoderWeightProvider for ExternalArtifactProvider {
+    fn decoder_tensor_names(&self) -> Box<dyn Iterator<Item = &str> + '_> {
+        Box::new(std::iter::empty())
+    }
+
+    fn decoder_tensor(&self, _name: &str) -> Option<DecoderWeightTensor<'_>> {
+        None
+    }
+}
 
 #[test]
 fn exports_runtime_and_weight_provider_contract() {
     let _load_native = NativeCodecLibrary::load;
     let _open_weights = DecoderWeights::open;
+    let external_provider = ExternalArtifactProvider;
+    let _provider_object: &dyn DecoderWeightProvider = &external_provider;
     assert_eq!(CODEBOOKS, 16);
     assert_eq!(MAX_PACKET_FRAMES, 4);
     assert_eq!(MAX_BATCH_STREAMS, 6);
