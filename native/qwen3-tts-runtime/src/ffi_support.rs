@@ -255,7 +255,7 @@ mod tests {
         assert_eq!(truncated[5..], [9 as c_char, 9 as c_char, 9 as c_char]);
         let bytes = truncated[..4]
             .iter()
-            .map(|value| *value as u8)
+            .map(|value| value.to_ne_bytes()[0])
             .collect::<Vec<_>>();
         assert!(str::from_utf8(&bytes).is_ok());
     }
