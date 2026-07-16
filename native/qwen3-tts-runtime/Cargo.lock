@@ -207,6 +207,7 @@ name = "qwen3-tts-runtime"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "libc",
  "qwen3-tts-native",
  "qwen3-tts-native-codec",
  "serde_json",
