@@ -1,0 +1,10 @@
+{
+  "compute_capability": "12.1",
+  "device_index": 0,
+  "device_name": "NVIDIA GB10",
+  "operation": "probe-cuda",
+  "runtime_free_memory_bytes": 2400698368,
+  "runtime_total_memory_bytes": 130663231488,
+  "schema_version": 1,
+  "total_global_memory_bytes": 130663231488
+}
