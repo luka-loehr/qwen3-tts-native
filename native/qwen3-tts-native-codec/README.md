@@ -1,38 +1,64 @@
-# Qwen3-TTS native incremental codec research
+# Native Incremental Qwen3-TTS Codec Prototype
 
-This crate is an isolated Rust and CUDA prototype for the causal
-Qwen3-TTS-Tokenizer-12Hz decoder used by the 1.7B VoiceDesign model.
+This crate isolates the state and packet ABI required by the Qwen3-TTS 1.7B
+speech-tokenizer decoder on the DGX Spark. It is a native Rust/CUDA research
+prototype. It contains no Python or Node.js runtime path.
 
-The production target is four new codec frames per packet:
+## Implemented
 
-- 12.5 codec frames per second
-- 1,920 waveform samples per codec frame
-- 7,680 samples per full packet
-- 15,360 bytes per full mono 24 kHz signed-16 PCM packet
+- a versioned C ABI with an opaque per-stream context;
+- a 72-frame, eight-layer BF16 transformer KV ring;
+- one exact-sized BF16 arena for pre-convolution, ConvNeXt, residual-dilation,
+  ConvTranspose-overlap, and final-convolution history;
+- three-slot CUDA codec and PCM rings plus a pinned host PCM ring;
+- persistent frame, sample, KV-head, ring-slot, and finalization state;
+- deterministic CUDA fixture kernels with stateful 8x, 5x, 4x, and 3x overlap;
+- an independent Rust full-stream reference;
+- sample, seam, SNR, lifecycle, state-wrap, and latency validation.
 
-The native context owns persistent CUDA allocations for the exact streaming
-state geometry:
+One four-frame packet represents 320 ms of 24 kHz audio: 7,680 signed 16-bit
+samples, or 15,360 bytes.
 
-- a 72-frame, eight-layer transformer key/value ring;
-- causal-convolution left histories;
-- dilated residual histories;
-- transposed-convolution overlap tails for strides 8, 5, 4, and 3;
-- three-slot CUDA codec and PCM rings; and
-- pinned host PCM staging slots.
+## Deliberate limitation
 
-## Research boundary
+The deterministic fixture is not the neural speech decoder and does not produce
+generated speech. It proves the ABI, persistent-state layout, packet accounting,
+overlap behavior, and boundary invariance while full native tokenizer-decoder
+kernels and weight loading are still unavailable. Fixture latency must never be
+reported as Qwen3-TTS model latency or audio quality.
 
-The initial deterministic fixture validates state transitions, packet
-boundaries, sample counts, CUDA memory ownership, and the Rust/C ABI. It is not
-the neural decoder and must never be presented as generated speech. Neural
-weight loading and kernels become eligible only after fixture parity is exact.
+## Build
 
-No Python or Node.js runtime is used. Compilation and execution happen only in
-the DGX Spark research environment. This subtree does not integrate with the
-Ephraim backend, frontend, or production containers.
+The CUDA target is compiled for the DGX Spark's SM 12.1 architecture.
+
+```text
+cmake -S native -B native/build -DCMAKE_BUILD_TYPE=Release
+cmake --build native/build --parallel
+cargo build --release --locked
+```
+
+## Validate
+
+```text
+./target/release/qwen3-tts-native-codec \
+  parity ./native/build/libqwen3_tts_codec_cuda.so
+
+./target/release/qwen3-tts-native-codec \
+  benchmark ./native/build/libqwen3_tts_codec_cuda.so 200
+```
+
+The parity command processes 83 deterministic frames through uneven packets,
+crosses the 72-frame KV boundary, rotates all three packet slots, compares every
+sample with the independent full-stream reference, checks packet seams, rejects
+post-final input, and verifies reset behavior. The benchmark refuses fewer than
+200 measured packets.
 
 ## ABI
 
 The native library exposes a versioned C ABI with an opaque context handle,
 fixed-width POD structures, integer status values, and caller-owned error
-buffers. Only explicitly exported symbols have default visibility.
+buffers. Only explicitly exported symbols have default visibility. A context is
+owned by one stream and must not be called concurrently.
+
+This subtree does not integrate with the Ephraim backend, frontend, or any
+production container.
