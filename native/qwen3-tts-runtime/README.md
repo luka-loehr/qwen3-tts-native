@@ -9,6 +9,8 @@ It currently provides:
 - the official ten-language identifier set plus `Auto`;
 - official talker and predictor sampling defaults;
 - a bounded packet queue for explicit backpressure;
+- one GPU-worker scheduler with additive batch hooks for prefill and generation;
+- preallocated per-request PCM pools recycled after caller polling;
 - terminal request-state enforcement and cancellation rules;
 - contiguous frame, sample, and packet accounting;
 - per-request TTFA, GPU-time, memory, and output metrics.
@@ -16,6 +18,12 @@ It currently provides:
 The crate intentionally does **not** provide placeholder or fixture neural
 inference. Engine entry points declared in the C header are connected only after
 the real talker/predictor and speech-tokenizer decoder pass reference parity.
+
+The scheduler accepts a `StreamingBackend` implementation, coalesces ready
+sessions through `start_batch` and `step_batch`, and never substitutes a test
+backend in production. Test-only scripted backends verify request orchestration,
+hard generation limits, exact PCM write bounds, cancellation, and ring-buffer
+backpressure without making neural-model claims.
 
 ## Ownership
 
