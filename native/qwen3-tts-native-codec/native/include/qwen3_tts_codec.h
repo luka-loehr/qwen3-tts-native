@@ -26,6 +26,14 @@ enum {
     QWEN3_TTS_CODEC_KV_WINDOW = 72,
 };
 
+enum {
+    QWEN3_TTS_CODEC_STATUS_OK = 0,
+    QWEN3_TTS_CODEC_STATUS_INVALID_ARGUMENT = -1,
+    QWEN3_TTS_CODEC_STATUS_CUDA = -2,
+    QWEN3_TTS_CODEC_STATUS_STATE = -3,
+    QWEN3_TTS_CODEC_STATUS_ALLOCATION = -4,
+};
+
 typedef struct Qwen3TtsCodecContextV1 Qwen3TtsCodecContextV1;
 
 typedef struct Qwen3TtsCodecConfigV1 {
