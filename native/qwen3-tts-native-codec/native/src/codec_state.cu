@@ -107,6 +107,12 @@ constexpr size_t kDecoderDeviceBytes =
     (2 * kDecoderMaxActivationElements + kDecoderMaxIm2colElements +
      kDecoderHistoryElements) *
     sizeof(float);
+constexpr size_t kNeuralTransformerKvBytes =
+    kNeuralKvElements * sizeof(float);
+constexpr size_t kNeuralConvolutionHistoryBytes =
+    (kFrontendHistoryElements + kLatentHistoryElements +
+     kDecoderHistoryElements) *
+    sizeof(float);
 constexpr size_t kDecoderPreconvHistoryOffset = 0;
 constexpr size_t kDecoderTransposeHistoryOffset = 6 * 1024;
 constexpr size_t kDecoderResidualHistoryOffset =
@@ -2568,8 +2574,8 @@ extern "C" QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_state_info_v1(
         context->emitted_samples,
         device_bytes,
         kPcmRingBytes,
-        kTransformerKvBytes,
-        kConvolutionHistoryBytes,
+        kTransformerKvBytes + kNeuralTransformerKvBytes,
+        kConvolutionHistoryBytes + kNeuralConvolutionHistoryBytes,
         kCodecRingBytes,
         kPcmRingBytes,
         context->kv_ring_head,
