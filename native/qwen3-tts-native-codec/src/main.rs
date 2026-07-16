@@ -11,6 +11,8 @@ use std::io;
 use std::path::Path;
 use std::time::Instant;
 
+type BatchScheduleOutput = (Vec<Vec<i16>>, Vec<Vec<u32>>);
+
 fn main() -> Result<(), Box<dyn Error>> {
     let arguments = std::env::args().collect::<Vec<_>>();
     let command = arguments.get(1).map(String::as_str).unwrap_or("help");
@@ -77,6 +79,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             let fixture = required_argument(&arguments, 4, "decoder fixture directory")?;
             neural_parity(Path::new(library), Path::new(model), Path::new(fixture))
         }
+        "batch-parity" => {
+            let library = required_argument(&arguments, 2, "shared library path")?;
+            let model = required_argument(&arguments, 3, "speech tokenizer safetensors path")?;
+            let fixture = required_argument(&arguments, 4, "decoder fixture directory")?;
+            batch_parity(Path::new(library), Path::new(model), Path::new(fixture))
+        }
         _ => {
             eprintln!(
                 "usage: qwen3-tts-native-codec <parity|benchmark> <library> [iterations]\n\
@@ -86,6 +94,233 @@ fn main() -> Result<(), Box<dyn Error>> {
             Ok(())
         }
     }
+}
+
+fn batch_parity(
+    library_path: &Path,
+    model_path: &Path,
+    fixture_path: &Path,
+) -> Result<(), Box<dyn Error>> {
+    let codes = read_u16_le(&fixture_path.join("codes.u16le"))?;
+    if codes.len() % ffi::CODEBOOKS != 0 {
+        return Err(io::Error::other("fixture code count is not divisible by 16").into());
+    }
+    let base_frames = codes
+        .chunks_exact(ffi::CODEBOOKS)
+        .map(|values| values.try_into().expect("chunk contains exactly 16 codes"))
+        .collect::<Vec<[u16; ffi::CODEBOOKS]>>();
+    if base_frames.len() != 4 {
+        return Err(io::Error::other("batch fixture must contain four frames").into());
+    }
+    let streams = (0..6)
+        .map(|stream| {
+            base_frames
+                .iter()
+                .enumerate()
+                .map(|(frame_index, frame)| {
+                    let mut varied = *frame;
+                    for (codebook, code) in varied.iter_mut().enumerate() {
+                        let offset = stream * 71 + frame_index * 17 + codebook * 3;
+                        *code = ((*code as usize + offset) & 2047) as u16;
+                    }
+                    varied
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let api = Api::load(library_path)?;
+    let model = model::SafetensorsFile::open(model_path)?;
+
+    let schedules_three = vec![vec![1_usize; 4]; 3];
+    let expected_three = standalone_schedules(&api, &model, &streams[..3], &schedules_three)?;
+    let mut codecs_three = (0..3)
+        .map(|_| api.create_codec(0).map_err(io::Error::other))
+        .collect::<Result<Vec<_>, _>>()?;
+    for codec in &mut codecs_three {
+        codec.load_model(&model).map_err(io::Error::other)?;
+    }
+    let (actual_three, slots_three) =
+        run_batch_schedule(&api, &mut codecs_three, &streams[..3], &schedules_three)?;
+    let states_three = codecs_three
+        .iter()
+        .map(|codec| codec.state_info().map_err(io::Error::other))
+        .collect::<Result<Vec<_>, _>>()?;
+    for codec in &mut codecs_three {
+        codec.reset().map_err(io::Error::other)?;
+    }
+    let (replay_three, replay_slots_three) =
+        run_batch_schedule(&api, &mut codecs_three, &streams[..3], &schedules_three)?;
+    let b3_exact = actual_three == expected_three && replay_three == actual_three;
+    let b3_slots_match =
+        slots_three.iter().all(|slots| slots == &[0, 1, 2, 0]) && replay_slots_three == slots_three;
+    let b3_states_match = states_three.iter().all(|state| {
+        state.frame_position == 4
+            && state.emitted_samples == 4 * ffi::SAMPLES_PER_FRAME as u64
+            && state.next_ring_slot == 1
+            && state.kv_ring_head == 4
+    });
+    drop(codecs_three);
+
+    let first_counts = [1_usize, 2, 3, 1, 2, 3];
+    let schedules_six = first_counts
+        .iter()
+        .map(|first| vec![*first, 4 - *first])
+        .collect::<Vec<_>>();
+    let expected_six = standalone_schedules(&api, &model, &streams, &schedules_six)?;
+    let mut codecs_six = (0..6)
+        .map(|_| api.create_codec(0).map_err(io::Error::other))
+        .collect::<Result<Vec<_>, _>>()?;
+    for codec in &mut codecs_six {
+        codec.load_model(&model).map_err(io::Error::other)?;
+    }
+    let (actual_six, slots_six) =
+        run_batch_schedule(&api, &mut codecs_six, &streams, &schedules_six)?;
+    let states_six = codecs_six
+        .iter()
+        .map(|codec| codec.state_info().map_err(io::Error::other))
+        .collect::<Result<Vec<_>, _>>()?;
+    let b6_exact = actual_six == expected_six;
+    let b6_slots_match = slots_six.iter().all(|slots| slots == &[0, 1]);
+    let b6_states_match = states_six.iter().all(|state| {
+        state.frame_position == 4
+            && state.emitted_samples == 4 * ffi::SAMPLES_PER_FRAME as u64
+            && state.next_ring_slot == 2
+            && state.kv_ring_head == 4
+    });
+    let mixed_final_lengths = schedules_six
+        .iter()
+        .map(|schedule| schedule[1] * ffi::SAMPLES_PER_FRAME)
+        .collect::<Vec<_>>();
+    let passed = b3_exact
+        && b3_slots_match
+        && b3_states_match
+        && b6_exact
+        && b6_slots_match
+        && b6_states_match;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "schema_version": 1,
+            "mode": "independent_native_decoder_state_handles",
+            "passed": passed,
+            "dispatch": "array_order_reference_not_fused",
+            "batch_three": {
+                "streams": 3,
+                "packets_per_stream": 4,
+                "frame_schedule": [1, 1, 1, 1],
+                "ring_slots_per_stream": slots_three,
+                "slot_zero_overwritten": true,
+                "standalone_bit_exact": b3_exact,
+                "reset_replay_bit_exact": replay_three == actual_three,
+                "state_matches": b3_states_match
+            },
+            "batch_six": {
+                "streams": 6,
+                "first_packet_frames": first_counts,
+                "final_packet_samples": mixed_final_lengths,
+                "ring_slots_per_stream": slots_six,
+                "standalone_bit_exact": b6_exact,
+                "state_matches": b6_states_match,
+                "cross_request_leakage_detected": !b6_exact
+            }
+        }))?
+    );
+    if !passed {
+        return Err(io::Error::other("native decoder batch parity failed").into());
+    }
+    Ok(())
+}
+
+fn standalone_schedules(
+    api: &Api,
+    model: &model::SafetensorsFile,
+    streams: &[Vec<[u16; ffi::CODEBOOKS]>],
+    schedules: &[Vec<usize>],
+) -> Result<Vec<Vec<i16>>, Box<dyn Error>> {
+    let mut codec = api.create_codec(0).map_err(io::Error::other)?;
+    codec.load_model(model).map_err(io::Error::other)?;
+    let mut outputs = Vec::with_capacity(streams.len());
+    for (stream, schedule) in streams.iter().zip(schedules) {
+        codec.reset().map_err(io::Error::other)?;
+        let mut position = 0_usize;
+        let mut output = Vec::with_capacity(stream.len() * ffi::SAMPLES_PER_FRAME);
+        for count in schedule {
+            let end = position + count;
+            let (packet, _) = codec
+                .process(&stream[position..end], end == stream.len())
+                .map_err(|(status, message)| {
+                    io::Error::other(format!("standalone status {status}: {message}"))
+                })?;
+            output.extend_from_slice(&packet);
+            position = end;
+        }
+        if position != stream.len() {
+            return Err(io::Error::other("standalone schedule is incomplete").into());
+        }
+        outputs.push(output);
+    }
+    Ok(outputs)
+}
+
+fn run_batch_schedule(
+    api: &Api,
+    codecs: &mut [ffi::Codec<'_>],
+    streams: &[Vec<[u16; ffi::CODEBOOKS]>],
+    schedules: &[Vec<usize>],
+) -> Result<BatchScheduleOutput, Box<dyn Error>> {
+    if codecs.len() != streams.len()
+        || codecs.len() != schedules.len()
+        || schedules.is_empty()
+        || schedules
+            .iter()
+            .any(|schedule| schedule.len() != schedules[0].len())
+    {
+        return Err(io::Error::other("invalid batch schedule shape").into());
+    }
+    let mut positions = vec![0_usize; codecs.len()];
+    let mut outputs = streams
+        .iter()
+        .map(|stream| Vec::with_capacity(stream.len() * ffi::SAMPLES_PER_FRAME))
+        .collect::<Vec<_>>();
+    let mut slots = vec![Vec::new(); codecs.len()];
+    for (step, _) in schedules[0].iter().enumerate() {
+        let packets = streams
+            .iter()
+            .enumerate()
+            .map(|(stream, frames)| {
+                let start = positions[stream];
+                let end = start + schedules[stream][step];
+                &frames[start..end]
+            })
+            .collect::<Vec<_>>();
+        let finals = packets
+            .iter()
+            .enumerate()
+            .map(|(stream, packet)| positions[stream] + packet.len() == streams[stream].len())
+            .collect::<Vec<_>>();
+        let mut codec_refs = codecs.iter_mut().collect::<Vec<_>>();
+        let batch = api
+            .process_batch(&mut codec_refs, &packets, &finals)
+            .map_err(|(status, message)| {
+                io::Error::other(format!("batch status {status}: {message}"))
+            })?;
+        for (stream, (pcm, result)) in batch.into_iter().enumerate() {
+            if result.sample_count as usize != pcm.len() {
+                return Err(io::Error::other("batch packet length metadata mismatch").into());
+            }
+            positions[stream] += packets[stream].len();
+            outputs[stream].extend_from_slice(&pcm);
+            slots[stream].push(result.ring_slot);
+        }
+    }
+    if positions
+        .iter()
+        .zip(streams)
+        .any(|(position, stream)| *position != stream.len())
+    {
+        return Err(io::Error::other("batch schedule is incomplete").into());
+    }
+    Ok((outputs, slots))
 }
 
 fn neural_parity(

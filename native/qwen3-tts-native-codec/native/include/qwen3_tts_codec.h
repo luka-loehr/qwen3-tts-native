@@ -20,6 +20,7 @@ enum {
     QWEN3_TTS_CODEC_SAMPLES_PER_FRAME = 1920,
     QWEN3_TTS_CODEC_MAX_PACKET_SAMPLES = 7680,
     QWEN3_TTS_CODEC_RING_SLOTS = 3,
+    QWEN3_TTS_CODEC_MAX_BATCH_STREAMS = 6,
     QWEN3_TTS_CODEC_TRANSFORMER_LAYERS = 8,
     QWEN3_TTS_CODEC_KV_HEADS = 16,
     QWEN3_TTS_CODEC_HEAD_DIM = 64,
@@ -86,6 +87,16 @@ typedef struct Qwen3TtsCodecPacketResultV1 {
     float gpu_microseconds;
     float end_to_end_microseconds;
 } Qwen3TtsCodecPacketResultV1;
+
+typedef struct Qwen3TtsCodecBatchItemV1 {
+    Qwen3TtsCodecContextV1* context;
+    const uint16_t* codec_frames;
+    uint32_t frame_count;
+    int32_t is_final;
+    int16_t* pcm_output;
+    size_t pcm_capacity_samples;
+    Qwen3TtsCodecPacketResultV1* result;
+} Qwen3TtsCodecBatchItemV1;
 
 typedef struct Qwen3TtsCodecTensorViewV1 {
     const void* data;
@@ -228,6 +239,15 @@ QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_process_packet_v1(
     int16_t* pcm_output,
     size_t pcm_capacity_samples,
     Qwen3TtsCodecPacketResultV1* result,
+    char* error,
+    size_t error_capacity
+);
+
+/* Decode one packet for each independent state handle. The reference
+ * implementation dispatches items in array order; it does not fuse streams. */
+QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_process_batch_v1(
+    Qwen3TtsCodecBatchItemV1* items,
+    uint32_t item_count,
     char* error,
     size_t error_capacity
 );

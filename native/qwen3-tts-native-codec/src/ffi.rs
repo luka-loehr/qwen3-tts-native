@@ -8,6 +8,7 @@ pub const CODEBOOKS: usize = 16;
 pub const MAX_PACKET_FRAMES: usize = 4;
 pub const SAMPLES_PER_FRAME: usize = 1920;
 pub const MAX_PACKET_SAMPLES: usize = MAX_PACKET_FRAMES * SAMPLES_PER_FRAME;
+pub const MAX_BATCH_STREAMS: usize = 6;
 pub const STATUS_STATE: i32 = -3;
 pub const STATUS_MODEL: i32 = -5;
 
@@ -53,6 +54,19 @@ pub struct PacketResult {
     pub is_final: u32,
     pub gpu_microseconds: f32,
     pub end_to_end_microseconds: f32,
+}
+
+pub type BatchOutput = Vec<(Vec<i16>, PacketResult)>;
+
+#[repr(C)]
+struct BatchItem {
+    context: *mut Context,
+    codec_frames: *const u16,
+    frame_count: u32,
+    is_final: i32,
+    pcm_output: *mut i16,
+    pcm_capacity_samples: usize,
+    result: *mut PacketResult,
 }
 
 #[repr(C)]
@@ -111,6 +125,7 @@ type ProcessFn = unsafe extern "C" fn(
     *mut c_char,
     usize,
 ) -> i32;
+type BatchProcessFn = unsafe extern "C" fn(*mut BatchItem, u32, *mut c_char, usize) -> i32;
 type LoadModelFn = unsafe extern "C" fn(
     *mut Context,
     *const WeightProvider,
@@ -168,6 +183,7 @@ pub struct Api {
     latent: LatentFn,
     decoder_checkpoint: DecoderCheckpointFn,
     process: ProcessFn,
+    batch_process: BatchProcessFn,
     fixture_process: ProcessFn,
 }
 
@@ -194,6 +210,8 @@ impl Api {
         let decoder_checkpoint =
             unsafe { load_symbol(&library, b"qwen3_tts_codec_debug_decoder_checkpoint_v1\0")? };
         let process = unsafe { load_symbol(&library, b"qwen3_tts_codec_process_packet_v1\0")? };
+        let batch_process =
+            unsafe { load_symbol(&library, b"qwen3_tts_codec_process_batch_v1\0")? };
         let fixture_process =
             unsafe { load_symbol(&library, b"qwen3_tts_codec_process_fixture_packet_v1\0")? };
         Ok(Self {
@@ -210,6 +228,7 @@ impl Api {
             latent,
             decoder_checkpoint,
             process,
+            batch_process,
             fixture_process,
         })
     }
@@ -234,6 +253,54 @@ impl Api {
             return Err("create returned a null context".to_owned());
         }
         Ok(Codec { api: self, context })
+    }
+
+    pub fn process_batch(
+        &self,
+        codecs: &mut [&mut Codec<'_>],
+        frames: &[&[[u16; CODEBOOKS]]],
+        finals: &[bool],
+    ) -> Result<BatchOutput, (i32, String)> {
+        if codecs.is_empty()
+            || codecs.len() > MAX_BATCH_STREAMS
+            || frames.len() != codecs.len()
+            || finals.len() != codecs.len()
+        {
+            return Err((
+                -1,
+                "batch vectors must contain 1-6 matching items".to_owned(),
+            ));
+        }
+        let mut pcm = frames
+            .iter()
+            .map(|packet| vec![0_i16; packet.len() * SAMPLES_PER_FRAME])
+            .collect::<Vec<_>>();
+        let mut results = vec![PacketResult::default(); codecs.len()];
+        let mut items = Vec::with_capacity(codecs.len());
+        for index in 0..codecs.len() {
+            items.push(BatchItem {
+                context: codecs[index].context,
+                codec_frames: frames[index].as_ptr().cast::<u16>(),
+                frame_count: frames[index].len() as u32,
+                is_final: i32::from(finals[index]),
+                pcm_output: pcm[index].as_mut_ptr(),
+                pcm_capacity_samples: pcm[index].len(),
+                result: &mut results[index],
+            });
+        }
+        let mut error = [0 as c_char; 512];
+        let status = unsafe {
+            (self.batch_process)(
+                items.as_mut_ptr(),
+                items.len() as u32,
+                error.as_mut_ptr(),
+                error.len(),
+            )
+        };
+        if status != 0 {
+            return Err((status, error_text(&error)));
+        }
+        Ok(pcm.into_iter().zip(results).collect())
     }
 }
 
