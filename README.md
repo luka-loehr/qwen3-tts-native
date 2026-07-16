@@ -16,7 +16,8 @@ streaming implementation of Qwen3-TTS-12Hz-1.7B-VoiceDesign.
 
 ## Performance gates
 
-- Warm time to first audio: p50 below 300 ms and p95 below 450 ms.
+- Warm model time to first codec frame: p95 below 200 ms.
+- Warm end-to-end time to first PCM audio: p50 below 300 ms and p95 below 450 ms.
 - End-to-end real-time factor: p50 below 0.50, with 0.45 as the engineering target.
 - Four codec frames per audio packet: 320 ms or 15,360 bytes of mono 24 kHz s16 PCM.
 - Inter-packet gap: p99 below 320 ms.
@@ -83,8 +84,33 @@ The reusable Rust API and C ABI are documented in
 `native/qwen3-tts-native-codec/README.md`. The decoder remains research-only and
 is not connected to the Ephraim backend, frontend, or production containers.
 
-The native 1.7B talker and decoder also complete a real text-to-code-to-WAV
-smoke path. Its current public talker API returns the complete code sequence
-before decoder polling, so this smoke is deliberately marked non-qualifying.
-Incremental talker sessions, progressive first audio, and the full 200-request
-runtime qualification remain required before promotion.
+The native 1.7B talker and decoder also complete a real incremental
+text-to-code-to-WAV smoke path. The public talker API emits one codec frame at a
+time into the neural decoder. The public runtime C ABI, full end-to-end
+concurrency qualification, raw-socket delivery, and audio-quality gates remain
+required before production promotion.
+
+## Native talker and session runtime
+
+The native VoiceDesign model layer now includes:
+
+- all 28 talker transformer layers;
+- all 5 code-predictor transformer layers and 15 residual codebooks;
+- a native Qwen2 tokenizer and official VoiceDesign prompt construction;
+- GPU-resident greedy, temperature, top-k, top-p, and repetition sampling;
+- one immutable 3,833,352,704-byte weight arena shared by all requests;
+- independently owned request sessions with separate CUDA streams, cuBLAS
+  handles, KV caches, workspaces, RNG state, and generation cursors;
+- right-sized KV-cache capacity derived from prompt length and requested frames;
+- a bounded exact-capacity session pool for low warm-request latency;
+- exact concurrent B1, B3, and B6 parity, cancellation isolation, and session
+  movement across host threads.
+
+See [`native/qwen3-tts-native/README.md`](native/qwen3-tts-native/README.md) for
+the API contract, build instructions, memory accounting, and the reproducible
+session-qualification command.
+
+This status applies to codec-frame generation. The native speech-tokenizer
+decoder, PCM packetization, raw-socket delivery, audio-quality qualification,
+and production integration remain separate gates and must not be inferred from
+talker benchmark results.

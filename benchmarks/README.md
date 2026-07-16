@@ -50,6 +50,32 @@ Weight loading is not neural inference. Artifact pack, mmap-open, file-hash, and
 host-to-device copy timings must never be described as TTFA, RTF, streaming, or
 audio-quality results.
 
+## Native model-session protocol
+
+The talker and code-predictor layer is qualified independently from PCM decoding
+and network transport. A qualifying model-session report requires:
+
+- one persistent `NativeTalkerModel` for the complete run;
+- at least 200 measured warm requests after pool warmup;
+- warm time-to-first-codec-frame p50, p95, p99, and maximum;
+- warm TTFA p95 below 200 ms;
+- separate tokenization, prompt-plan, acquire, create, reset, and prefill timing;
+- exact full-sequence parity for sampled B1, B3, and B6;
+- exact greedy B3 parity;
+- true concurrent host threads with independent CUDA streams and cuBLAS handles;
+- duplicate-seed equality and different-seed isolation;
+- cancellation, drop, round-robin, and cross-thread session-lifetime checks;
+- codec EOS before the configured 256-frame corpus limit;
+- shared model weights reported once and session memory reported per request;
+- an otherwise idle GPU for every throughput and latency measurement.
+
+The model load duration is reported but excluded from warm TTFA. A report captured
+while another CUDA process is consuming the GPU is diagnostic only and must not
+be labelled qualifying.
+
+The reproducible command and API contract are documented in
+[`native/qwen3-tts-native/README.md`](../native/qwen3-tts-native/README.md).
+
 ## End-to-end candidate protocol
 
 A final candidate requires:
