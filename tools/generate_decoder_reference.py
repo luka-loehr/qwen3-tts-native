@@ -15,6 +15,7 @@ from pathlib import Path
 import numpy as np
 import torch
 from qwen_tts.core import Qwen3TTSTokenizerV2Model
+from safetensors import safe_open
 
 
 def deterministic_codes(frame_count: int) -> np.ndarray:
@@ -41,12 +42,25 @@ def save_tensor(directory: Path, name: str, tensor: torch.Tensor, manifest: dict
     }
 
 
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(8 * 1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--frames", type=int, default=4)
     parser.add_argument("--transformer-only", action="store_true")
+    parser.add_argument(
+        "--decoder-weights",
+        type=Path,
+        help="optional decoder-only safetensors override used to build a precision-specific oracle",
+    )
     args = parser.parse_args()
 
     if not 1 <= args.frames <= 128:
@@ -63,7 +77,27 @@ def main() -> None:
         dtype=torch.float32,
         attn_implementation="eager",
         local_files_only=True,
-    ).to("cuda:0")
+    )
+    decoder_weight_metadata = None
+    if args.decoder_weights is not None:
+        decoder_state = {}
+        with safe_open(args.decoder_weights, framework="pt", device="cpu") as weights:
+            names = list(weights.keys())
+            if len(names) != 271 or any(not name.startswith("decoder.") for name in names):
+                raise ValueError("decoder override must contain exactly 271 decoder.* tensors")
+            for name in names:
+                decoder_state[name.removeprefix("decoder.")] = weights.get_tensor(name).to(
+                    dtype=torch.float32
+                )
+        model.decoder.load_state_dict(decoder_state, strict=True)
+        decoder_weight_metadata = {
+            "file": str(args.decoder_weights),
+            "sha256": sha256_file(args.decoder_weights),
+            "tensor_count": len(decoder_state),
+            "source_dtype": "BF16",
+            "execution_dtype": "F32",
+        }
+    model = model.to("cuda:0")
     model.eval()
     decoder = model.decoder
     codes_np = deterministic_codes(args.frames)
@@ -83,6 +117,8 @@ def main() -> None:
         "samples_per_frame": 1920,
         "checkpoints": {},
     }
+    if decoder_weight_metadata is not None:
+        manifest["decoder_weight_override"] = decoder_weight_metadata
 
     codes_u16 = codes_np.transpose(0, 2, 1).astype("<u2").copy()
     codes_payload = codes_u16.tobytes(order="C")

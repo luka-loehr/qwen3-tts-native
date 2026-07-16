@@ -1,0 +1,186 @@
+{
+  "attention": "eager causal sliding-window 72",
+  "checkpoints": {
+    "01-rvq": {
+      "bytes": 8192,
+      "dtype": "F32_LE",
+      "file": "01-rvq.f32le",
+      "sha256": "62000f5f9e226616bde92cc00a16a4b5a90bc40dbfd879fb064ca24ccc7ab7a9",
+      "shape": [
+        1,
+        512,
+        4
+      ]
+    },
+    "02-pre-conv": {
+      "bytes": 16384,
+      "dtype": "F32_LE",
+      "file": "02-pre-conv.f32le",
+      "sha256": "18450bc305e41a09d852a838e13501906484e656805ae25df7ab039283e28251",
+      "shape": [
+        1,
+        4,
+        1024
+      ]
+    },
+    "03-transformer": {
+      "bytes": 16384,
+      "dtype": "F32_LE",
+      "file": "03-transformer.f32le",
+      "sha256": "8c6ce43769a887dd6c8658f4cef507a704bacaae82d102449ada7d8fe18996f4",
+      "shape": [
+        1,
+        4,
+        1024
+      ]
+    },
+    "04-latent-upsample-1": {
+      "bytes": 32768,
+      "dtype": "F32_LE",
+      "file": "04-latent-upsample-1.f32le",
+      "sha256": "c2dae55bdc56f908d916eac398d2e90fa025bc805a6c0fefc3bfff1e8fe174ed",
+      "shape": [
+        1,
+        1024,
+        8
+      ]
+    },
+    "05-latent-upsample-2": {
+      "bytes": 65536,
+      "dtype": "F32_LE",
+      "file": "05-latent-upsample-2.f32le",
+      "sha256": "b8e142fd39827d520b9eaec7d057d02e9861022ed0549606310c5ae23331c7f4",
+      "shape": [
+        1,
+        1024,
+        16
+      ]
+    },
+    "06-decoder-pre-conv": {
+      "bytes": 98304,
+      "dtype": "F32_LE",
+      "file": "06-decoder-pre-conv.f32le",
+      "sha256": "95f36bf35172735a4acaf6bb386a4ef74b61e1dfd3898d173d82f4cd43364daa",
+      "shape": [
+        1,
+        1536,
+        16
+      ]
+    },
+    "07-decoder-block-1": {
+      "bytes": 393216,
+      "dtype": "F32_LE",
+      "file": "07-decoder-block-1.f32le",
+      "sha256": "c88e1c0036c83352c88057e001d8ceffeada78fdf8366d0d215d2ecdc6d3ce9d",
+      "shape": [
+        1,
+        768,
+        128
+      ]
+    },
+    "08-decoder-block-2": {
+      "bytes": 983040,
+      "dtype": "F32_LE",
+      "file": "08-decoder-block-2.f32le",
+      "sha256": "f359d3e699be8c6d9305e61e889bc75c1332443711c2ebdf8e3ff65412bce059",
+      "shape": [
+        1,
+        384,
+        640
+      ]
+    },
+    "09-decoder-block-3": {
+      "bytes": 1966080,
+      "dtype": "F32_LE",
+      "file": "09-decoder-block-3.f32le",
+      "sha256": "0303a10a10870d6ab6857cb1e9cabdeae3797a0d8077ed31442f03bcd9f55ac5",
+      "shape": [
+        1,
+        192,
+        2560
+      ]
+    },
+    "10-decoder-block-4": {
+      "bytes": 2949120,
+      "dtype": "F32_LE",
+      "file": "10-decoder-block-4.f32le",
+      "sha256": "c67f0aec8aee864d7355fdf3aa543659be40edfbc1ef2ea62cf2d28e7354fa1a",
+      "shape": [
+        1,
+        96,
+        7680
+      ]
+    },
+    "11-final-snake": {
+      "bytes": 2949120,
+      "dtype": "F32_LE",
+      "file": "11-final-snake.f32le",
+      "sha256": "22ccd675395d626b6195165eb7a96b8c5008fd3035335ba1f03a104f84acb982",
+      "shape": [
+        1,
+        96,
+        7680
+      ]
+    },
+    "12-final-pre-clamp": {
+      "bytes": 30720,
+      "dtype": "F32_LE",
+      "file": "12-final-pre-clamp.f32le",
+      "sha256": "383a926f840f7d48a51dfbc7de5f50acce713593178cae637c9125742b847c7c",
+      "shape": [
+        1,
+        1,
+        7680
+      ]
+    },
+    "13-final-clamp": {
+      "bytes": 30720,
+      "dtype": "F32_LE",
+      "file": "13-final-clamp.f32le",
+      "sha256": "383a926f840f7d48a51dfbc7de5f50acce713593178cae637c9125742b847c7c",
+      "shape": [
+        1,
+        1,
+        7680
+      ]
+    }
+  },
+  "codebook_count": 16,
+  "codes": {
+    "bytes": 128,
+    "dtype": "U16_LE",
+    "file": "codes.u16le",
+    "sha256": "547f3fe1d2cd10339afafb486bb2c23d9eea79a9667e51ea491574addc0c837f",
+    "shape": [
+      1,
+      4,
+      16
+    ]
+  },
+  "decoder_weight_override": {
+    "execution_dtype": "F32",
+    "file": "/tmp/decoder-bf16.safetensors",
+    "sha256": "062caa0a31346422410e4c0d2494aec14be20553f8cb0b71a875329de99ce180",
+    "source_dtype": "BF16",
+    "tensor_count": 271
+  },
+  "description": "Official Qwen3-TTS 12Hz decoder forward checkpoints",
+  "device": "NVIDIA GB10",
+  "float32_precision": "TF32 disabled for deterministic kernel parity",
+  "frame_count": 4,
+  "model": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign speech_tokenizer",
+  "pcm": {
+    "bytes": 15360,
+    "conversion": "round(clamp(waveform,-1,1)*32767), clamp to signed 16-bit",
+    "dtype": "S16_LE",
+    "file": "reference-pcm.s16le",
+    "sha256": "2aa1880386bc941c0c8febda9fc73c122602616e737f686dd8db0dc37f2f0b2c",
+    "shape": [
+      7680
+    ]
+  },
+  "reference_implementation": "QwenLM/Qwen3-TTS qwen_tts/core/tokenizer_12hz/modeling_qwen3_tts_tokenizer_v2.py",
+  "samples_per_frame": 1920,
+  "schema_version": 1,
+  "torch_dtype": "float32"
+}

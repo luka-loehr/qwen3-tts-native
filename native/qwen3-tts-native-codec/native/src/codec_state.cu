@@ -4,6 +4,7 @@
 #include <cuda_runtime.h>
 #include <cublas_v2.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -129,6 +130,7 @@ constexpr int32_t kStatusState = QWEN3_TTS_CODEC_STATUS_STATE;
 constexpr int32_t kStatusAllocation = QWEN3_TTS_CODEC_STATUS_ALLOCATION;
 constexpr int32_t kStatusModel = QWEN3_TTS_CODEC_STATUS_MODEL;
 constexpr uint32_t kExpectedDecoderTensors = 271;
+constexpr size_t kBf16UploadStagingBytes = 8ULL * 1024 * 1024;
 
 void clear_error(char* error, size_t capacity) noexcept {
     if (error != nullptr && capacity > 0) {
@@ -838,6 +840,17 @@ __global__ void waveform_to_pcm_kernel(
     if (item < count) {
         const float scaled = roundf(waveform[item] * 32767.0F);
         pcm[item] = static_cast<int16_t>(fminf(32767.0F, fmaxf(-32768.0F, scaled)));
+    }
+}
+
+__global__ void bf16_to_f32_kernel(
+    const __nv_bfloat16* input,
+    size_t count,
+    float* output
+) {
+    const size_t item = blockIdx.x * blockDim.x + threadIdx.x;
+    if (item < count) {
+        output[item] = __bfloat162float(input[item]);
     }
 }
 
@@ -2617,6 +2630,13 @@ extern "C" QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_load_model_v1(
         return cuda_error(error, error_capacity, "select CUDA device", cuda_status);
     }
 
+    struct Bf16StagingGuard {
+        void* data = nullptr;
+        ~Bf16StagingGuard() {
+            cudaFree(data);
+        }
+    } bf16_staging;
+
     Qwen3TtsCodecModelInfoV1 info{};
     for (uint64_t index = 0; index < provider->tensor_count; ++index) {
         const char* name = nullptr;
@@ -2665,13 +2685,22 @@ extern "C" QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_load_model_v1(
             write_error(error, error_capacity, "decoder tensor byte length is invalid");
             return kStatusModel;
         }
+        if (element_count > UINT64_MAX / sizeof(float)) {
+            release_model(context);
+            write_error(error, error_capacity, "decoder tensor is too large for F32 execution");
+            return kStatusModel;
+        }
+        const uint64_t device_byte_length = element_count * sizeof(float);
         DeviceTensor tensor{};
-        tensor.byte_length = source.byte_length;
+        tensor.byte_length = device_byte_length;
         tensor.rank = source.rank;
-        tensor.dtype = source.dtype;
+        tensor.dtype = QWEN3_TTS_CODEC_TENSOR_F32;
         std::memcpy(tensor.shape, source.shape, sizeof(tensor.shape));
-        cuda_status = cudaMalloc(&tensor.data, static_cast<size_t>(source.byte_length));
-        if (cuda_status == cudaSuccess) {
+        cuda_status = cudaMalloc(
+            &tensor.data, static_cast<size_t>(device_byte_length)
+        );
+        if (cuda_status == cudaSuccess &&
+            source.dtype == QWEN3_TTS_CODEC_TENSOR_F32) {
             cuda_status = cudaMemcpyAsync(
                 tensor.data,
                 source.data,
@@ -2679,6 +2708,41 @@ extern "C" QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_load_model_v1(
                 cudaMemcpyHostToDevice,
                 context->stream
             );
+        }
+        if (cuda_status == cudaSuccess &&
+            source.dtype == QWEN3_TTS_CODEC_TENSOR_BF16) {
+            if (bf16_staging.data == nullptr) {
+                cuda_status = cudaMalloc(
+                    &bf16_staging.data, kBf16UploadStagingBytes
+                );
+            }
+            constexpr size_t kStagingElements =
+                kBf16UploadStagingBytes / sizeof(__nv_bfloat16);
+            const auto* source_bytes =
+                static_cast<const uint8_t*>(source.data);
+            for (uint64_t offset = 0;
+                 cuda_status == cudaSuccess && offset < element_count;
+                 offset += kStagingElements) {
+                const size_t count = static_cast<size_t>(
+                    std::min<uint64_t>(kStagingElements, element_count - offset)
+                );
+                cuda_status = cudaMemcpyAsync(
+                    bf16_staging.data,
+                    source_bytes + offset * sizeof(__nv_bfloat16),
+                    count * sizeof(__nv_bfloat16),
+                    cudaMemcpyHostToDevice,
+                    context->stream
+                );
+                if (cuda_status == cudaSuccess) {
+                    bf16_to_f32_kernel<<<
+                        blocks_for(count), 256, 0, context->stream>>>(
+                        static_cast<const __nv_bfloat16*>(bf16_staging.data),
+                        count,
+                        static_cast<float*>(tensor.data) + offset
+                    );
+                    cuda_status = cudaGetLastError();
+                }
+            }
         }
         if (cuda_status != cudaSuccess) {
             cudaFree(tensor.data);
@@ -2695,7 +2759,7 @@ extern "C" QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_load_model_v1(
             return kStatusModel;
         }
         info.source_bytes += source.byte_length;
-        info.device_bytes += source.byte_length;
+        info.device_bytes += device_byte_length;
         info.parameter_count += element_count;
         info.tensor_count += 1;
         if (source.dtype == QWEN3_TTS_CODEC_TENSOR_F32) {
