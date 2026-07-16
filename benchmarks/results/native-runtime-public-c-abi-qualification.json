@@ -1,0 +1,108 @@
+{
+  "schema_version": 1,
+  "operation": "qwen3-tts-public-c-abi-benchmark",
+  "date": "2026-07-16",
+  "qualifying_run": true,
+  "qualification_meaning": "The workload, concurrency, correctness, and measurement protocol passed. Target assessment is reported separately and is not implied by qualifying_run.",
+  "runtime_commit": "2a532f395725d12b21ace6bf17ecf3b125232ec4",
+  "environment": {
+    "device": "NVIDIA GB10",
+    "cuda": "13.0.88",
+    "cuda_architecture": "sm_121",
+    "preflight_gpu_utilization_percent": 0,
+    "competing_cuda_compute": false
+  },
+  "model": {
+    "id": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+    "revision": "5ecdb67327fd37bb2e042aab12ff7391903235d3",
+    "voice_design_weights_sha256": "391e8db219f292c515297cdceeb43e4eae67cdde35fa57e79a6a8a532fca0522",
+    "speech_decoder_weights_sha256": "062caa0a31346422410e4c0d2494aec14be20553f8cb0b71a875329de99ce180"
+  },
+  "libraries": {
+    "runtime_sha256": "fcbf2230814446a35556af69ac855dadc3dd93c4bddad346633fbae0494b3ba1",
+    "talker_sha256": "46a76756e473d6d9cf40584f77c129661529790ca258594f661d1c07065da401",
+    "codec_sha256": "bf1c9eee72ae2e3cab0ba6c8d96953fb000efff21e412a37338acb431aae43a7"
+  },
+  "workload": {
+    "model_load_ms_excluded": 13443.394242,
+    "warmup_requests": 24,
+    "measured_requests_per_concurrency": 200,
+    "measured_requests_total": 600,
+    "codec_frames_per_request": 4,
+    "audio_ms_per_request": 320.0,
+    "first_packet_codec_frames": 1,
+    "followup_packet_frames_maximum": 4
+  },
+  "correctness": {
+    "completed_requests": 600,
+    "failed_requests": 0,
+    "all_packet_positions_contiguous": true,
+    "all_sample_counts_exact": true,
+    "all_pcm_tails_untouched": true,
+    "all_final_then_end_of_stream": true,
+    "all_metrics_match_delivered_packets": true
+  },
+  "memory": {
+    "peak_process_rss_kib": 4034776,
+    "shared_talker_weight_device_bytes": 3833352704,
+    "shared_codec_weight_device_bytes": 457292548,
+    "shared_weight_device_bytes_total": 4290645252,
+    "peak_request_device_bytes": 47042708,
+    "peak_request_host_pinned_bytes": 46080,
+    "computed_b6_total_device_bytes": 4572901500,
+    "computed_b6_total_host_pinned_bytes": 276480
+  },
+  "energy": {
+    "scope": "The complete process run, including model load, 24 warmups, and 600 measured requests.",
+    "sample_interval_ms": 200,
+    "samples": 720,
+    "duration_seconds": 144.0,
+    "idle_baseline_watts_first_five_samples": 12.824,
+    "total_joules": 4922.714,
+    "incremental_joules_above_idle": 3076.180,
+    "total_joules_per_generated_audio_minute": 1479.181,
+    "incremental_joules_per_generated_audio_minute": 924.333,
+    "maximum_power_watts": 40.700,
+    "mean_gpu_utilization_percent": 82.619,
+    "maximum_gpu_utilization_percent": 96
+  },
+  "levels": [
+    {
+      "concurrency": 1,
+      "ttfa_ms": {"p50": 75.985799, "p95": 78.239921, "p99": 79.804688, "max": 80.169757},
+      "request_rtf": {"p50": 0.765467, "p95": 0.780408, "p99": 0.785838, "max": 0.792176},
+      "aggregate_rtf": 0.767115
+    },
+    {
+      "concurrency": 3,
+      "ttfa_ms": {"p50": 179.371488, "p95": 186.421373, "p99": 193.193669, "max": 193.239909},
+      "request_rtf": {"p50": 1.799509, "p95": 1.851264, "p99": 1.868200, "max": 1.874788},
+      "aggregate_rtf": 0.601352
+    },
+    {
+      "concurrency": 6,
+      "ttfa_ms": {"p50": 351.658614, "p95": 364.617335, "p99": 365.505823, "max": 365.627327},
+      "request_rtf": {"p50": 3.557001, "p95": 3.727889, "p99": 3.764922, "max": 3.773160},
+      "aggregate_rtf": 0.594233
+    }
+  ],
+  "target_assessment": {
+    "warm_b1_ttfa_p95_below_200_ms": true,
+    "all_concurrency_ttfa_p95_below_450_ms": true,
+    "b1_request_rtf_p50_below_1": true,
+    "b3_aggregate_rtf_below_1": true,
+    "b6_aggregate_rtf_below_1": true,
+    "b3_request_rtf_p50_below_1": false,
+    "b6_request_rtf_p50_below_1": false,
+    "b1_request_rtf_p50_below_0_5": false,
+    "engineering_interpretation": "A single stream is comfortably faster than real time. At B3 and B6, aggregate throughput remains faster than real time, while an individual stream exceeds real time because the GPU is shared across concurrent requests. The stricter 0.5 single-stream RTF target is not met."
+  },
+  "raw_evidence": {
+    "full_request_report_lines": 651,
+    "full_request_report_bytes": 117584,
+    "full_request_report_sha256": "21d1c7aed9bf80e4e1566969da4a1576d4de340b9f52c502e5a2e45a9763b7f4",
+    "power_trace_lines": 720,
+    "power_trace_bytes": 25127,
+    "power_trace_sha256": "2431a3cbc613df64020a0f25c8e7ec1e792ead80a6d5addfaf92d1cfdab7500a"
+  }
+}
