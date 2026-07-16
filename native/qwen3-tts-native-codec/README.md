@@ -17,23 +17,24 @@ BF16 artifact (SHA-256
 `062caa0a31346422410e4c0d2494aec14be20553f8cb0b71a875329de99ce180`).
 Each steady-state latency distribution follows 20 warmup packets and contains
 200 real neural measurements.
-The machine-readable report is stored in
+The original single-context report remains in
 [`../../benchmarks/results/native-codec-decoder-bf16.json`](../../benchmarks/results/native-codec-decoder-bf16.json).
+Shared-model evidence is tracked in [`results/`](results/).
 
 | Measurement | Result |
 | --- | ---: |
-| First 80 ms chunk without startup warmup | 157.11 ms |
-| Explicit one-time startup warmup | 207.73 ms |
-| First 80 ms chunk after startup warmup | 7.88 ms |
-| 80 ms packets, end-to-end p50 / p95 / p99 | 11.65 / 12.66 / 14.65 ms |
-| 80 ms packet p50 real-time factor | 0.146 (6.87x real time) |
-| 320 ms packets, end-to-end p50 / p95 / p99 | 62.09 / 65.83 / 67.92 ms |
-| 320 ms packet p50 real-time factor | 0.194 (5.16x real time) |
+| Shared model load plus one-time warmup | 430.42 ms |
+| First 80 ms chunk from a fresh session | 8.14 ms |
+| 80 ms packets, end-to-end p50 / p95 / p99 | 12.01 / 12.97 / 16.14 ms |
+| 80 ms packet p50 real-time factor | 0.150 (6.66x real time) |
+| 320 ms packets, end-to-end p50 / p95 / p99 | 62.20 / 65.97 / 68.86 ms |
+| 320 ms packet p50 real-time factor | 0.194 (5.14x real time) |
 | Official-oracle PCM error | at most 1 signed 16-bit LSB |
 | Decoder tensor payload in the BF16 artifact | 228,646,274 bytes |
-| F32 execution weights on the GPU | 457,292,548 bytes |
-| Total reported device allocation per state handle | 492,327,468 bytes |
-| Pinned host PCM ring | 46,080 bytes |
+| Shared F32 execution weights on the GPU | 457,292,548 bytes once |
+| Per-session device state | 35,034,920 bytes |
+| Per-session pinned host state | 46,080 bytes |
+| B=6 total device allocation | 667,502,068 bytes |
 
 The BF16 artifact is expanded to F32 on the GPU with a bounded 8 MiB staging
 buffer. This preserves the already validated F32 execution kernels and keeps
@@ -58,17 +59,24 @@ state handle. Prefix audio is never recomputed.
 
 ## Public Rust library and C ABI
 
-The crate also builds a reusable Rust library. It exports
-`NativeCodecLibrary`, `NativeCodec`, `DecoderWeights`, and the object-safe
-`DecoderWeightProvider` trait. An external mmap/indexed artifact loader can
-implement that trait and feed tensor views directly into `load_model`; the CLI
-uses the same public library path.
+The crate also builds a reusable Rust library. Its primary API exports
+`NativeCodecLibrary`, `NativeCodecModel`, `NativeCodecSession`,
+`DecoderWeights`, and the object-safe `DecoderWeightProvider` trait. One
+`Arc<NativeCodecModel>` owns immutable GPU weights; every owned session retains
+that model and owns only mutable stream state. The original `NativeCodec` API
+remains available for compatibility.
 
 The versioned ABI is declared in
 [`native/include/qwen3_tts_codec.h`](native/include/qwen3_tts_codec.h).
 
 | Entry point | Purpose |
 | --- | --- |
+| `qwen3_tts_codec_shared_model_create/load/warmup_v1` | Upload and warm 271 immutable tensors once. |
+| `qwen3_tts_codec_session_create/destroy_v1` | Own independent mutable state while retaining the model. |
+| `qwen3_tts_codec_session_process_packet_v1` | Decode one packet on one independent stream/cuBLAS handle. |
+| `qwen3_tts_codec_session_cancel/reset_v1` | Cancel or explicitly reuse one session without affecting siblings. |
+| `qwen3_tts_codec_shared_model_memory_info_v1` | Report shared weight bytes and active sessions. |
+| `qwen3_tts_codec_session_memory_info_v1` | Report per-session memory, excluding weights. |
 | `qwen3_tts_codec_create_v1` / `destroy_v1` | Own one independent stream state. |
 | `qwen3_tts_codec_load_model_v1` | Load 271 canonical `decoder.*` tensors from F32 or BF16 source data. |
 | `qwen3_tts_codec_warmup_v1` | Initialize CUDA/cuBLAS before user traffic and restore fresh state. |
@@ -78,11 +86,11 @@ The versioned ABI is declared in
 | `qwen3_tts_codec_state_info_v1` | Report positions, ring indices, and owned memory. |
 | `qwen3_tts_codec_model_info_v1` | Report source/device bytes, tensor counts, and source dtypes. |
 
-`is_final` is metadata separate from the frame tensor. Once a final packet is
-accepted, further packets are rejected until reset. The caller owns input and
-output buffers. A context must not be called concurrently. The current batch
-entry point proves isolation and gives an integration-stable API, but it is an
-array-order reference dispatcher rather than a fused batch kernel.
+`NativeCodecModel` is `Send + Sync`; `NativeCodecSession` is `Send + 'static`
+and deliberately not `Sync`. Distinct sessions can run on scoped host threads
+with independent non-blocking CUDA streams and cuBLAS handles. There is no
+global inference lock. The C batch entry point remains an array-order reference
+dispatcher rather than a fused batch kernel.
 
 ## Build on the Spark
 
@@ -116,16 +124,19 @@ BIN=target/release/qwen3-tts-native-codec
 $BIN neural-parity "$LIB" "$MODEL" "$FIXTURE"
 $BIN decoder-parity "$LIB" "$MODEL" "$FIXTURE"
 $BIN batch-parity "$LIB" "$MODEL" "$FIXTURE"
+$BIN shared-session-parity "$LIB" "$MODEL" "$FIXTURE" 20
 $BIN neural-cold-start "$LIB" "$MODEL"
 $BIN neural-benchmark "$LIB" "$MODEL" 200
+$BIN shared-neural-benchmark "$LIB" "$MODEL" 200
 ```
 
 The checked gates cover official intermediate activations, official PCM,
 single-packet versus 1+3 streaming, four one-frame packets, short final output,
 stale-tail poisoning, finalization, reset replay, 72-frame KV wrap, three-slot
-overwrite, B=3 reset/replay, B=6 mixed final lengths, and cross-request leakage.
-NVIDIA Compute Sanitizer `memcheck --leak-check full` reports zero errors and
-zero leaked bytes on the complete BF16 neural-parity run.
+overwrite, B=3 reset/replay, B=6 mixed final lengths, real B=3/B=6 concurrent
+workers, cancel/drop isolation, and shared-memory accounting. NVIDIA Compute
+Sanitizer `memcheck --leak-check full` reports target pass, exit zero, zero
+errors, and zero leaked bytes on the shared-session path.
 
 See [`docs/USAGE.md`](docs/USAGE.md) for Rust-library, neural CLI, batch, and C
 examples; [`docs/VERIFICATION.md`](docs/VERIFICATION.md) for exact evidence;

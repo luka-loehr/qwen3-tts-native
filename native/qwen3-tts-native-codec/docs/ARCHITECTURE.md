@@ -10,16 +10,20 @@ The native boundary is intentionally narrow:
 
 ```text
 Rust caller
-  [frame][16] u16, 1-4 frames, final flag
+  Arc<NativeCodecModel> (shared immutable weights)
         |
-        v
-versioned C ABI and opaque per-stream handle
-        |
-        v
-CUDA RVQ -> causal transformer -> latent upsampler -> waveform decoder
-        |
-        v
-exactly frame_count * 1920 mono s16 samples
+        +--> NativeCodecSession A (stream, cuBLAS, KV, histories, rings)
+        +--> NativeCodecSession B (stream, cuBLAS, KV, histories, rings)
+        +--> NativeCodecSession N (stream, cuBLAS, KV, histories, rings)
+                    |
+                    v
+       [frame][16] u16, 1-4 frames, final flag
+                    |
+                    v
+       CUDA RVQ -> transformer -> upsampler -> waveform decoder
+                    |
+                    v
+       exactly frame_count * 1920 mono s16 samples
 ```
 
 There is no Python, Node.js, HTTP, JSON, or backend-specific type in the
@@ -44,7 +48,7 @@ unchanged after a one-frame final packet.
 
 ## Persistent state
 
-Each opaque context owns the following causal state:
+Each opaque session owns the following causal state:
 
 - two prior RVQ/pre-convolution positions;
 - eight layers of K/V data in a 72-frame sliding ring;
@@ -77,6 +81,18 @@ is stream ordered, works for tensors larger than the staging buffer, and does
 not rely on safetensors file order. The execution allocation owns the resulting
 weights after the provider callback returns.
 
+The primary API stores those allocations in one `Qwen3TtsCodecModelV1`.
+Sessions retain that model through a native atomic reference count and only
+read its weight map. Dropping one session never frees or mutates weights.
+Weights are released after both the public model handle and all retained
+sessions are gone. Model loading and one-time warmup use a short lifecycle
+mutex; inference never takes that mutex or any global lock.
+
+The original context API remains exported for ABI compatibility. A legacy
+context receives a private model internally, so its observable behavior and
+memory report are unchanged. New integrations should use the shared model and
+owned session APIs.
+
 Current precision contract:
 
 | Layer | Source | Execution |
@@ -92,25 +108,37 @@ quality, latency, and memory evidence and must not silently reuse these claims.
 
 ## Streaming lifecycle
 
-1. Create one context per stream.
-2. Load the decoder artifact once.
-3. Call `warmup_v1` before admitting traffic.
-4. Submit one to four frames with `process_packet_v1`.
+1. Load `NativeCodecLibrary` into an `Arc`.
+2. Call `load_shared_model` once. It uploads all 271 tensors and performs the
+   one-time model warmup before returning.
+3. Call `Arc<NativeCodecModel>::start_session` for every active request.
+4. Submit one to four frames through the owned session.
 5. Deliver the returned PCM immediately.
-6. Submit subsequent packets on the same context.
+6. Submit subsequent packets on the same session.
 7. Set `is_final=1` only on the final packet.
-8. Destroy the context, or reset it before explicit reuse.
+8. Drop the session, cancel and drop it, or reset it before explicit reuse.
 
-Warmup is legal only on a fresh state. It executes a maximum-size internal
-packet to initialize CUDA/cuBLAS, discards the result, and resets every state
-component. Calling it after stream progress is rejected.
+Shared-model warmup executes one maximum-size packet on a temporary internal
+session, discards the result, destroys that session, and marks the model warm.
+Public session creation is rejected until loading and warmup have completed.
+The legacy context warmup contract remains unchanged.
 
 ## Multi-stream API
 
-`process_batch_v1` accepts one to six independent state handles. Duplicate
-handles are rejected. Inputs may contain different frame counts and independent
-final flags. Each result carries its own sample count, positions, ring slot, and
-timings.
+One shared model can back any number of independent sessions within available
+memory. The validated runtime buckets are B=1, B=3, and B=6. Every session owns
+a non-blocking CUDA stream, cuBLAS handle, events, KV state, convolution
+histories, packet rings, workspace, and pinned host output ring.
+
+`NativeCodecModel` is `Send + Sync`. `NativeCodecSession` is `Send + 'static`
+but intentionally not `Sync`; mutable calls require exclusive access. Scoped
+Rust workers can therefore process distinct sessions simultaneously with no
+global inference lock. CUDA kernels may overlap when device resources permit.
+Correctness never depends on overlap.
+
+`process_batch_v1` and `session_process_batch_v1` remain array-order C ABI
+dispatchers. Inputs may contain different frame counts and final flags. They
+provide a convenient non-concurrent surface but are not fused CUDA batches.
 
 The current implementation dispatches items in array order. It provides a
 stable integration surface and verified state isolation, but it is not a fused
@@ -123,11 +151,24 @@ must still trim every output independently.
 - Status zero means success; negative values identify argument, CUDA, state,
   allocation, or model failures.
 - Caller-owned error buffers receive a bounded null-terminated message.
-- A context belongs to one stream and is not concurrently callable.
+- A session belongs to one stream and is not concurrently callable.
 - The caller retains input/output allocation ownership.
-- The context owns device weights, state, packet rings, events, stream, cuBLAS
-  handle, and pinned host ring.
-- Destroy synchronizes outstanding work and releases every owned allocation.
+- The shared model owns immutable device weights only.
+- A session owns state, packet rings, workspace, events, stream, cuBLAS handle,
+  and pinned host ring.
+- Cancel synchronizes that session's stream and rejects further packets until
+  reset or drop. It does not affect sibling sessions.
+- Session destroy synchronizes only its stream, releases its state, and drops
+  one model reference.
+
+Exact persistent memory on the validated build is:
+
+```text
+shared device bytes = 457,292,548
+per-session device bytes = 35,034,920
+per-session pinned host bytes = 46,080
+total device bytes(B) = 457,292,548 + B * 35,034,920
+```
 
 ## Integration boundary
 

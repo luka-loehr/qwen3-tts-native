@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "mode": "shared_immutable_native_decoder_model",
+  "passed": true,
+  "model_load_and_warmup_milliseconds": 435.834867,
+  "model": {
+    "tensor_count": 271,
+    "parameter_count": 114323137,
+    "source_bytes": 228646274,
+    "shared_weight_device_bytes": 457292548,
+    "transient_upload_device_bytes": 8388608,
+    "warmup_completed": true
+  },
+  "one_frame_first_chunk": {
+    "end_to_end_microseconds": 8135.51416015625,
+    "gpu_microseconds": 8127.61572265625,
+    "real_time_factor": 0.10169392700195312
+  },
+  "batch_one": {
+    "active_sessions": 1,
+    "official_pcm": {
+      "count": 7680,
+      "exact_samples": 7642,
+      "maximum_absolute_error": 1,
+      "mean_squared_error": 0.0049479166666666664
+    },
+    "reset_replay_bit_exact": true
+  },
+  "batch_three": {
+    "active_sessions": 3,
+    "interleaved_bit_exact": true,
+    "reset_replay_bit_exact": true,
+    "concurrent_bit_exact": true,
+    "concurrent_stress_rounds": 20,
+    "all_stress_rounds_bit_exact": true,
+    "concurrent_wall_milliseconds": 2992.442365,
+    "ring_slots": [[0, 1, 2, 0], [0, 1, 2, 0], [0, 1, 2, 0]],
+    "state_matches": true
+  },
+  "batch_six": {
+    "active_sessions": 6,
+    "interleaved_bit_exact": true,
+    "concurrent_bit_exact": true,
+    "concurrent_stress_rounds": 20,
+    "all_stress_rounds_bit_exact": true,
+    "concurrent_wall_milliseconds": 6668.026748,
+    "aggregate_audio_milliseconds_per_round": 1920,
+    "aggregate_wall_real_time_factor": 0.17364652989583335,
+    "ring_slots": [[0, 1], [0, 1], [0, 1], [0, 1], [0, 1], [0, 1]],
+    "state_matches": true
+  },
+  "cancel_drop": {
+    "cancelled_session_rejects_process": true,
+    "active_sessions_after_cancelled_drop": 1,
+    "survivor_bit_exact": true,
+    "all_sessions_released": true
+  },
+  "memory": {
+    "shared_weights_allocated_once": true,
+    "shared_weight_device_bytes": 457292548,
+    "per_session": {
+      "device_bytes": 35034920,
+      "host_pinned_bytes": 46080,
+      "transformer_kv_bytes": 7077888,
+      "convolution_history_bytes": 848832,
+      "codec_ring_bytes": 384,
+      "pcm_ring_bytes": 46080,
+      "workspace_device_bytes": 27061736
+    },
+    "b1_total_device_bytes": 492327468,
+    "b3_total_device_bytes": 562397308,
+    "b6_total_device_bytes": 667502068,
+    "b6_total_host_pinned_bytes": 276480
+  },
+  "concurrency": {
+    "host_threads": true,
+    "independent_non_blocking_cuda_streams": true,
+    "independent_cublas_handles": true,
+    "global_inference_lock": false
+  }
+}
