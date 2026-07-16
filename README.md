@@ -63,3 +63,28 @@ See `native/qwen3-tts-native/README.md` for the artifact format, API, commands,
 measurements, and explicit limitations. This result validates model material and
 device ownership; it does not yet constitute neural TTS inference or a TTFA/RTF
 result.
+
+The native speech-tokenizer decoder is implemented end to end in Rust, CUDA,
+and cuBLAS. It includes RVQ, the eight-layer 72-frame causal transformer, two
+ConvNeXt upsamplers, the complete causal waveform decoder, exact PCM trimming,
+startup warmup, and independent one-to-six-stream handles. Official activation
+and PCM oracles, 400-packet neural benchmarks, short-final/stale-tail/reset
+tests, three-/six-stream isolation, and NVIDIA Compute Sanitizer are green.
+
+Measured decoder-only results on the Spark are:
+
+- first 80 ms user chunk after startup warmup: 7.88 ms;
+- 80 ms packets: p50 11.65 ms, real-time factor 0.146;
+- 320 ms packets: p50 62.09 ms, real-time factor 0.194;
+- official PCM error: at most one signed 16-bit LSB;
+- total device allocation per decoder state handle: 492,327,468 bytes.
+
+The reusable Rust API and C ABI are documented in
+`native/qwen3-tts-native-codec/README.md`. The decoder remains research-only and
+is not connected to the Ephraim backend, frontend, or production containers.
+
+The native 1.7B talker and decoder also complete a real text-to-code-to-WAV
+smoke path. Its current public talker API returns the complete code sequence
+before decoder polling, so this smoke is deliberately marked non-qualifying.
+Incremental talker sessions, progressive first audio, and the full 200-request
+runtime qualification remain required before promotion.
