@@ -1,0 +1,86 @@
+{
+  "allow_symlinks": true,
+  "artifact": "/home/administrator/qwen3-tts-sglang/cache/huggingface/hub/models--Qwen--Qwen3-TTS-12Hz-1.7B-VoiceDesign/snapshots/5ecdb67327fd37bb2e042aab12ff7391903235d3",
+  "explicit_turkish_language_id": false,
+  "language_ids": {
+    "chinese": 2055,
+    "english": 2050,
+    "french": 2061,
+    "german": 2053,
+    "italian": 2070,
+    "japanese": 2058,
+    "korean": 2064,
+    "portuguese": 2071,
+    "russian": 2069,
+    "spanish": 2054
+  },
+  "material": [
+    {
+      "bytes": 4421,
+      "path": "/home/administrator/qwen3-tts-sglang/cache/huggingface/hub/models--Qwen--Qwen3-TTS-12Hz-1.7B-VoiceDesign/snapshots/5ecdb67327fd37bb2e042aab12ff7391903235d3/config.json",
+      "resolved_path": "/home/administrator/qwen3-tts-sglang/cache/huggingface/hub/models--Qwen--Qwen3-TTS-12Hz-1.7B-VoiceDesign/blobs/2c2c027c574a85c0d5a5d48e3cfed1a8a051ff9d",
+      "symlink": true
+    },
+    {
+      "bytes": 245,
+      "path": "/home/administrator/qwen3-tts-sglang/cache/huggingface/hub/models--Qwen--Qwen3-TTS-12Hz-1.7B-VoiceDesign/snapshots/5ecdb67327fd37bb2e042aab12ff7391903235d3/generation_config.json",
+      "resolved_path": "/home/administrator/qwen3-tts-sglang/cache/huggingface/hub/models--Qwen--Qwen3-TTS-12Hz-1.7B-VoiceDesign/blobs/1872b16d4535564abf2db5d6debe6cddd82b7f2e",
+      "symlink": true
+    },
+    {
+      "bytes": 3833402552,
+      "path": "/home/administrator/qwen3-tts-sglang/cache/huggingface/hub/models--Qwen--Qwen3-TTS-12Hz-1.7B-VoiceDesign/snapshots/5ecdb67327fd37bb2e042aab12ff7391903235d3/model.safetensors",
+      "resolved_path": "/home/administrator/qwen3-tts-sglang/cache/huggingface/hub/models--Qwen--Qwen3-TTS-12Hz-1.7B-VoiceDesign/blobs/391e8db219f292c515297cdceeb43e4eae67cdde35fa57e79a6a8a532fca0522",
+      "symlink": true
+    },
+    {
+      "bytes": 2336,
+      "path": "/home/administrator/qwen3-tts-sglang/cache/huggingface/hub/models--Qwen--Qwen3-TTS-12Hz-1.7B-VoiceDesign/snapshots/5ecdb67327fd37bb2e042aab12ff7391903235d3/speech_tokenizer/config.json",
+      "resolved_path": "/home/administrator/qwen3-tts-sglang/cache/huggingface/hub/models--Qwen--Qwen3-TTS-12Hz-1.7B-VoiceDesign/blobs/06cc8dc4c5ec8a1929086b71b98c313020d9268b",
+      "symlink": true
+    },
+    {
+      "bytes": 682293092,
+      "path": "/home/administrator/qwen3-tts-sglang/cache/huggingface/hub/models--Qwen--Qwen3-TTS-12Hz-1.7B-VoiceDesign/snapshots/5ecdb67327fd37bb2e042aab12ff7391903235d3/speech_tokenizer/model.safetensors",
+      "resolved_path": "/home/administrator/qwen3-tts-sglang/cache/huggingface/hub/models--Qwen--Qwen3-TTS-12Hz-1.7B-VoiceDesign/blobs/836b7b357f5ea43e889936a3709af68dfe3751881acefe4ecf0dbd30ba571258",
+      "symlink": true
+    }
+  ],
+  "operation": "validate-qwen3-tts-1.7b-artifact",
+  "production_material": false,
+  "schema_version": 1,
+  "speech_tokenizer": {
+    "contract": "speech-tokenizer",
+    "decoder_only": {
+      "f32_payload_bytes": 457292548,
+      "parameter_count": 114323137,
+      "projected_bf16_payload_bytes": 228646274,
+      "tensor_count": 271
+    },
+    "dtype_counts": {
+      "F32": 496
+    },
+    "file_bytes": 682293092,
+    "parameter_count": 170557441,
+    "payload_bytes": 682229764,
+    "tensor_count": 496
+  },
+  "symlink_count": 5,
+  "valid": true,
+  "voice_design": {
+    "contract": "voice-design-1.7b",
+    "decoder_only": {
+      "f32_payload_bytes": 0,
+      "parameter_count": 0,
+      "projected_bf16_payload_bytes": 0,
+      "tensor_count": 0
+    },
+    "dtype_counts": {
+      "BF16": 404
+    },
+    "file_bytes": 3833402552,
+    "parameter_count": 1916676352,
+    "payload_bytes": 3833352704,
+    "tensor_count": 404
+  }
+}
