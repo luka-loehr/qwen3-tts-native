@@ -1,0 +1,60 @@
+{
+  "attention": "eager causal sliding-window 72",
+  "checkpoints": {
+    "01-rvq": {
+      "bytes": 169984,
+      "dtype": "F32_LE",
+      "file": "01-rvq.f32le",
+      "sha256": "4216f63c1fb4aa2a1253897e5e4d561c9190393183268729400013ec8cb605bf",
+      "shape": [
+        1,
+        512,
+        83
+      ]
+    },
+    "02-pre-conv": {
+      "bytes": 339968,
+      "dtype": "F32_LE",
+      "file": "02-pre-conv.f32le",
+      "sha256": "335b65a8f267b310c0fa501d1dd4f8bfea3d37e4098a5eb4c0c92b8449a20993",
+      "shape": [
+        1,
+        83,
+        1024
+      ]
+    },
+    "03-transformer": {
+      "bytes": 339968,
+      "dtype": "F32_LE",
+      "file": "03-transformer.f32le",
+      "sha256": "9d5f63bfb6eef6f888e4926ae4717ecc250a82d902b70fa2fe1197870c6b774c",
+      "shape": [
+        1,
+        83,
+        1024
+      ]
+    }
+  },
+  "codebook_count": 16,
+  "codes": {
+    "bytes": 2656,
+    "dtype": "U16_LE",
+    "file": "codes.u16le",
+    "sha256": "697f899c95835609f2c072152f4bccb19ca71bc580bfc672c65af01399fe349b",
+    "shape": [
+      1,
+      83,
+      16
+    ]
+  },
+  "description": "Official Qwen3-TTS 12Hz decoder forward checkpoints",
+  "device": "NVIDIA GB10",
+  "float32_precision": "TF32 disabled for deterministic kernel parity",
+  "frame_count": 83,
+  "model": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign speech_tokenizer",
+  "reference_implementation": "QwenLM/Qwen3-TTS qwen_tts/core/tokenizer_12hz/modeling_qwen3_tts_tokenizer_v2.py",
+  "samples_per_frame": 1920,
+  "schema_version": 1,
+  "scope": "RVQ, causal pre-convolution, and transformer only",
+  "torch_dtype": "float32"
+}

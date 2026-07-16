@@ -46,10 +46,11 @@ def main() -> None:
     parser.add_argument("--model", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--frames", type=int, default=4)
+    parser.add_argument("--transformer-only", action="store_true")
     args = parser.parse_args()
 
-    if not 1 <= args.frames <= 16:
-        raise ValueError("frames must be between 1 and 16")
+    if not 1 <= args.frames <= 128:
+        raise ValueError("frames must be between 1 and 128")
     args.output.mkdir(parents=True, exist_ok=True)
     torch.manual_seed(0)
     torch.set_grad_enabled(False)
@@ -100,6 +101,12 @@ def main() -> None:
     save_tensor(args.output, "02-pre-conv", hidden, manifest)
     hidden = decoder.pre_transformer(inputs_embeds=hidden).last_hidden_state
     save_tensor(args.output, "03-transformer", hidden, manifest)
+    if args.transformer_only:
+        manifest["scope"] = "RVQ, causal pre-convolution, and transformer only"
+        (args.output / "manifest.json").write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        return
     hidden = hidden.permute(0, 2, 1)
     for stage, blocks in enumerate(decoder.upsample, start=1):
         for block in blocks:
