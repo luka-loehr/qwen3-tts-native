@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "operation": "qwen3-tts-public-c-abi-functional-smoke",
+  "date": "2026-07-16",
+  "runtime_commit": "2a532f395725d12b21ace6bf17ecf3b125232ec4",
+  "status": "pass",
+  "performance_qualified": false,
+  "performance_limitation": "The harness intentionally waited 300 ms before an undersized-buffer preflight. TTFA, wall time, and RTF include that pause and are functional evidence only.",
+  "model": {
+    "id": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+    "revision": "5ecdb67327fd37bb2e042aab12ff7391903235d3"
+  },
+  "checks": {
+    "public_c_abi": true,
+    "invalid_struct_size_rejected": true,
+    "invalid_utf8_rejected": true,
+    "cancel_and_destroy": true,
+    "undersized_pcm_rejected_before_poll": true,
+    "packet_preserved_after_failed_preflight": true,
+    "engine_destroyed_before_live_request": true,
+    "request_survived_engine_destroy": true,
+    "first_packet_one_codec_frame": true,
+    "packet_positions_contiguous": true,
+    "pcm_tail_untouched": true,
+    "metrics_match_delivered_packets": true,
+    "final_then_end_of_stream": true
+  },
+  "observed": {
+    "model_load_ms": 15040.029,
+    "ttfa_ms_including_preflight_pause": 402.548,
+    "wall_ms_including_preflight_pause": 2733.239,
+    "audio_ms": 3200.0,
+    "rtf_including_preflight_pause": 0.854137,
+    "packets": 11,
+    "codec_frames": 40,
+    "samples": 76800,
+    "nonzero_samples": 74802,
+    "pcm_min": -9847,
+    "pcm_max": 20319,
+    "metric_first_audio_us": 402541,
+    "peak_request_device_bytes": 52973844,
+    "peak_request_host_bytes": 46080
+  },
+  "wav": {
+    "format": "PCM s16le mono 24000 Hz",
+    "bytes": 153644,
+    "sha256": "e5ff6b33910436e7f6baca407e7a8f9cbe8970d8898859a92fac499f2ca908c5"
+  },
+  "raw_report": {
+    "bytes": 319,
+    "sha256": "41d54b0ed2596717fe847481bc54d0ff2fee63d0fbc71ebb47d94e0f8ec7b64e"
+  }
+}
