@@ -3642,6 +3642,48 @@ qwen3_tts_codec_process_packet_v1(
     return kStatusOk;
 }
 
+extern "C" QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_warmup_v1(
+    Qwen3TtsCodecContextV1* context,
+    char* error,
+    size_t error_capacity
+) {
+    clear_error(error, error_capacity);
+    if (context == nullptr) {
+        write_error(error, error_capacity, "context is required");
+        return kStatusInvalidArgument;
+    }
+    if (context->model_info.loaded == 0) {
+        write_error(error, error_capacity, "decoder model is not loaded");
+        return kStatusState;
+    }
+    if (context->frame_position != 0 || context->neural_frame_position != 0 ||
+        context->emitted_samples != 0 || context->next_ring_slot != 0 ||
+        context->finalized) {
+        write_error(error, error_capacity, "warmup requires a fresh decoder state");
+        return kStatusState;
+    }
+    uint16_t codes[
+        QWEN3_TTS_CODEC_MAX_PACKET_FRAMES * QWEN3_TTS_CODEC_CODEBOOKS
+    ]{};
+    int16_t pcm[QWEN3_TTS_CODEC_MAX_PACKET_SAMPLES]{};
+    Qwen3TtsCodecPacketResultV1 result{};
+    const int32_t process_status = qwen3_tts_codec_process_packet_v1(
+        context,
+        codes,
+        QWEN3_TTS_CODEC_MAX_PACKET_FRAMES,
+        0,
+        pcm,
+        QWEN3_TTS_CODEC_MAX_PACKET_SAMPLES,
+        &result,
+        error,
+        error_capacity
+    );
+    const int32_t reset_status = reset_device_state(
+        context, error, error_capacity
+    );
+    return process_status == kStatusOk ? reset_status : process_status;
+}
+
 extern "C" QWEN3_TTS_CODEC_API int32_t
 qwen3_tts_codec_process_batch_v1(
     Qwen3TtsCodecBatchItemV1* items,

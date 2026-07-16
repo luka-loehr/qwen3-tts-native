@@ -176,6 +176,14 @@ QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_model_info_v1(
     size_t error_capacity
 );
 
+/* Initialize CUDA/cuBLAS execution paths before the first user packet. The
+ * call is accepted only on a fresh state handle and restores that state. */
+QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_warmup_v1(
+    Qwen3TtsCodecContextV1* context,
+    char* error,
+    size_t error_capacity
+);
+
 /* Research-only parity hook. Output layouts match the official checkpoints:
  * RVQ is [1, 512, frames], pre-convolution is [1, frames, 1024]. */
 QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_debug_frontend_packet_v1(

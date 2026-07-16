@@ -40,6 +40,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                 .unwrap_or(200);
             neural_benchmark(Path::new(library), Path::new(model), iterations)
         }
+        "neural-cold-start" => {
+            let library = required_argument(&arguments, 2, "shared library path")?;
+            let model = required_argument(&arguments, 3, "speech tokenizer safetensors path")?;
+            neural_cold_start(Path::new(library), Path::new(model))
+        }
         "inspect-model" => {
             let model = required_argument(&arguments, 2, "speech tokenizer safetensors path")?;
             inspect_model(Path::new(model))
@@ -345,6 +350,12 @@ fn neural_parity(
     let model = model::SafetensorsFile::open(model_path)?;
     let mut codec = api.create_codec(0).map_err(io::Error::other)?;
     codec.load_model(&model).map_err(io::Error::other)?;
+    codec.warmup().map_err(io::Error::other)?;
+    let state_after_warmup = codec.state_info().map_err(io::Error::other)?;
+    let warmup_state_reset = state_after_warmup.frame_position == 0
+        && state_after_warmup.emitted_samples == 0
+        && state_after_warmup.kv_ring_head == 0
+        && state_after_warmup.next_ring_slot == 0;
 
     let (single, single_result) = codec.process(&frames, true).map_err(|(status, message)| {
         io::Error::other(format!("single status {status}: {message}"))
@@ -354,6 +365,7 @@ fn neural_parity(
         Err((status, _)) => status == STATUS_STATE,
         Ok(_) => false,
     };
+    let warmup_after_stream_rejected = codec.warmup().is_err();
 
     codec.reset().map_err(io::Error::other)?;
     let mut split = Vec::with_capacity(expected.len());
@@ -435,6 +447,8 @@ fn neural_parity(
         && short_comparison.maximum_absolute_error <= 1
         && stale_tail_unchanged
         && post_final_rejected
+        && warmup_state_reset
+        && warmup_after_stream_rejected
         && metadata_matches
         && wrapped_state_matches;
     println!(
@@ -456,6 +470,8 @@ fn neural_parity(
             "short_final_samples": short_result.sample_count,
             "stale_tail_sentinel_unchanged": stale_tail_unchanged,
             "post_final_packet_rejected": post_final_rejected,
+            "warmup_state_reset": warmup_state_reset,
+            "warmup_after_stream_rejected": warmup_after_stream_rejected,
             "packet_metadata_matches": metadata_matches,
             "pcm_maximum_absolute_error_threshold": 1
         }))?
@@ -1106,6 +1122,34 @@ fn parity(library_path: &Path) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+fn neural_cold_start(library_path: &Path, model_path: &Path) -> Result<(), Box<dyn Error>> {
+    let api = Api::load(library_path)?;
+    let model = model::SafetensorsFile::open(model_path)?;
+    let mut codec = api.create_codec(0).map_err(io::Error::other)?;
+    let load_start = Instant::now();
+    let model_info = codec.load_model(&model).map_err(io::Error::other)?;
+    let model_load_milliseconds = load_start.elapsed().as_secs_f64() * 1000.0;
+    let frame = deterministic_frames(1);
+    let (_, result) = codec.process(&frame, true).map_err(|(status, message)| {
+        io::Error::other(format!("cold-start status {status}: {message}"))
+    })?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "schema_version": 1,
+            "mode": "real_qwen_decoder_cold_start_without_warmup",
+            "model_load_milliseconds": model_load_milliseconds,
+            "source_bytes": model_info.source_bytes,
+            "device_bytes": model_info.device_bytes,
+            "first_80ms_chunk": {
+                "gpu_microseconds": result.gpu_microseconds,
+                "end_to_end_microseconds": result.end_to_end_microseconds
+            }
+        }))?
+    );
+    Ok(())
+}
+
 fn neural_benchmark(
     library_path: &Path,
     model_path: &Path,
@@ -1121,11 +1165,21 @@ fn neural_benchmark(
     let model_info = codec.load_model(&model).map_err(io::Error::other)?;
     let model_load_milliseconds = load_start.elapsed().as_secs_f64() * 1000.0;
 
-    let cold_frame = deterministic_frames(1);
-    let (_, cold_result) = codec
-        .process(&cold_frame, false)
+    let warmup_start = Instant::now();
+    codec.warmup().map_err(io::Error::other)?;
+    let warmup_milliseconds = warmup_start.elapsed().as_secs_f64() * 1000.0;
+    let warmup_state = codec.state_info().map_err(io::Error::other)?;
+    let warmup_state_reset = warmup_state.frame_position == 0
+        && warmup_state.emitted_samples == 0
+        && warmup_state.kv_ring_head == 0
+        && warmup_state.next_ring_slot == 0;
+    let first_frame = deterministic_frames(1);
+    let (_, first_result) = codec
+        .process(&first_frame, false)
         .map_err(|(status, message)| {
-            io::Error::other(format!("first-chunk status {status}: {message}"))
+            io::Error::other(format!(
+                "post-warmup first-chunk status {status}: {message}"
+            ))
         })?;
     codec.reset().map_err(io::Error::other)?;
     let one_frame = neural_benchmark_case(&mut codec, 1, iterations)?;
@@ -1139,6 +1193,8 @@ fn neural_benchmark(
             "schema_version": 1,
             "mode": "real_qwen_speech_tokenizer_decoder",
             "model_load_milliseconds": model_load_milliseconds,
+            "explicit_startup_warmup_milliseconds": warmup_milliseconds,
+            "warmup_state_reset": warmup_state_reset,
             "model": {
                 "tensor_count": model_info.tensor_count,
                 "parameter_count": model_info.parameter_count,
@@ -1147,9 +1203,9 @@ fn neural_benchmark(
                 "source_f32_tensors": model_info.source_dtype_f32_count,
                 "source_bf16_tensors": model_info.source_dtype_bf16_count
             },
-            "first_80ms_chunk_after_model_load": {
-                "gpu_microseconds": cold_result.gpu_microseconds,
-                "end_to_end_microseconds": cold_result.end_to_end_microseconds
+            "first_80ms_chunk_after_explicit_warmup": {
+                "gpu_microseconds": first_result.gpu_microseconds,
+                "end_to_end_microseconds": first_result.end_to_end_microseconds
             },
             "one_frame_80ms_packets": one_frame,
             "four_frame_320ms_packets": four_frames,
