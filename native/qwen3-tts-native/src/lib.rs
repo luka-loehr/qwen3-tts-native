@@ -6,6 +6,7 @@ pub mod loader;
 pub mod native_talker;
 pub mod prompt;
 pub mod sha256;
+pub mod session_bench;
 pub mod talker_cli;
 pub mod tokenizer;
 pub mod weights;
