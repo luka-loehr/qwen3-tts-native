@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use std::fmt;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TryRecvError, sync_channel};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
@@ -591,6 +592,7 @@ pub struct Scheduler<B: StreamingBackend> {
     config: EngineConfig,
     slots: Arc<SlotPool>,
     commands: SyncSender<Command>,
+    shutdown: Arc<AtomicBool>,
     next_request_id: AtomicU64,
     worker: Option<JoinHandle<()>>,
     _backend: std::marker::PhantomData<B>,
@@ -608,14 +610,17 @@ impl<B: StreamingBackend> Scheduler<B> {
             ))?;
         let (commands, receiver) = sync_channel(command_capacity);
         let worker_config = config;
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let worker_shutdown = Arc::clone(&shutdown);
         let worker = thread::Builder::new()
             .name("qwen3-tts-native-worker".to_owned())
-            .spawn(move || worker_loop(backend, worker_config, receiver))
+            .spawn(move || worker_loop(backend, worker_config, receiver, worker_shutdown))
             .map_err(|error| SchedulerError::Worker(error.to_string()))?;
         Ok(Self {
             config,
             slots: Arc::new(SlotPool::new(capacity)),
             commands,
+            shutdown,
             next_request_id: AtomicU64::new(1),
             worker: Some(worker),
             _backend: std::marker::PhantomData,
@@ -665,7 +670,8 @@ impl<B: StreamingBackend> Scheduler<B> {
 
 impl<B: StreamingBackend> Drop for Scheduler<B> {
     fn drop(&mut self) {
-        let _ = self.commands.send(Command::Shutdown);
+        self.shutdown.store(true, Ordering::Release);
+        let _ = self.commands.try_send(Command::Shutdown);
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
@@ -792,23 +798,77 @@ fn worker_loop<B: StreamingBackend>(
     mut backend: B,
     config: EngineConfig,
     receiver: Receiver<Command>,
+    shutdown: Arc<AtomicBool>,
 ) {
     let mut active = Vec::<ActiveRequest<B::Session>>::new();
     let mut pending = Vec::<PendingStart>::new();
-    let mut shutdown = false;
-    while !shutdown {
+    let outcome = catch_unwind(AssertUnwindSafe(|| {
+        worker_loop_inner(
+            &mut backend,
+            config,
+            &receiver,
+            &shutdown,
+            &mut active,
+            &mut pending,
+        );
+    }));
+    let failure = outcome
+        .err()
+        .map(|_| BackendError::with_status(RuntimeStatus::Internal, "runtime worker panicked"));
+
+    for mut request in active {
+        if let Some(session) = &mut request.session {
+            cancel_backend_safely(&mut backend, session);
+        }
+        if let Some(error) = &failure {
+            request.shared.mark_failed(error.clone());
+        } else {
+            request.shared.mark_cancelled();
+        }
+        retire_active(request);
+    }
+    for request in pending {
+        if let Some(error) = &failure {
+            request.shared.mark_failed(error.clone());
+        } else {
+            request.shared.mark_cancelled();
+        }
+        retire_pending(request);
+    }
+    while let Ok(command) = receiver.try_recv() {
+        if let Command::Start(request) = command {
+            if let Some(error) = &failure {
+                request.shared.mark_failed(error.clone());
+            } else {
+                request.shared.mark_cancelled();
+            }
+            retire_pending(*request);
+        }
+    }
+}
+
+fn worker_loop_inner<B: StreamingBackend>(
+    backend: &mut B,
+    config: EngineConfig,
+    receiver: &Receiver<Command>,
+    shutdown: &AtomicBool,
+    active: &mut Vec<ActiveRequest<B::Session>>,
+    pending: &mut Vec<PendingStart>,
+) {
+    let mut command_shutdown = false;
+    while !shutdown.load(Ordering::Acquire) && !command_shutdown {
         if active.is_empty() && pending.is_empty() {
             match receiver.recv() {
-                Ok(command) => shutdown = handle_command(command, &mut active, &mut pending),
-                Err(_) => shutdown = true,
+                Ok(command) => command_shutdown = handle_command(command, active, pending),
+                Err(_) => command_shutdown = true,
             }
         }
-        drain_commands(&receiver, &mut active, &mut pending, &mut shutdown);
-        if shutdown {
+        drain_commands(receiver, active, pending, &mut command_shutdown);
+        if shutdown.load(Ordering::Acquire) || command_shutdown {
             break;
         }
-        start_pending(&mut backend, &mut pending, &mut active);
-        remove_cancelled(&mut backend, &mut active);
+        start_pending(backend, pending, active);
+        remove_cancelled(backend, active);
         let eligible = active
             .iter()
             .enumerate()
@@ -817,27 +877,15 @@ fn worker_loop<B: StreamingBackend>(
         if eligible.is_empty() {
             match receiver.recv_timeout(WORKER_IDLE_WAIT) {
                 Ok(command) => {
-                    shutdown = handle_command(command, &mut active, &mut pending);
+                    command_shutdown = handle_command(command, active, pending);
                 }
                 Err(RecvTimeoutError::Timeout) => {}
-                Err(RecvTimeoutError::Disconnected) => shutdown = true,
+                Err(RecvTimeoutError::Disconnected) => command_shutdown = true,
             }
             continue;
         }
-        step_eligible(&mut backend, config.packet_frames, &mut active, &eligible);
-        remove_finished(&mut backend, &mut active);
-    }
-
-    for mut request in active {
-        if let Some(session) = &mut request.session {
-            let _ = backend.cancel(session);
-        }
-        request.shared.mark_cancelled();
-        retire_active(request);
-    }
-    for request in pending {
-        request.shared.mark_cancelled();
-        retire_pending(request);
+        step_eligible(backend, config.packet_frames, active, &eligible);
+        remove_finished(backend, active);
     }
 }
 
@@ -862,6 +910,10 @@ fn drain_commands<Session>(
             }
         }
     }
+}
+
+fn cancel_backend_safely<B: StreamingBackend>(backend: &mut B, session: &mut B::Session) {
+    let _ = catch_unwind(AssertUnwindSafe(|| backend.cancel(session)));
 }
 
 fn handle_command<Session>(
@@ -917,7 +969,18 @@ fn start_pending<B: StreamingBackend>(
         .iter()
         .map(|request| request.request.clone())
         .collect::<Vec<_>>();
-    let results = backend.start_batch(backend_requests);
+    let results = match catch_unwind(AssertUnwindSafe(|| backend.start_batch(backend_requests))) {
+        Ok(results) => results,
+        Err(_) => {
+            let error =
+                BackendError::with_status(RuntimeStatus::Internal, "backend start_batch panicked");
+            for request in ready {
+                request.shared.mark_failed(error.clone());
+                retire_pending(request);
+            }
+            return;
+        }
+    };
     if results.len() != ready.len() {
         for request in ready {
             request
@@ -961,7 +1024,7 @@ fn remove_cancelled<B: StreamingBackend>(
         if active[index].shared.is_cancel_requested() {
             let mut request = active.swap_remove(index);
             if let Some(session) = &mut request.session {
-                let _ = backend.cancel(session);
+                cancel_backend_safely(backend, session);
             }
             request.shared.mark_cancelled();
             retire_active(request);
@@ -980,10 +1043,12 @@ fn step_eligible<B: StreamingBackend>(
     let step_started = Instant::now();
     let mut selected = Vec::with_capacity(eligible.len());
     for index in eligible {
-        let session = active[*index]
-            .session
-            .take()
-            .expect("eligible request must own a backend session");
+        let Some(session) = active[*index].session.take() else {
+            active[*index]
+                .shared
+                .mark_failed("eligible request did not own a backend session");
+            continue;
+        };
         let Some(mut pcm) = active[*index].shared.take_pcm() else {
             active[*index].session = Some(session);
             active[*index]
@@ -994,7 +1059,7 @@ fn step_eligible<B: StreamingBackend>(
         pcm.fill(PCM_SENTINEL);
         selected.push((*index, session, pcm));
     }
-    let results = {
+    let results = match {
         let mut requests = selected
             .iter_mut()
             .map(|(_, session, pcm)| BackendStepInput {
@@ -1002,7 +1067,21 @@ fn step_eligible<B: StreamingBackend>(
                 pcm: pcm.as_mut_slice(),
             })
             .collect::<Vec<_>>();
-        backend.step_batch(&mut requests, packet_frames)
+        catch_unwind(AssertUnwindSafe(|| {
+            backend.step_batch(&mut requests, packet_frames)
+        }))
+    } {
+        Ok(results) => results,
+        Err(_) => {
+            let error =
+                BackendError::with_status(RuntimeStatus::Internal, "backend step_batch panicked");
+            for (index, session, pcm) in selected {
+                active[index].session = Some(session);
+                active[index].shared.recycle_pcm(pcm);
+                active[index].shared.mark_failed(error.clone());
+            }
+            return;
+        }
     };
     if results.len() != selected.len() {
         for (index, session, pcm) in selected {
@@ -1123,7 +1202,7 @@ fn remove_finished<B: StreamingBackend>(
         if finished {
             let mut request = active.swap_remove(index);
             if failed_or_cancelled && let Some(session) = &mut request.session {
-                let _ = backend.cancel(session);
+                cancel_backend_safely(backend, session);
             }
             retire_active(request);
         } else {
@@ -1415,6 +1494,137 @@ mod tests {
         };
         assert_eq!(error.status(), RuntimeStatus::Cuda);
         assert_eq!(error.message(), "CUDA kernel launch failed");
+    }
+
+    #[derive(Clone, Copy, Eq, PartialEq)]
+    enum PanicPoint {
+        Start,
+        Step,
+        Cancel,
+    }
+
+    struct PanicOnceBackend {
+        point: PanicPoint,
+        triggered: bool,
+    }
+
+    impl StreamingBackend for PanicOnceBackend {
+        type Session = usize;
+
+        fn start(
+            &mut self,
+            _request: BackendRequest,
+        ) -> Result<BackendStarted<Self::Session>, BackendError> {
+            if self.point == PanicPoint::Start && !self.triggered {
+                self.triggered = true;
+                panic!("intentional start panic");
+            }
+            Ok(BackendStarted {
+                session: 0,
+                prefill_microseconds: 1,
+                peak_request_device_bytes: 0,
+                peak_request_host_bytes: 0,
+            })
+        }
+
+        fn step(
+            &mut self,
+            session: &mut Self::Session,
+            _packet_frames: u32,
+            pcm: &mut [i16],
+        ) -> Result<BackendPacket, BackendError> {
+            if self.point == PanicPoint::Step && !self.triggered {
+                self.triggered = true;
+                panic!("intentional step panic");
+            }
+            *session += 1;
+            pcm[..SAMPLES_PER_CODEC_FRAME as usize].fill(1);
+            Ok(BackendPacket {
+                codec_frames: 1,
+                is_final: self.point != PanicPoint::Cancel,
+                talker_gpu_microseconds: 1.0,
+                codec_gpu_microseconds: 1.0,
+                peak_request_device_bytes: 0,
+                peak_request_host_bytes: 0,
+            })
+        }
+
+        fn cancel(&mut self, _session: &mut Self::Session) -> Result<(), BackendError> {
+            if self.point == PanicPoint::Cancel && !self.triggered {
+                self.triggered = true;
+                panic!("intentional cancel panic");
+            }
+            Ok(())
+        }
+    }
+
+    fn panic_scheduler(point: PanicPoint) -> Scheduler<PanicOnceBackend> {
+        Scheduler::new(
+            EngineConfig {
+                max_concurrent_requests: 1,
+                pcm_ring_slots: 1,
+                ..EngineConfig::default()
+            },
+            PanicOnceBackend {
+                point,
+                triggered: false,
+            },
+        )
+        .unwrap()
+    }
+
+    fn expect_internal_failure(request: &RequestHandle) {
+        let PollError::Failed(error) = request.poll(Duration::from_secs(1)).unwrap_err() else {
+            panic!("request did not report an internal backend panic");
+        };
+        assert_eq!(error.status(), RuntimeStatus::Internal);
+        assert!(request.wait_retired(Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn start_panic_fails_request_and_worker_recovers() {
+        let scheduler = panic_scheduler(PanicPoint::Start);
+        let failed = scheduler
+            .start(input(), GenerationConfig::default())
+            .unwrap();
+        expect_internal_failure(&failed);
+        let replacement = scheduler
+            .start(input(), GenerationConfig::default())
+            .unwrap();
+        assert!(matches!(
+            replacement.poll(Duration::from_secs(1)).unwrap(),
+            PollOutcome::Packet(_)
+        ));
+    }
+
+    #[test]
+    fn step_panic_fails_request_and_worker_recovers() {
+        let scheduler = panic_scheduler(PanicPoint::Step);
+        let failed = scheduler
+            .start(input(), GenerationConfig::default())
+            .unwrap();
+        expect_internal_failure(&failed);
+        let replacement = scheduler
+            .start(input(), GenerationConfig::default())
+            .unwrap();
+        assert!(matches!(
+            replacement.poll(Duration::from_secs(1)).unwrap(),
+            PollOutcome::Packet(_)
+        ));
+    }
+
+    #[test]
+    fn cancel_panic_is_contained_and_capacity_recovers() {
+        let scheduler = panic_scheduler(PanicPoint::Cancel);
+        let request = scheduler
+            .start(input(), GenerationConfig::default())
+            .unwrap();
+        wait_for_phase(&request, RequestPhase::Generating);
+        assert!(request.cancel_and_wait(Duration::from_secs(1)).unwrap());
+        let replacement = scheduler
+            .start(input(), GenerationConfig::default())
+            .expect("cancel panic must not strand scheduler capacity");
+        replacement.cancel().unwrap();
     }
 
     #[test]
