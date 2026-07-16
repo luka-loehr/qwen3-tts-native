@@ -15,6 +15,7 @@ use crate::{
 };
 
 const WORKER_IDLE_WAIT: Duration = Duration::from_millis(2);
+const START_BATCH_WINDOW: Duration = Duration::from_millis(2);
 const PCM_SENTINEL: i16 = i16::MIN;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -864,6 +865,13 @@ fn worker_loop_inner<B: StreamingBackend>(
             }
         }
         drain_commands(receiver, active, pending, &mut command_shutdown);
+        coalesce_pending_starts(
+            receiver,
+            config.max_concurrent_requests as usize,
+            active,
+            pending,
+            &mut command_shutdown,
+        );
         if shutdown.load(Ordering::Acquire) || command_shutdown {
             break;
         }
@@ -886,6 +894,41 @@ fn worker_loop_inner<B: StreamingBackend>(
         }
         step_eligible(backend, config.packet_frames, active, &eligible);
         remove_finished(backend, active);
+    }
+}
+
+fn coalesce_pending_starts<Session>(
+    receiver: &Receiver<Command>,
+    maximum_active: usize,
+    active: &mut [ActiveRequest<Session>],
+    pending: &mut Vec<PendingStart>,
+    shutdown: &mut bool,
+) {
+    let available = maximum_active.saturating_sub(active.len());
+    if pending.is_empty() || available == 0 || pending.len() >= available {
+        return;
+    }
+    let Some(deadline) = Instant::now().checked_add(START_BATCH_WINDOW) else {
+        return;
+    };
+    while !pending.is_empty() && pending.len() < available {
+        let now = Instant::now();
+        if now >= deadline {
+            return;
+        }
+        match receiver.recv_timeout(deadline.saturating_duration_since(now)) {
+            Ok(command) => {
+                if handle_command(command, active, pending) {
+                    *shutdown = true;
+                    return;
+                }
+            }
+            Err(RecvTimeoutError::Timeout) => return,
+            Err(RecvTimeoutError::Disconnected) => {
+                *shutdown = true;
+                return;
+            }
+        }
     }
 }
 
@@ -1250,6 +1293,7 @@ mod tests {
 
     struct ScriptedBackend {
         steps: usize,
+        maximum_start_batch: Arc<AtomicUsize>,
         maximum_batch: Arc<AtomicUsize>,
     }
 
@@ -1295,6 +1339,18 @@ mod tests {
             })
         }
 
+        fn start_batch(
+            &mut self,
+            requests: Vec<BackendRequest>,
+        ) -> Vec<Result<BackendStarted<Self::Session>, BackendError>> {
+            self.maximum_start_batch
+                .fetch_max(requests.len(), Ordering::Relaxed);
+            requests
+                .into_iter()
+                .map(|request| self.start(request))
+                .collect()
+        }
+
         fn step_batch(
             &mut self,
             requests: &mut [BackendStepInput<'_, Self::Session>],
@@ -1320,6 +1376,7 @@ mod tests {
             config,
             ScriptedBackend {
                 steps,
+                maximum_start_batch: Arc::new(AtomicUsize::new(0)),
                 maximum_batch: Arc::new(AtomicUsize::new(0)),
             },
         )
@@ -1388,6 +1445,38 @@ mod tests {
         assert_eq!(request.metrics().emitted_packets, 1);
         let second = request.poll(Duration::from_secs(1)).unwrap();
         assert!(matches!(second, PollOutcome::Packet(_)));
+    }
+
+    #[test]
+    fn adjacent_starts_are_coalesced_into_the_native_batch_limit() {
+        let maximum_start_batch = Arc::new(AtomicUsize::new(0));
+        let maximum_batch = Arc::new(AtomicUsize::new(0));
+        let scheduler = Scheduler::new(
+            EngineConfig {
+                max_concurrent_requests: 6,
+                ..EngineConfig::default()
+            },
+            ScriptedBackend {
+                steps: 1,
+                maximum_start_batch: Arc::clone(&maximum_start_batch),
+                maximum_batch,
+            },
+        )
+        .unwrap();
+        let requests = (0..6)
+            .map(|_| {
+                scheduler
+                    .start(input(), GenerationConfig::default())
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+        for request in &requests {
+            assert!(matches!(
+                request.poll(Duration::from_secs(1)).unwrap(),
+                PollOutcome::Packet(_)
+            ));
+        }
+        assert_eq!(maximum_start_batch.load(Ordering::Relaxed), 6);
     }
 
     #[test]
@@ -1662,6 +1751,7 @@ mod tests {
     fn unbounded_or_abi_incompatible_engine_configs_are_rejected() {
         let backend = || ScriptedBackend {
             steps: 1,
+            maximum_start_batch: Arc::new(AtomicUsize::new(0)),
             maximum_batch: Arc::new(AtomicUsize::new(0)),
         };
         let invalid = [
