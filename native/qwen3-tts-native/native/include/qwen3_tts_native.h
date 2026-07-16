@@ -43,6 +43,21 @@ typedef struct Qwen3TtsGemvBenchmark {
     float tera_operations_per_second;
 } Qwen3TtsGemvBenchmark;
 
+typedef struct Qwen3TtsDeviceBuffer Qwen3TtsDeviceBuffer;
+
+typedef struct Qwen3TtsWeightUploadMetrics {
+    int32_t device_index;
+    int32_t reserved;
+    uint64_t allocation_bytes;
+    uint64_t pinned_staging_bytes;
+    uint64_t uploaded_bytes;
+    uint64_t upload_calls;
+    uint64_t free_before_bytes;
+    uint64_t free_after_allocation_bytes;
+    float allocation_microseconds;
+    float upload_microseconds;
+} Qwen3TtsWeightUploadMetrics;
+
 QWEN3_TTS_API int32_t qwen3_tts_probe_device(
     int32_t device_index,
     Qwen3TtsDeviceInfo* output,
@@ -67,6 +82,49 @@ QWEN3_TTS_API int32_t qwen3_tts_benchmark_bf16_gemv(
     Qwen3TtsGemvBenchmark* output,
     char* error,
     size_t error_capacity
+);
+
+QWEN3_TTS_API int32_t qwen3_tts_device_buffer_create(
+    int32_t device_index,
+    uint64_t capacity_bytes,
+    uint64_t staging_bytes,
+    Qwen3TtsDeviceBuffer** output,
+    Qwen3TtsWeightUploadMetrics* metrics,
+    char* error,
+    size_t error_capacity
+);
+
+QWEN3_TTS_API int32_t qwen3_tts_device_buffer_upload(
+    Qwen3TtsDeviceBuffer* buffer,
+    uint64_t offset_bytes,
+    const void* source,
+    uint64_t bytes,
+    char* error,
+    size_t error_capacity
+);
+
+QWEN3_TTS_API int32_t qwen3_tts_device_buffer_finish(
+    Qwen3TtsDeviceBuffer* buffer,
+    Qwen3TtsWeightUploadMetrics* metrics,
+    char* error,
+    size_t error_capacity
+);
+
+QWEN3_TTS_API int32_t qwen3_tts_device_buffer_read(
+    Qwen3TtsDeviceBuffer* buffer,
+    uint64_t offset_bytes,
+    void* destination,
+    uint64_t bytes,
+    char* error,
+    size_t error_capacity
+);
+
+QWEN3_TTS_API const void* qwen3_tts_device_buffer_data(
+    const Qwen3TtsDeviceBuffer* buffer
+);
+
+QWEN3_TTS_API void qwen3_tts_device_buffer_destroy(
+    Qwen3TtsDeviceBuffer* buffer
 );
 
 #ifdef __cplusplus
