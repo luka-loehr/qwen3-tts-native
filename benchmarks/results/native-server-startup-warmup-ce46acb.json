@@ -1,0 +1,127 @@
+{
+  "schema_version": 1,
+  "operation": "qwen3-tts-native-http-server-startup-warmup-qualification",
+  "qualifying_run": true,
+  "recorded_utc": "2026-07-17",
+  "source": {
+    "repository": "https://github.com/luka-loehr/qwen3-tts-native",
+    "commit": "ce46acbc929cba8c1e199c337d4fea015198a224",
+    "branch": "perf/device-code-handoff",
+    "spark_build_ref": "build/warmup-ce46acb",
+    "spark_worktree": "/home/administrator/codex-playground-worktrees/warmup-ce46acb",
+    "rust": "1.97.0",
+    "cargo_lock_enforced": true
+  },
+  "model": {
+    "id": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+    "revision": "5ecdb67327fd37bb2e042aab12ff7391903235d3",
+    "artifact_manifest_sha256": "9bb96a8d24bbb2d8933245e27083b8e7290346b776306dcb8a8f3aed68594527",
+    "voice_clone_included": false,
+    "base_model_included": false
+  },
+  "artifacts": {
+    "server_sha256": "253a7b5f95a82b0f06295248f0fecd337d23b4feeb22ff659c1bcf9443125c7d",
+    "healthcheck_sha256": "48e2ea44c018a0621f94c7bee9f37421add0196613b61281be09eff33a87f907",
+    "talker_library_sha256": "c91d6306402d00520a5f5688a8e0bfce1779011fc205a0ba1a5399304f6b9d84",
+    "codec_library_sha256": "2262aea07134842b73cf7df66f5f321736341183b05f4a573bca3a8808670594"
+  },
+  "environment": {
+    "host": "NVIDIA DGX Spark",
+    "architecture": "linux/arm64",
+    "gpu_architecture": "sm_121",
+    "existing_sglang_container": {
+      "name": "school-ui-inference",
+      "image": "lmsysorg/sglang:spark",
+      "remained_running": true,
+      "remained_healthy": true
+    },
+    "services_restarted": 0,
+    "existing_containers_restarted": 0
+  },
+  "startup": {
+    "bind": "127.0.0.1:18081",
+    "warmup_text": "Ready.",
+    "warmup_language": "English",
+    "warmup_codec_frames": 1,
+    "warmup_finish_reason": "max_codec_frames",
+    "server_ready_log_milliseconds": 10260.822016,
+    "first_successful_readiness_probe_upper_bound_milliseconds": 15151.952128,
+    "ready_gate_milliseconds": 20000,
+    "ready_gate_passed": true,
+    "listener_bound_only_after_warmup": true
+  },
+  "memory": {
+    "peak_process_rss_kib": 4039104,
+    "steady_process_rss_kib": 713880,
+    "nvidia_smi_process_memory_mib": 4283,
+    "streaming_request_peak_device_bytes": 65032852,
+    "streaming_request_peak_host_bytes": 46080
+  },
+  "progressive_streaming": {
+    "language": "German",
+    "seed": 42,
+    "http_status": 200,
+    "content_type": "multipart/mixed",
+    "finish_reason": "stop",
+    "generated_codec_frames": 59,
+    "emitted_packets": 16,
+    "emitted_samples": 113280,
+    "audio_seconds": 4.72,
+    "first_audio_milliseconds": 77.884,
+    "wall_seconds": 3.353508,
+    "real_time_factor": 0.710488983,
+    "response_bytes": 231539,
+    "response_sha256": "33031ad434544c1a1665943bfc90d7e9c5486cbeefdcbd147b47e905a8330f49",
+    "progressive_audio_before_completion": true,
+    "packet_positions_contiguous": true
+  },
+  "buffered_wav": {
+    "language": "Auto",
+    "text_language": "Italian",
+    "seed": 43,
+    "http_status": 200,
+    "content_type": "audio/wav",
+    "finish_reason": "stop",
+    "response_bytes": 188204,
+    "response_sha256": "314ca4b6aa6e8469143b2456649d57dd586d685b434dac05adefe79e2785c054",
+    "http_wall_seconds": 2.770054,
+    "audio_seconds": 3.92,
+    "http_real_time_factor": 0.706646429,
+    "sox": {
+      "version": "14.4.2+git20190427-4build4",
+      "channels": 1,
+      "sample_rate_hz": 24000,
+      "precision_bits": 16,
+      "encoding": "signed integer PCM",
+      "samples": 94080,
+      "maximum_amplitude": 0.508972,
+      "minimum_amplitude": -0.765991,
+      "mean_amplitude": 0.000010,
+      "rms_amplitude": 0.087902,
+      "clipping_warnings": 0
+    }
+  },
+  "lifecycle": {
+    "sigterm_exit_under_one_second": true,
+    "loopback_port_closed_after_exit": true,
+    "hard_kill_required": false
+  },
+  "gates": {
+    "real_model_loaded": true,
+    "full_native_pipeline_warmed_before_readiness": true,
+    "cold_readiness_below_20_seconds": true,
+    "progressive_streaming_observed": true,
+    "streaming_ttfa_below_200_milliseconds": true,
+    "streaming_rtf_below_one": true,
+    "buffered_wav_valid": true,
+    "natural_codec_eos_observed": true,
+    "voice_design_only_capability_contract": true,
+    "bounded_shutdown": true,
+    "passed": true
+  },
+  "limitations": [
+    "The startup measurement used a warm host filesystem cache and ran beside the existing SGLang service; the final image requires a separate clean-pull cold-start qualification.",
+    "Temporary multipart and WAV outputs were validated on the Spark and are identified by SHA-256, but are intentionally not committed to Git.",
+    "This server qualification complements rather than replaces the checked 200-request natural-EOS and 24-entry multilingual qualifications."
+  ]
+}
