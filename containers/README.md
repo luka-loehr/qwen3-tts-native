@@ -24,9 +24,10 @@ The final image contains only the material required to serve VoiceDesign:
   card, and model provenance.
 
 It deliberately excludes Qwen Base/CustomVoice checkpoints, voice cloning,
-reference audio, the speech-tokenizer encoder, compilers, development packages,
-and every unused CUDA library family. The only supported platform is
-`linux/arm64`; CUDA code is compiled as real `sm_121` SASS with no PTX fallback.
+reference audio, the speech-tokenizer encoder, compilers, build tools,
+development packages, and every unused CUDA library family. The only supported
+platform is `linux/arm64`; CUDA code is compiled as real `sm_121` SASS with no
+PTX fallback.
 
 ## Immutable inputs
 
@@ -99,15 +100,20 @@ credential or secret as a build argument because maximum provenance records
 the arguments.
 
 ```bash
-IMAGE=docker.io/luka-loehr/qwen3-tts-native
+test -z "$(git status --short)"
+
+IMAGE=ghcr.io/luka-loehr/qwen3-tts-native
 VERSION=v0.1.0-vd1.7b-cu13.0.3-sm121
 VCS_REF="$(git rev-parse HEAD)"
 BUILD_DATE="$(git show -s --format=%cI HEAD)"
 SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
 MODEL_CONTEXT=/home/administrator/codex-playground-artifacts/qwen3-tts-1.7b-voice-design-bf16-indexed
 RELEASE_CONTEXT=/absolute/path/to/release-metadata
+BUILD_METADATA=/absolute/new/path/release-build-metadata.json
+test ! -e "$BUILD_METADATA"
 
 docker buildx build \
+  --pull \
   --platform linux/arm64 \
   --file containers/Dockerfile.runtime \
   --build-context model="$MODEL_CONTEXT" \
@@ -118,14 +124,112 @@ docker buildx build \
   --build-arg SOURCE_DATE_EPOCH="$SOURCE_DATE_EPOCH" \
   --tag "$IMAGE:$VERSION" \
   --provenance=mode=max \
-  --sbom=true \
+  --attest \
+    'type=sbom,generator=docker.io/docker/buildkit-syft-scanner@sha256:79e7b013cbec16bbb436f312819a49a4a57752b2270c1a9332ae1a10fcc82a68' \
+  --metadata-file "$BUILD_METADATA" \
   --push \
   .
+
+DIGEST="$(jq -er \
+  '."containerimage.digest" | select(test("^sha256:[0-9a-f]{64}$"))' \
+  "$BUILD_METADATA")"
+REMOTE_DIGEST="$(docker buildx imagetools inspect "$IMAGE:$VERSION" \
+  --format '{{json .}}' | jq -er '.manifest.digest')"
+test "$REMOTE_DIGEST" = "$DIGEST"
+printf 'Pushed immutable image: %s@%s\n' "$IMAGE" "$DIGEST"
 ```
 
+`BUILD_METADATA` must name a new release-evidence file outside the Git checkout.
+The recorded `containerimage.digest` is the pushed OCI index digest, including
+its attached attestations; it is not the platform manifest or config digest.
 The first publication always uses the immutable candidate tag. Do not move
 `v0.1.0` or `latest` until the pushed digest passes a clean pull, GPU runtime,
 security, size, memory, and performance qualification.
+
+## Remote digest and attestations
+
+Inspect the immutable GHCR reference, never only its mutable candidate tag:
+
+```bash
+REFERENCE="$IMAGE@$DIGEST"
+EVIDENCE=/absolute/new/path/registry-evidence
+install -d -m 0755 "$EVIDENCE"
+
+docker buildx imagetools inspect "$REFERENCE" --raw \
+  >"$EVIDENCE/oci-index.json"
+docker buildx imagetools inspect "$REFERENCE" --format '{{json .SBOM}}' \
+  >"$EVIDENCE/buildkit-sbom.json"
+docker buildx imagetools inspect "$REFERENCE" --format '{{json .Provenance}}' \
+  >"$EVIDENCE/buildkit-provenance.json"
+
+jq -e '
+  ([.manifests[] | select(
+    .annotations["vnd.docker.reference.type"] != "attestation-manifest"
+  )] | length) == 1
+  and ([.manifests[] | select(
+    .annotations["vnd.docker.reference.type"] != "attestation-manifest"
+    and .platform.os == "linux"
+    and .platform.architecture == "arm64"
+  )] | length) == 1
+  and ([.manifests[] | select(
+    .annotations["vnd.docker.reference.type"] == "attestation-manifest"
+  )] | length) >= 1
+' "$EVIDENCE/oci-index.json"
+jq -e '.SPDX.spdxVersion | startswith("SPDX-")' \
+  "$EVIDENCE/buildkit-sbom.json"
+jq -e '
+  .SLSA.buildType == "https://mobyproject.org/buildkit@v1"
+  and .SLSA.invocation.parameters != null
+  and .SLSA.metadata.completeness.parameters == true
+  and .SLSA.metadata.completeness.environment == true
+' "$EVIDENCE/buildkit-provenance.json"
+```
+
+Review the maximum-provenance invocation before release and reject it if any
+argument contains a credential, token, private path, or other secret. The SBOM
+generator is pinned by digest so its implementation cannot drift
+between release builds. These remote BuildKit attestations complement rather
+than replace the CycloneDX Rust SBOM embedded in the runtime image.
+
+## Clean pull gate
+
+A pull from the build host's existing Docker store is not clean evidence. Use
+a separate Spark Docker daemon whose content store has never contained the
+candidate or any of its model layers. Record the daemon identity and empty
+pre-pull inventory, authenticate to private GHCR through `--password-stdin`,
+then run:
+
+```bash
+IMAGE=ghcr.io/luka-loehr/qwen3-tts-native
+DIGEST=sha256:<accepted-digest>
+REFERENCE="$IMAGE@$DIGEST"
+
+test -n "${GHCR_TOKEN:-}"
+printf '%s' "$GHCR_TOKEN" \
+  | docker login ghcr.io --username luka-loehr --password-stdin
+unset GHCR_TOKEN
+
+docker info >clean-pull.docker-info.txt
+test -z "$(docker image ls --quiet)"
+if docker image inspect "$REFERENCE" >/dev/null 2>&1; then
+  printf 'Refusing cached clean-pull candidate: %s\n' "$REFERENCE" >&2
+  exit 1
+fi
+
+docker image ls --digests --no-trunc >clean-pull.before.txt
+docker pull "$REFERENCE" 2>&1 | tee clean-pull.log
+docker image inspect "$REFERENCE" >clean-pull.image-inspect.json
+
+test "$(docker image inspect "$REFERENCE" \
+  --format '{{.Os}}/{{.Architecture}}')" = 'linux/arm64'
+test "$(docker image inspect "$REFERENCE" \
+  --format '{{.Config.User}}')" = '10001:10001'
+docker image inspect "$REFERENCE" --format '{{json .RepoDigests}}' \
+  | jq -e --arg reference "$REFERENCE" 'index($reference) != null'
+```
+
+Preserve all four evidence files. Perform the subsequent hardened GPU runtime
+qualification against the same `REFERENCE`; do not retag or rebuild it.
 
 ## Runtime
 
@@ -141,7 +245,7 @@ docker run --rm \
   --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001 \
   --pids-limit=256 \
   -p 127.0.0.1:8080:8080 \
-  docker.io/luka-loehr/qwen3-tts-native@sha256:<accepted-digest>
+  ghcr.io/luka-loehr/qwen3-tts-native@sha256:<accepted-digest>
 ```
 
 Do not mount different weights over `/opt/qwen3-tts/model`. Such a mount would
@@ -194,7 +298,7 @@ The Dockerfile itself fails unless:
 - exactly two Safetensors files exist in the final image;
 - server, healthcheck, and every native/CUDA library resolve all dynamic
   dependencies;
-- Python, Node.js, Rust/C/CUDA compilers, development packages, PyTorch,
+- Python, Node.js, Rust/C/CUDA compilers, build tools, development packages, PyTorch,
   SGLang, vLLM, cuDNN, TensorRT, NPP, cuSPARSE, and NCCL are absent;
 - the application license is the approved Apache-2.0 text and the English Rust
   license report/CycloneDX SBOM pass their structural checks;
@@ -208,16 +312,16 @@ GPU qualification remain post-build digest gates.
 Use these aliases:
 
 ```text
-luka-loehr/qwen3-tts-native:v0.1.0-vd1.7b-cu13.0.3-sm121
-luka-loehr/qwen3-tts-native:git-<12-char-commit>-model-5ecdb67
-luka-loehr/qwen3-tts-native:v0.1.0
-luka-loehr/qwen3-tts-native:latest
+ghcr.io/luka-loehr/qwen3-tts-native:v0.1.0-vd1.7b-cu13.0.3-sm121
+ghcr.io/luka-loehr/qwen3-tts-native:git-<12-char-commit>-model-5ecdb67
+ghcr.io/luka-loehr/qwen3-tts-native:v0.1.0
+ghcr.io/luka-loehr/qwen3-tts-native:latest
 ```
 
 Promote only the accepted digest, never rebuild a mutable alias:
 
 ```bash
-IMAGE=docker.io/luka-loehr/qwen3-tts-native
+IMAGE=ghcr.io/luka-loehr/qwen3-tts-native
 DIGEST=sha256:<accepted-digest>
 
 docker buildx imagetools create --tag "$IMAGE:v0.1.0" "$IMAGE@$DIGEST"
