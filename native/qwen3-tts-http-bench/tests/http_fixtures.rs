@@ -124,6 +124,7 @@ fn config(
             .then(|| "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign".to_owned()),
         workload_path,
         output_dir: directory.0.join("result"),
+        phase_events_path: None,
         requests,
         warmups: 0,
         concurrency,
@@ -586,4 +587,179 @@ async fn warmups_are_validated_but_excluded_from_reports() {
             .len(),
         1
     );
+}
+
+#[tokio::test]
+async fn phase_events_align_exactly_with_measured_wall_time_without_warmups() {
+    let directory = TestDirectory::new("phase-events");
+    let pcm = [1_u8, 0];
+    let mut wire = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: audio/pcm\r\nX-Sample-Rate: 24000\r\nContent-Length: {}\r\n\r\n",
+        pcm.len()
+    )
+    .into_bytes();
+    wire.extend_from_slice(&pcm);
+    let (endpoint, _) = spawn_server(vec![ResponseSpec {
+        fragments: vec![wire],
+        delay: Duration::ZERO,
+    }])
+    .await;
+    let phase_path = directory.0.join("evidence/phase-events.jsonl");
+    let mut configuration = config(
+        &directory,
+        endpoint,
+        BackendProfile::SglangOmni,
+        1,
+        Concurrency::B1,
+    );
+    configuration.phase_events_path = Some(phase_path.clone());
+    run_benchmark(configuration).await.unwrap();
+
+    let events: Vec<Value> = fs::read_to_string(phase_path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(events.len(), 4);
+    assert_eq!(
+        events
+            .iter()
+            .map(|event| event["event"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "warmup_start",
+            "warmup_end",
+            "measured_start",
+            "measured_end"
+        ]
+    );
+    for (sequence, event) in events.iter().enumerate() {
+        assert_eq!(
+            event["schema_version"],
+            "qwen3-tts-http-bench-phase-events/v1"
+        );
+        assert_eq!(event["sequence"].as_u64().unwrap(), sequence as u64);
+        assert!(event["wall_time_unix_ns"].as_u64().unwrap() > 0);
+    }
+    let monotonic: Vec<u64> = events
+        .iter()
+        .map(|event| event["monotonic_elapsed_ns"].as_u64().unwrap())
+        .collect();
+    assert!(monotonic.windows(2).all(|pair| pair[0] <= pair[1]));
+
+    let measured_nanoseconds = monotonic[3] - monotonic[2];
+    let summary: Value =
+        serde_json::from_str(&fs::read_to_string(directory.0.join("result/summary.json")).unwrap())
+            .unwrap();
+    let measured_seconds = Duration::from_nanos(measured_nanoseconds).as_secs_f64();
+    assert!(
+        (summary["benchmark_wall_seconds"].as_f64().unwrap() - measured_seconds).abs()
+            < f64::EPSILON
+    );
+}
+
+#[tokio::test]
+async fn phase_events_refuse_to_overwrite_before_any_request() {
+    let directory = TestDirectory::new("phase-overwrite");
+    let phase_path = directory.0.join("phase-events.jsonl");
+    fs::write(&phase_path, "keep me\n").unwrap();
+    let (endpoint, arrivals) = spawn_server(vec![ResponseSpec {
+        fragments: vec![b"unused".to_vec()],
+        delay: Duration::ZERO,
+    }])
+    .await;
+    let mut configuration = config(
+        &directory,
+        endpoint,
+        BackendProfile::SglangOmni,
+        1,
+        Concurrency::B1,
+    );
+    configuration.phase_events_path = Some(phase_path.clone());
+
+    let error = run_benchmark(configuration).await.unwrap_err();
+    assert!(error.to_string().contains("I/O error"));
+    assert_eq!(fs::read_to_string(phase_path).unwrap(), "keep me\n");
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert!(arrivals.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn phase_events_cannot_alias_a_canonical_report() {
+    let directory = TestDirectory::new("phase-collision");
+    let mut configuration = config(
+        &directory,
+        "http://127.0.0.1:1/v1/test".to_owned(),
+        BackendProfile::SglangOmni,
+        1,
+        Concurrency::B1,
+    );
+    configuration.phase_events_path = Some(directory.0.join("result/intermediate/../summary.json"));
+
+    let error = run_benchmark(configuration).await.unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("must not replace canonical report file summary.json")
+    );
+    assert!(!directory.0.join("result/summary.json").exists());
+}
+
+#[tokio::test]
+async fn phase_events_cannot_replace_the_output_directory() {
+    let directory = TestDirectory::new("phase-output-directory-collision");
+    let (endpoint, arrivals) = spawn_server(vec![ResponseSpec {
+        fragments: vec![b"unused".to_vec()],
+        delay: Duration::ZERO,
+    }])
+    .await;
+    let mut configuration = config(
+        &directory,
+        endpoint,
+        BackendProfile::SglangOmni,
+        1,
+        Concurrency::B1,
+    );
+    configuration.phase_events_path = Some(configuration.output_dir.clone());
+
+    let error = run_benchmark(configuration).await.unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("--phase-events must not replace --output-dir")
+    );
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    assert!(arrivals.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn failed_warmup_retains_a_synced_phase_prefix() {
+    let directory = TestDirectory::new("phase-warmup-failure");
+    let response = b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n".to_vec();
+    let (endpoint, _) = spawn_server(vec![ResponseSpec {
+        fragments: vec![response],
+        delay: Duration::ZERO,
+    }])
+    .await;
+    let phase_path = directory.0.join("phase-events.jsonl");
+    let mut configuration = config(
+        &directory,
+        endpoint,
+        BackendProfile::SglangOmni,
+        1,
+        Concurrency::B1,
+    );
+    configuration.warmups = 1;
+    configuration.phase_events_path = Some(phase_path.clone());
+
+    let error = run_benchmark(configuration).await.unwrap_err();
+    assert!(error.to_string().contains("warmup request"));
+    let events: Vec<Value> = fs::read_to_string(phase_path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["sequence"], 0);
+    assert_eq!(events[0]["event"], "warmup_start");
 }

@@ -14,6 +14,7 @@ use crate::model::{
     load_workload, sha256_hex,
 };
 use crate::multipart::{MultipartReader, Part, boundary_from_content_type};
+use crate::phase_events::{PhaseEvent, PhaseEventLog, validate_path};
 use crate::report::{FailureMetadata, PacketKind, PacketRecord, RequestRecord, write_reports};
 use crate::url::Endpoint;
 use crate::wav::validate_wav;
@@ -45,6 +46,9 @@ pub async fn run_benchmark(config: BenchmarkConfig) -> Result<()> {
     let workload = load_workload(&config.workload_path)?;
 
     let warmups = prepare_requests(&config, &workload, config.warmups)?;
+    let measured = prepare_requests(&config, &workload, config.requests)?;
+    let mut phase_events = PhaseEventLog::create(config.phase_events_path.as_deref())?;
+    phase_events.mark(PhaseEvent::WarmupStart)?;
     if !warmups.is_empty() {
         let outcomes = run_phase(&config, Arc::clone(&endpoint), warmups).await;
         if let Some(failure) = outcomes.iter().find(|outcome| !outcome.record.success) {
@@ -53,28 +57,33 @@ pub async fn run_benchmark(config: BenchmarkConfig) -> Result<()> {
                 .failure
                 .as_ref()
                 .map_or("unknown warmup failure", |item| item.message.as_str());
-            return Err(BenchError::Validation(format!(
+            let error = BenchError::Validation(format!(
                 "warmup request {:?} failed: {detail}",
                 failure.record.workload_id
-            )));
+            ));
+            phase_events.finish(false)?;
+            return Err(error);
         }
     }
+    phase_events.mark(PhaseEvent::WarmupEnd)?;
 
-    let measured = prepare_requests(&config, &workload, config.requests)?;
-    let benchmark_start = Instant::now();
+    let benchmark_start = phase_events.mark(PhaseEvent::MeasuredStart)?;
     let outcomes = run_phase(&config, endpoint, measured).await;
-    let benchmark_wall_seconds = benchmark_start.elapsed().as_secs_f64();
+    let benchmark_end = phase_events.mark(PhaseEvent::MeasuredEnd)?;
+    let benchmark_wall_seconds = benchmark_end.duration_since(benchmark_start).as_secs_f64();
     let mut records = Vec::with_capacity(outcomes.len());
     let mut packets = Vec::new();
     for outcome in outcomes {
         records.push(outcome.record);
         packets.extend(outcome.packets);
     }
+    phase_events.finish(true)?;
     write_reports(&config, &mut records, &mut packets, benchmark_wall_seconds)?;
     Ok(())
 }
 
 fn validate_config(config: &BenchmarkConfig) -> Result<()> {
+    validate_path(config.phase_events_path.as_deref(), &config.output_dir)?;
     if config.requests == 0 {
         return Err(BenchError::Configuration(
             "--requests must be greater than zero".to_owned(),

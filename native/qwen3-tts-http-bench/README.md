@@ -82,7 +82,7 @@ SGLang raw streaming has no in-band start event, end event, usage object, finish
 The workload is deterministic UTF-8 JSONL. Blank lines are ignored; IDs must be unique.
 
 ```json
-{"id":"english-calm-001","text":"Good morning.","voice_description":"A calm adult male voice with measured pacing.","language":"English","seed":42,"sampling":{"strategy":"sample","temperature":0.8,"top_p":0.95,"top_k":50,"repetition_penalty":1.05,"predictor":{"strategy":"sample","temperature":0.9,"top_p":1.0,"top_k":50}},"stream":true}
+{"id":"english-calm-001","text":"Good morning.","voice_description":"A calm adult male voice with measured pacing.","language":"English","seed":42,"sampling":{"strategy":"sample","temperature":0.9,"top_p":1.0,"top_k":50,"repetition_penalty":1.05,"predictor":{"strategy":"sample","temperature":0.9,"top_p":1.0,"top_k":50}},"stream":true}
 ```
 
 Fields:
@@ -132,6 +132,7 @@ Run a 200-request native B1 benchmark:
   --warmups 24 \
   --concurrency B1 \
   --timeout-seconds 600 \
+  --phase-events results/native-b1.phase-events.jsonl \
   --output-dir results/native-b1
 ```
 
@@ -145,6 +146,7 @@ Run a synchronized native B6 benchmark:
   --requests 204 \
   --warmups 24 \
   --concurrency B6 \
+  --phase-events results/native-b6.phase-events.jsonl \
   --output-dir results/native-b6
 ```
 
@@ -160,14 +162,28 @@ Run the same workload against SGLang-Omni:
   --warmups 24 \
   --concurrency B1 \
   --timeout-seconds 600 \
+  --phase-events results/sglang-omni-b1.phase-events.jsonl \
   --output-dir results/sglang-omni-b1
 ```
 
 Use a fresh output directory for every run. The client refuses to overwrite any existing report file.
 
+## External telemetry alignment
+
+`--phase-events PATH` opts into a separate, create-new JSONL evidence file for aligning host, container, process, GPU, power, and energy telemetry. The client refuses to overwrite the path and rejects aliases of the three canonical report files before sending any request. A successful run contains exactly these four records in order, including when the warmup count is zero:
+
+1. `warmup_start`
+2. `warmup_end`
+3. `measured_start`
+4. `measured_end`
+
+Every record uses schema `qwen3-tts-http-bench-phase-events/v1` and contains a zero-based `sequence`, integer `wall_time_unix_ns`, and integer `monotonic_elapsed_ns`. Wall time is sampled from `SystemTime` for cross-process telemetry alignment. Monotonic elapsed time is sampled from `Instant` relative to an origin established immediately after the file is reserved; it is the authoritative clock for within-run intervals. The `benchmark_wall_seconds` value in `summary.json` uses the same `Instant` values captured for `measured_start` and `measured_end`.
+
+The four records are held in memory and written, flushed, and synchronized only after `measured_end`, so phase-evidence I/O cannot enter the measured wall time. A failed warmup synchronizes the valid prefix containing `warmup_start`; an abnormal process termination can leave the already reserved file empty. Treat anything other than exactly four ordered records as an incomplete, non-qualifying run.
+
 ## Outputs
 
-Each run writes exactly three files:
+Each run writes exactly three canonical files under `--output-dir`:
 
 - `requests.jsonl`: one raw measurement record per request, sorted by request index, including normalized sampling evidence and one `audio_sha256` over the complete decoded PCM payload.
 - `packets.jsonl`: one Native application packet or SGLang raw-PCM transport arrival per line, sorted by request and sequence.
@@ -176,6 +192,8 @@ Each run writes exactly three files:
 By default, reports contain workload IDs plus SHA-256 hashes of text, voice description, final request JSON, complete decoded PCM, individual audio packets, and the normalized sampling contract. They do not contain prompt text or PCM bytes. `--log-prompt-text` is an explicit opt-in for controlled local debugging.
 
 HTTP error response bodies are never logged. Only their byte count and SHA-256 are retained.
+
+The optional `--phase-events` file is auxiliary raw evidence, not a fourth canonical report, and does not alter any canonical schema.
 
 ## Fair comparisons
 

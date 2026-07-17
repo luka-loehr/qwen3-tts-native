@@ -30,6 +30,10 @@ struct Cli {
     #[arg(long)]
     output_dir: PathBuf,
 
+    /// Optional create-new JSONL file for externally alignable phase boundaries.
+    #[arg(long)]
+    phase_events: Option<PathBuf>,
+
     /// Number of measured requests; workload entries repeat in file order.
     #[arg(long)]
     requests: usize,
@@ -60,6 +64,7 @@ async fn main() {
         sglang_model: cli.sglang_model,
         workload_path: cli.workload,
         output_dir: cli.output_dir,
+        phase_events_path: cli.phase_events,
         requests: cli.requests,
         warmups: cli.warmups,
         concurrency: cli.concurrency,
