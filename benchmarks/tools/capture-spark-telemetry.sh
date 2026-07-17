@@ -126,7 +126,7 @@ wall_time_unix_ns() {
 }
 
 timestamp_utc() {
-  date --utc --iso-8601=ns
+  LC_ALL=C date --utc '+%Y-%m-%dT%H:%M:%S.%NZ'
 }
 
 csv_quote() {

@@ -19,7 +19,7 @@ create_fixture() {
   local directory=$1
   local competing=$2
   local mode=$3
-  local nanoseconds power process_count sample_competing
+  local nanoseconds power process_count sample_competing timestamp_utc
   mkdir -p "$directory/raw" "$directory/client"
 
   printf '%s\n' \
@@ -49,6 +49,8 @@ create_fixture() {
     fi
     power=50
     ((nanoseconds >= measured_start_ns)) && power=100
+    timestamp_utc=fixture
+    [[ "$mode" == comma-timestamp ]] && timestamp_utc='2026-07-17T15:05:56,123456789Z'
     sample_competing=$competing
     if [[ "$mode" == warmup-competitor ]]; then
       sample_competing=0
@@ -56,26 +58,26 @@ create_fixture() {
         sample_competing=1
       fi
     fi
-    printf '%s,fixture,0,GPU-fixture,P0,40,50,20,%s,1000\n' "$nanoseconds" "$power" \
+    printf '%s,%s,0,GPU-fixture,P0,40,50,20,%s,1000\n' "$nanoseconds" "$timestamp_utc" "$power" \
       >>"$directory/raw/gpu.csv"
-    printf '%s,fixture,1.0,2000,2500,2,1000,100000,200000\n' "$nanoseconds" \
+    printf '%s,%s,1.0,2000,2500,2,1000,100000,200000\n' "$nanoseconds" "$timestamp_utc" \
       >>"$directory/raw/system.csv"
-    printf '%s,fixture,101,1,"server-main",400\n' "$nanoseconds" \
+    printf '%s,%s,101,1,"server-main",400\n' "$nanoseconds" "$timestamp_utc" \
       >>"$directory/raw/process-rss.csv"
-    printf '%s,fixture,102,2,"server-worker",600\n' "$nanoseconds" \
+    printf '%s,%s,102,2,"server-worker",600\n' "$nanoseconds" "$timestamp_utc" \
       >>"$directory/raw/process-rss.csv"
-    printf '%s,fixture,2,2,1000,1\n' "$nanoseconds" \
+    printf '%s,%s,2,2,1000,1\n' "$nanoseconds" "$timestamp_utc" \
       >>"$directory/raw/process-rss-total.csv"
-    printf '%s,fixture,101,1,"server-main",4096\n' "$nanoseconds" \
+    printf '%s,%s,101,1,"server-main",4096\n' "$nanoseconds" "$timestamp_utc" \
       >>"$directory/raw/gpu-processes.csv"
     process_count=1
     if ((sample_competing)); then
-      printf '%s,fixture,999,0,"competitor",1024\n' "$nanoseconds" \
+      printf '%s,%s,999,0,"competitor",1024\n' "$nanoseconds" "$timestamp_utc" \
         >>"$directory/raw/gpu-processes.csv"
       process_count=2
     fi
-    printf '%s,fixture,1,%s,1,%s,4096\n' \
-      "$nanoseconds" "$process_count" "$sample_competing" \
+    printf '%s,%s,1,%s,1,%s,4096\n' \
+      "$nanoseconds" "$timestamp_utc" "$process_count" "$sample_competing" \
       >>"$directory/raw/gpu-process-summary.csv"
   done
 
@@ -177,6 +179,14 @@ create_fixture "$gap_dir" 0 gap
 if bash "$reducer" --run-dir "$gap_dir" --engine native --profile B1 --round 1 \
   --evidence-prefix runs/round-01/native/B1 >/dev/null 2>&1; then
   echo "expected telemetry-gap fixture to fail" >&2
+  exit 1
+fi
+
+comma_timestamp_dir="$temporary_dir/comma-timestamp"
+create_fixture "$comma_timestamp_dir" 0 comma-timestamp
+if bash "$reducer" --run-dir "$comma_timestamp_dir" --engine native --profile B1 --round 1 \
+  --evidence-prefix runs/round-01/native/B1 >/dev/null 2>&1; then
+  echo "expected comma-timestamp fixture to fail" >&2
   exit 1
 fi
 
