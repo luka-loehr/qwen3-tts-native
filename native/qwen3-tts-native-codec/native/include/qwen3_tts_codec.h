@@ -15,6 +15,7 @@ extern "C" {
 
 enum {
     QWEN3_TTS_CODEC_ABI_VERSION_V1 = 1,
+    QWEN3_TTS_CODEC_ABI_VERSION_V2 = 2,
     QWEN3_TTS_CODEC_CODEBOOKS = 16,
     QWEN3_TTS_CODEC_MAX_PACKET_FRAMES = 4,
     QWEN3_TTS_CODEC_SAMPLES_PER_FRAME = 1920,
@@ -170,7 +171,43 @@ typedef struct Qwen3TtsCodecSessionBatchItemV1 {
     Qwen3TtsCodecPacketResultV1* result;
 } Qwen3TtsCodecSessionBatchItemV1;
 
+/* Additive ABI v2 device-code handoff. CUDA event handles are opaque at the
+ * public C boundary so consumers do not need to include CUDA headers. */
+typedef void* Qwen3TtsCodecCudaEventV2;
+
+typedef struct Qwen3TtsCodecDevicePacketBeginV2 {
+    uint32_t struct_size;
+    uint32_t reserved;
+    const uint16_t* device_codec_frames;
+    uint32_t frame_count;
+    uint32_t reserved_2;
+    Qwen3TtsCodecCudaEventV2 producer_ready_event;
+    uint64_t reserved_3;
+} Qwen3TtsCodecDevicePacketBeginV2;
+
+typedef struct Qwen3TtsCodecDevicePacketBeginResultV2 {
+    uint32_t struct_size;
+    uint32_t reserved;
+    uint64_t ticket_id;
+    Qwen3TtsCodecCudaEventV2 codes_consumed_event;
+    uint64_t reserved_2;
+} Qwen3TtsCodecDevicePacketBeginResultV2;
+
+typedef struct Qwen3TtsCodecDevicePacketFinishV2 {
+    uint32_t struct_size;
+    uint32_t reserved;
+    uint64_t ticket_id;
+    int32_t is_final;
+    uint32_t reserved_2;
+    int16_t* pcm_output;
+    size_t pcm_capacity_samples;
+    Qwen3TtsCodecPacketResultV1* result;
+    uint64_t reserved_3;
+} Qwen3TtsCodecDevicePacketFinishV2;
+
 QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_abi_version_v1(void);
+
+QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_abi_version_v2(void);
 
 QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_create_v1(
     const Qwen3TtsCodecConfigV1* config,
@@ -401,6 +438,39 @@ QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_session_process_packet_v1(
     int16_t* pcm_output,
     size_t pcm_capacity_samples,
     Qwen3TtsCodecPacketResultV1* result,
+    char* error,
+    size_t error_capacity
+);
+
+/* Queue a packet whose frame-major [frame_count, 16] codes already reside on
+ * the session's CUDA device. The producer must enqueue a record of
+ * producer_ready_event before this call and keep both the event and source
+ * allocation alive until codes_consumed_event completes. The returned event
+ * is borrowed from the codec session and remains owned by that session. Its
+ * handle remains valid until session destruction, but its recorded completion
+ * is ticket-scoped and may be replaced by the next successful begin call.
+ *
+ * Begin performs a stream wait, snapshots 1-4 frames D2D into the existing
+ * codec ring, records codes_consumed_event, queues the complete decoder and
+ * pinned-host PCM copy, and returns without synchronizing. Exactly one ticket
+ * may be pending per session. All struct_size fields must equal sizeof(the
+ * corresponding struct), and every reserved field must be zero. */
+QWEN3_TTS_CODEC_API int32_t
+qwen3_tts_codec_session_process_device_packet_begin_v2(
+    Qwen3TtsCodecSessionV1* session,
+    const Qwen3TtsCodecDevicePacketBeginV2* request,
+    Qwen3TtsCodecDevicePacketBeginResultV2* output,
+    char* error,
+    size_t error_capacity
+);
+
+/* Complete the matching ticket, copy already-staged pinned PCM into the
+ * caller's host buffer, and atomically commit stream metadata. A mismatched or
+ * stale ticket is rejected without changing committed state. */
+QWEN3_TTS_CODEC_API int32_t
+qwen3_tts_codec_session_process_device_packet_finish_v2(
+    Qwen3TtsCodecSessionV1* session,
+    const Qwen3TtsCodecDevicePacketFinishV2* request,
     char* error,
     size_t error_capacity
 );

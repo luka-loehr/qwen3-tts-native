@@ -131,6 +131,8 @@ constexpr int32_t kStatusCuda = QWEN3_TTS_CODEC_STATUS_CUDA;
 constexpr int32_t kStatusState = QWEN3_TTS_CODEC_STATUS_STATE;
 constexpr int32_t kStatusAllocation = QWEN3_TTS_CODEC_STATUS_ALLOCATION;
 constexpr int32_t kStatusModel = QWEN3_TTS_CODEC_STATUS_MODEL;
+
+static_assert(sizeof(Qwen3TtsCodecCudaEventV2) == sizeof(cudaEvent_t));
 constexpr uint32_t kExpectedDecoderTensors = 271;
 constexpr size_t kBf16UploadStagingBytes = 8ULL * 1024 * 1024;
 
@@ -893,6 +895,7 @@ struct Qwen3TtsCodecContextV1 {
     cublasHandle_t cublas = nullptr;
     cudaEvent_t start_event = nullptr;
     cudaEvent_t stop_event = nullptr;
+    cudaEvent_t codes_consumed_event = nullptr;
     uint16_t* codec_ring = nullptr;
     int16_t* pcm_ring = nullptr;
     int16_t* host_pcm_ring = nullptr;
@@ -924,10 +927,16 @@ struct Qwen3TtsCodecContextV1 {
     uint64_t frame_position = 0;
     uint64_t emitted_samples = 0;
     uint64_t neural_frame_position = 0;
+    uint64_t next_device_ticket_id = 1;
+    uint64_t pending_device_ticket_id = 0;
+    std::chrono::steady_clock::time_point pending_end_to_end_start{};
     uint32_t next_ring_slot = 0;
     uint32_t kv_ring_head = 0;
+    uint32_t pending_frame_count = 0;
+    uint32_t pending_ring_slot = 0;
     bool finalized = false;
     bool cancelled = false;
+    bool device_packet_pending = false;
     bool counts_as_shared_session = false;
     Qwen3TtsCodecModelV1* model = nullptr;
 };
@@ -2249,6 +2258,9 @@ void release_context(Qwen3TtsCodecContextV1* context) noexcept {
     if (context->stop_event != nullptr) {
         cudaEventDestroy(context->stop_event);
     }
+    if (context->codes_consumed_event != nullptr) {
+        cudaEventDestroy(context->codes_consumed_event);
+    }
     if (context->cublas != nullptr) {
         cublasDestroy(context->cublas);
     }
@@ -2344,10 +2356,14 @@ int32_t reset_device_state(
     context->frame_position = 0;
     context->emitted_samples = 0;
     context->neural_frame_position = 0;
+    context->pending_device_ticket_id = 0;
     context->next_ring_slot = 0;
     context->kv_ring_head = 0;
+    context->pending_frame_count = 0;
+    context->pending_ring_slot = 0;
     context->finalized = false;
     context->cancelled = false;
+    context->device_packet_pending = false;
     return kStatusOk;
 }
 
@@ -2403,6 +2419,10 @@ int32_t launch_transpose(
 
 extern "C" QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_abi_version_v1(void) {
     return QWEN3_TTS_CODEC_ABI_VERSION_V1;
+}
+
+extern "C" QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_abi_version_v2(void) {
+    return QWEN3_TTS_CODEC_ABI_VERSION_V2;
 }
 
 extern "C" QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_create_v1(
@@ -2468,6 +2488,11 @@ extern "C" QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_create_v1(
     }
     if (status == cudaSuccess) {
         status = cudaEventCreate(&context->stop_event);
+    }
+    if (status == cudaSuccess) {
+        status = cudaEventCreateWithFlags(
+            &context->codes_consumed_event, cudaEventDisableTiming
+        );
     }
     if (status == cudaSuccess) {
         status = allocate_device(&context->codec_ring, kCodecRingElements);
@@ -2875,25 +2900,14 @@ extern "C" QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_model_info_v1(
 
 namespace {
 
-int32_t run_frontend_device(
+int32_t run_frontend_staged_device(
     Qwen3TtsCodecContextV1* context,
-    const uint16_t* codec_frames,
-    uint16_t* device_codes,
+    const uint16_t* device_codes,
     uint32_t frame_count,
     char* error,
     size_t error_capacity
 ) noexcept {
-    cudaError_t status = cudaMemcpyAsync(
-        device_codes,
-        codec_frames,
-        static_cast<size_t>(frame_count) * QWEN3_TTS_CODEC_CODEBOOKS * sizeof(uint16_t),
-        cudaMemcpyHostToDevice,
-        context->stream
-    );
-    if (status != cudaSuccess) {
-        return cuda_error(error, error_capacity, "upload frontend codes", status);
-    }
-
+    cudaError_t status = cudaSuccess;
     float* semantic = context->frontend_quantized;
     float* acoustic = context->frontend_quantized +
                       QWEN3_TTS_CODEC_MAX_PACKET_FRAMES * 256;
@@ -3096,6 +3110,10 @@ qwen3_tts_codec_debug_frontend_packet_v1(
     }
     if (context->model->model_info.loaded == 0) {
         write_error(error, error_capacity, "decoder model is not loaded");
+        return kStatusState;
+    }
+    if (context->device_packet_pending) {
+        write_error(error, error_capacity, "a device packet ticket is already pending");
         return kStatusState;
     }
     cudaError_t status = cudaSetDevice(context->device_index);
@@ -3517,38 +3535,41 @@ qwen3_tts_codec_debug_decoder_checkpoint_v1(
     );
 }
 
-extern "C" QWEN3_TTS_CODEC_API int32_t
-qwen3_tts_codec_process_packet_v1(
+namespace {
+
+uint16_t* codec_ring_slot(
     Qwen3TtsCodecContextV1* context,
-    const uint16_t* codec_frames,
+    uint32_t slot
+) noexcept {
+    return context->codec_ring +
+           static_cast<size_t>(slot) * QWEN3_TTS_CODEC_MAX_PACKET_FRAMES *
+               QWEN3_TTS_CODEC_CODEBOOKS;
+}
+
+int16_t* device_pcm_ring_slot(
+    Qwen3TtsCodecContextV1* context,
+    uint32_t slot
+) noexcept {
+    return context->pcm_ring +
+           static_cast<size_t>(slot) * QWEN3_TTS_CODEC_MAX_PACKET_SAMPLES;
+}
+
+int16_t* host_pcm_ring_slot(
+    Qwen3TtsCodecContextV1* context,
+    uint32_t slot
+) noexcept {
+    return context->host_pcm_ring +
+           static_cast<size_t>(slot) * QWEN3_TTS_CODEC_MAX_PACKET_SAMPLES;
+}
+
+int32_t validate_neural_packet_state(
+    const Qwen3TtsCodecContextV1* context,
     uint32_t frame_count,
-    int32_t is_final,
-    int16_t* pcm_output,
-    size_t pcm_capacity_samples,
-    Qwen3TtsCodecPacketResultV1* result,
     char* error,
     size_t error_capacity
-) {
-    clear_error(error, error_capacity);
-    if (context == nullptr || codec_frames == nullptr || pcm_output == nullptr ||
-        result == nullptr) {
-        write_error(
-            error,
-            error_capacity,
-            "context, codec frames, PCM output, and result are required"
-        );
-        return kStatusInvalidArgument;
-    }
-    if (frame_count == 0 ||
-        frame_count > QWEN3_TTS_CODEC_MAX_PACKET_FRAMES ||
-        (is_final != 0 && is_final != 1)) {
+) noexcept {
+    if (frame_count == 0 || frame_count > QWEN3_TTS_CODEC_MAX_PACKET_FRAMES) {
         write_error(error, error_capacity, "packet must contain 1-4 frames");
-        return kStatusInvalidArgument;
-    }
-    const size_t sample_count =
-        static_cast<size_t>(frame_count) * QWEN3_TTS_CODEC_SAMPLES_PER_FRAME;
-    if (pcm_capacity_samples < sample_count) {
-        write_error(error, error_capacity, "PCM output capacity is too small");
         return kStatusInvalidArgument;
     }
     if (context->model->model_info.loaded == 0) {
@@ -3559,35 +3580,25 @@ qwen3_tts_codec_process_packet_v1(
         write_error(error, error_capacity, "stream is finalized; reset is required");
         return kStatusState;
     }
-    cudaError_t status = cudaSetDevice(context->device_index);
-    if (status != cudaSuccess) {
-        return cuda_error(error, error_capacity, "select CUDA device", status);
+    if (context->device_packet_pending) {
+        write_error(error, error_capacity, "a device packet ticket is already pending");
+        return kStatusState;
     }
+    return kStatusOk;
+}
 
-    const auto end_to_end_start = std::chrono::steady_clock::now();
-    const uint32_t slot = context->next_ring_slot;
-    uint16_t* codec_slot =
-        context->codec_ring +
-        static_cast<size_t>(slot) * QWEN3_TTS_CODEC_MAX_PACKET_FRAMES *
-            QWEN3_TTS_CODEC_CODEBOOKS;
-    int16_t* pcm_slot =
-        context->pcm_ring +
-        static_cast<size_t>(slot) * QWEN3_TTS_CODEC_MAX_PACKET_SAMPLES;
-    int16_t* host_pcm_slot =
-        context->host_pcm_ring +
-        static_cast<size_t>(slot) * QWEN3_TTS_CODEC_MAX_PACKET_SAMPLES;
-
-    status = cudaEventRecord(context->start_event, context->stream);
-    if (status != cudaSuccess) {
-        return cuda_error(error, error_capacity, "start packet timing", status);
-    }
-    int32_t pipeline_status = run_frontend_device(
-        context,
-        codec_frames,
-        codec_slot,
-        frame_count,
-        error,
-        error_capacity
+int32_t enqueue_staged_neural_packet(
+    Qwen3TtsCodecContextV1* context,
+    const uint16_t* staged_codes,
+    uint32_t frame_count,
+    uint32_t slot,
+    char* error,
+    size_t error_capacity
+) noexcept {
+    const size_t sample_count =
+        static_cast<size_t>(frame_count) * QWEN3_TTS_CODEC_SAMPLES_PER_FRAME;
+    int32_t pipeline_status = run_frontend_staged_device(
+        context, staged_codes, frame_count, error, error_capacity
     );
     if (pipeline_status != kStatusOk) {
         return pipeline_status;
@@ -3596,7 +3607,7 @@ qwen3_tts_codec_process_packet_v1(
         pipeline_status = run_transformer_frame(
             context,
             context->frontend_preconv + static_cast<size_t>(frame) * 1024,
-            context->neural_frame_position,
+            context->neural_frame_position + frame,
             context->transformer_packet + static_cast<size_t>(frame) * 1024,
             error,
             error_capacity
@@ -3604,7 +3615,6 @@ qwen3_tts_codec_process_packet_v1(
         if (pipeline_status != kStatusOk) {
             return pipeline_status;
         }
-        context->neural_frame_position += 1;
     }
     float* latent = nullptr;
     size_t latent_positions = 0;
@@ -3642,14 +3652,16 @@ qwen3_tts_codec_process_packet_v1(
         write_error(error, error_capacity, "waveform decoder returned an invalid length");
         return kStatusState;
     }
+
+    int16_t* pcm_slot = device_pcm_ring_slot(context, slot);
     waveform_to_pcm_kernel<<<
         blocks_for(sample_count), 256, 0, context->stream>>>(
         waveform, sample_count, pcm_slot
     );
-    status = cudaGetLastError();
+    cudaError_t status = cudaGetLastError();
     if (status == cudaSuccess) {
         status = cudaMemcpyAsync(
-            host_pcm_slot,
+            host_pcm_ring_slot(context, slot),
             pcm_slot,
             sample_count * sizeof(int16_t),
             cudaMemcpyDeviceToHost,
@@ -3659,9 +3671,23 @@ qwen3_tts_codec_process_packet_v1(
     if (status == cudaSuccess) {
         status = cudaEventRecord(context->stop_event, context->stream);
     }
-    if (status == cudaSuccess) {
-        status = cudaEventSynchronize(context->stop_event);
-    }
+    return status == cudaSuccess
+               ? kStatusOk
+               : cuda_error(error, error_capacity, "complete neural decoder packet", status);
+}
+
+int32_t finish_staged_neural_packet(
+    Qwen3TtsCodecContextV1* context,
+    uint32_t slot,
+    uint32_t frame_count,
+    int32_t is_final,
+    int16_t* pcm_output,
+    Qwen3TtsCodecPacketResultV1* result,
+    const std::chrono::steady_clock::time_point& end_to_end_start,
+    char* error,
+    size_t error_capacity
+) noexcept {
+    cudaError_t status = cudaEventSynchronize(context->stop_event);
     if (status != cudaSuccess) {
         return cuda_error(error, error_capacity, "complete neural decoder packet", status);
     }
@@ -3673,22 +3699,26 @@ qwen3_tts_codec_process_packet_v1(
     if (status != cudaSuccess) {
         return cuda_error(error, error_capacity, "measure packet GPU time", status);
     }
-    std::memcpy(pcm_output, host_pcm_slot, sample_count * sizeof(int16_t));
+    const size_t sample_count =
+        static_cast<size_t>(frame_count) * QWEN3_TTS_CODEC_SAMPLES_PER_FRAME;
+    std::memcpy(
+        pcm_output, host_pcm_ring_slot(context, slot), sample_count * sizeof(int16_t)
+    );
 
     const uint64_t first_frame = context->frame_position;
     const uint64_t first_sample = context->emitted_samples;
     context->frame_position += frame_count;
     context->emitted_samples += sample_count;
-    context->kv_ring_head =
-        static_cast<uint32_t>(context->neural_frame_position % QWEN3_TTS_CODEC_KV_WINDOW);
-    context->next_ring_slot =
-        (context->next_ring_slot + 1) % context->ring_slots;
+    context->neural_frame_position += frame_count;
+    context->kv_ring_head = static_cast<uint32_t>(
+        context->neural_frame_position % QWEN3_TTS_CODEC_KV_WINDOW
+    );
+    context->next_ring_slot = (context->next_ring_slot + 1) % context->ring_slots;
     context->finalized = is_final != 0;
 
-    const auto end_to_end_stop = std::chrono::steady_clock::now();
     const float end_to_end_microseconds =
         std::chrono::duration<float, std::micro>(
-            end_to_end_stop - end_to_end_start
+            std::chrono::steady_clock::now() - end_to_end_start
         )
             .count();
     *result = Qwen3TtsCodecPacketResultV1{
@@ -3702,6 +3732,90 @@ qwen3_tts_codec_process_packet_v1(
         end_to_end_microseconds,
     };
     return kStatusOk;
+}
+
+}  // namespace
+
+extern "C" QWEN3_TTS_CODEC_API int32_t
+qwen3_tts_codec_process_packet_v1(
+    Qwen3TtsCodecContextV1* context,
+    const uint16_t* codec_frames,
+    uint32_t frame_count,
+    int32_t is_final,
+    int16_t* pcm_output,
+    size_t pcm_capacity_samples,
+    Qwen3TtsCodecPacketResultV1* result,
+    char* error,
+    size_t error_capacity
+) {
+    clear_error(error, error_capacity);
+    if (context == nullptr || codec_frames == nullptr || pcm_output == nullptr ||
+        result == nullptr) {
+        write_error(
+            error,
+            error_capacity,
+            "context, codec frames, PCM output, and result are required"
+        );
+        return kStatusInvalidArgument;
+    }
+    if (frame_count == 0 ||
+        frame_count > QWEN3_TTS_CODEC_MAX_PACKET_FRAMES ||
+        (is_final != 0 && is_final != 1)) {
+        write_error(error, error_capacity, "packet must contain 1-4 frames");
+        return kStatusInvalidArgument;
+    }
+    const int32_t validation = validate_neural_packet_state(
+        context, frame_count, error, error_capacity
+    );
+    if (validation != kStatusOk) {
+        return validation;
+    }
+    const size_t sample_count =
+        static_cast<size_t>(frame_count) * QWEN3_TTS_CODEC_SAMPLES_PER_FRAME;
+    if (pcm_capacity_samples < sample_count) {
+        write_error(error, error_capacity, "PCM output capacity is too small");
+        return kStatusInvalidArgument;
+    }
+
+    cudaError_t status = cudaSetDevice(context->device_index);
+    if (status != cudaSuccess) {
+        return cuda_error(error, error_capacity, "select CUDA device", status);
+    }
+    const auto end_to_end_start = std::chrono::steady_clock::now();
+    const uint32_t slot = context->next_ring_slot;
+    uint16_t* staged_codes = codec_ring_slot(context, slot);
+    status = cudaEventRecord(context->start_event, context->stream);
+    if (status != cudaSuccess) {
+        return cuda_error(error, error_capacity, "start packet timing", status);
+    }
+    status = cudaMemcpyAsync(
+        staged_codes,
+        codec_frames,
+        static_cast<size_t>(frame_count) * QWEN3_TTS_CODEC_CODEBOOKS *
+            sizeof(uint16_t),
+        cudaMemcpyHostToDevice,
+        context->stream
+    );
+    if (status != cudaSuccess) {
+        return cuda_error(error, error_capacity, "upload frontend codes", status);
+    }
+    const int32_t enqueue_status = enqueue_staged_neural_packet(
+        context, staged_codes, frame_count, slot, error, error_capacity
+    );
+    if (enqueue_status != kStatusOk) {
+        return enqueue_status;
+    }
+    return finish_staged_neural_packet(
+        context,
+        slot,
+        frame_count,
+        is_final,
+        pcm_output,
+        result,
+        end_to_end_start,
+        error,
+        error_capacity
+    );
 }
 
 extern "C" QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_warmup_v1(
@@ -3720,7 +3834,7 @@ extern "C" QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_warmup_v1(
     }
     if (context->frame_position != 0 || context->neural_frame_position != 0 ||
         context->emitted_samples != 0 || context->next_ring_slot != 0 ||
-        context->finalized) {
+        context->finalized || context->device_packet_pending) {
         write_error(error, error_capacity, "warmup requires a fresh decoder state");
         return kStatusState;
     }
@@ -3824,7 +3938,7 @@ qwen3_tts_codec_process_fixture_packet_v1(
         write_error(error, error_capacity, "PCM output capacity is too small");
         return kStatusInvalidArgument;
     }
-    if (context->finalized) {
+    if (context->finalized || context->device_packet_pending) {
         write_error(error, error_capacity, "stream is finalized; reset is required");
         return kStatusState;
     }
@@ -4294,6 +4408,10 @@ extern "C" QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_session_cancel_v1(
     if (status != cudaSuccess) {
         return cuda_error(error, error_capacity, "cancel decoder session", status);
     }
+    session->pending_device_ticket_id = 0;
+    session->pending_frame_count = 0;
+    session->pending_ring_slot = 0;
+    session->device_packet_pending = false;
     session->cancelled = true;
     return kStatusOk;
 }
@@ -4366,6 +4484,238 @@ qwen3_tts_codec_session_process_packet_v1(
         error,
         error_capacity
     );
+}
+
+namespace {
+
+void clear_pending_device_packet(Qwen3TtsCodecSessionV1* session) noexcept {
+    session->pending_device_ticket_id = 0;
+    session->pending_frame_count = 0;
+    session->pending_ring_slot = 0;
+    session->device_packet_pending = false;
+}
+
+int32_t poison_device_packet_after_enqueue_failure(
+    Qwen3TtsCodecSessionV1* session,
+    int32_t original_status
+) noexcept {
+    cudaStreamSynchronize(session->stream);
+    clear_pending_device_packet(session);
+    session->cancelled = true;
+    return original_status;
+}
+
+bool valid_device_begin_request(
+    const Qwen3TtsCodecDevicePacketBeginV2* request
+) noexcept {
+    return request->struct_size == sizeof(Qwen3TtsCodecDevicePacketBeginV2) &&
+           request->reserved == 0 && request->reserved_2 == 0 &&
+           request->reserved_3 == 0;
+}
+
+bool valid_device_begin_output(
+    const Qwen3TtsCodecDevicePacketBeginResultV2* output
+) noexcept {
+    return output->struct_size ==
+               sizeof(Qwen3TtsCodecDevicePacketBeginResultV2) &&
+           output->reserved == 0 && output->reserved_2 == 0;
+}
+
+bool valid_device_finish_request(
+    const Qwen3TtsCodecDevicePacketFinishV2* request
+) noexcept {
+    return request->struct_size == sizeof(Qwen3TtsCodecDevicePacketFinishV2) &&
+           request->reserved == 0 && request->reserved_2 == 0 &&
+           request->reserved_3 == 0;
+}
+
+}  // namespace
+
+extern "C" QWEN3_TTS_CODEC_API int32_t
+qwen3_tts_codec_session_process_device_packet_begin_v2(
+    Qwen3TtsCodecSessionV1* session,
+    const Qwen3TtsCodecDevicePacketBeginV2* request,
+    Qwen3TtsCodecDevicePacketBeginResultV2* output,
+    char* error,
+    size_t error_capacity
+) {
+    clear_error(error, error_capacity);
+    if (session == nullptr || request == nullptr || output == nullptr) {
+        write_error(error, error_capacity, "session, begin request, and output are required");
+        return kStatusInvalidArgument;
+    }
+    if (!valid_device_begin_request(request) ||
+        !valid_device_begin_output(output)) {
+        write_error(
+            error,
+            error_capacity,
+            "device begin structs must have exact struct_size and zero reserved fields"
+        );
+        return kStatusInvalidArgument;
+    }
+    output->ticket_id = 0;
+    output->codes_consumed_event = nullptr;
+    if (request->device_codec_frames == nullptr ||
+        request->producer_ready_event == nullptr) {
+        write_error(error, error_capacity, "device codes and producer event are required");
+        return kStatusInvalidArgument;
+    }
+    const int32_t validation = validate_neural_packet_state(
+        session, request->frame_count, error, error_capacity
+    );
+    if (validation != kStatusOk) {
+        return validation;
+    }
+    if (session->next_device_ticket_id == UINT64_MAX) {
+        write_error(error, error_capacity, "device packet ticket space is exhausted");
+        return kStatusState;
+    }
+
+    cudaError_t status = cudaSetDevice(session->device_index);
+    if (status != cudaSuccess) {
+        return cuda_error(error, error_capacity, "select CUDA device", status);
+    }
+    cudaPointerAttributes attributes{};
+    status = cudaPointerGetAttributes(
+        &attributes, request->device_codec_frames
+    );
+    if (status != cudaSuccess) {
+        return cuda_error(error, error_capacity, "inspect device codec pointer", status);
+    }
+    if (attributes.type != cudaMemoryTypeDevice ||
+        attributes.device != session->device_index) {
+        write_error(
+            error,
+            error_capacity,
+            "codec pointer must be device memory on the session CUDA device"
+        );
+        return kStatusInvalidArgument;
+    }
+
+    const auto end_to_end_start = std::chrono::steady_clock::now();
+    const uint32_t slot = session->next_ring_slot;
+    uint16_t* staged_codes = codec_ring_slot(session, slot);
+    const auto ready_event = reinterpret_cast<cudaEvent_t>(
+        request->producer_ready_event
+    );
+    status = cudaStreamWaitEvent(session->stream, ready_event, 0);
+    if (status == cudaSuccess) {
+        status = cudaEventRecord(session->start_event, session->stream);
+    }
+    if (status == cudaSuccess) {
+        status = cudaMemcpyAsync(
+            staged_codes,
+            request->device_codec_frames,
+            static_cast<size_t>(request->frame_count) *
+                QWEN3_TTS_CODEC_CODEBOOKS * sizeof(uint16_t),
+            cudaMemcpyDeviceToDevice,
+            session->stream
+        );
+    }
+    if (status == cudaSuccess) {
+        status = cudaEventRecord(
+            session->codes_consumed_event, session->stream
+        );
+    }
+    if (status != cudaSuccess) {
+        const int32_t failure = cuda_error(
+            error, error_capacity, "queue device codec snapshot", status
+        );
+        return poison_device_packet_after_enqueue_failure(session, failure);
+    }
+
+    const int32_t enqueue_status = enqueue_staged_neural_packet(
+        session,
+        staged_codes,
+        request->frame_count,
+        slot,
+        error,
+        error_capacity
+    );
+    if (enqueue_status != kStatusOk) {
+        return poison_device_packet_after_enqueue_failure(
+            session, enqueue_status
+        );
+    }
+
+    const uint64_t ticket_id = session->next_device_ticket_id++;
+    session->pending_device_ticket_id = ticket_id;
+    session->pending_frame_count = request->frame_count;
+    session->pending_ring_slot = slot;
+    session->pending_end_to_end_start = end_to_end_start;
+    session->device_packet_pending = true;
+    output->ticket_id = ticket_id;
+    output->codes_consumed_event = reinterpret_cast<void*>(
+        session->codes_consumed_event
+    );
+    return kStatusOk;
+}
+
+extern "C" QWEN3_TTS_CODEC_API int32_t
+qwen3_tts_codec_session_process_device_packet_finish_v2(
+    Qwen3TtsCodecSessionV1* session,
+    const Qwen3TtsCodecDevicePacketFinishV2* request,
+    char* error,
+    size_t error_capacity
+) {
+    clear_error(error, error_capacity);
+    if (session == nullptr || request == nullptr) {
+        write_error(error, error_capacity, "session and finish request are required");
+        return kStatusInvalidArgument;
+    }
+    if (!valid_device_finish_request(request)) {
+        write_error(
+            error,
+            error_capacity,
+            "device finish struct must have exact struct_size and zero reserved fields"
+        );
+        return kStatusInvalidArgument;
+    }
+    if (request->is_final != 0 && request->is_final != 1) {
+        write_error(error, error_capacity, "is_final must be zero or one");
+        return kStatusInvalidArgument;
+    }
+    if (request->pcm_output == nullptr || request->result == nullptr) {
+        write_error(error, error_capacity, "PCM output and packet result are required");
+        return kStatusInvalidArgument;
+    }
+    if (!session->device_packet_pending ||
+        request->ticket_id != session->pending_device_ticket_id) {
+        write_error(error, error_capacity, "device packet ticket is stale or does not match");
+        return kStatusState;
+    }
+    const size_t sample_count =
+        static_cast<size_t>(session->pending_frame_count) *
+        QWEN3_TTS_CODEC_SAMPLES_PER_FRAME;
+    if (request->pcm_capacity_samples < sample_count) {
+        write_error(error, error_capacity, "PCM output capacity is too small");
+        return kStatusInvalidArgument;
+    }
+
+    const cudaError_t set_device_status = cudaSetDevice(session->device_index);
+    if (set_device_status != cudaSuccess) {
+        return cuda_error(
+            error, error_capacity, "select CUDA device", set_device_status
+        );
+    }
+    const int32_t finish_status = finish_staged_neural_packet(
+        session,
+        session->pending_ring_slot,
+        session->pending_frame_count,
+        request->is_final,
+        request->pcm_output,
+        request->result,
+        session->pending_end_to_end_start,
+        error,
+        error_capacity
+    );
+    if (finish_status != kStatusOk) {
+        clear_pending_device_packet(session);
+        session->cancelled = true;
+        return finish_status;
+    }
+    clear_pending_device_packet(session);
+    return kStatusOk;
 }
 
 extern "C" QWEN3_TTS_CODEC_API int32_t
