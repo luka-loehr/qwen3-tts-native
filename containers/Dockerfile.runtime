@@ -1,0 +1,310 @@
+# syntax=docker/dockerfile:1.21.0@sha256:27f9262d43452075f3c410287a2c43f5ef1bf7ec2bb06e8c9eeb1b8d453087bc
+
+ARG SOURCE_DATE_EPOCH=0
+
+FROM --platform=linux/arm64 rust:1.97.0-bookworm@sha256:4334151ca823b4a52237f3a2d1b16973d6c3c0dd2a7e0ec66a9a8947713d4fa4 AS rust-source
+ARG TARGETARCH
+ARG SOURCE_DATE_EPOCH
+RUN test "${TARGETARCH}" = "arm64"
+WORKDIR /src
+COPY LICENSE ./LICENSE
+COPY native/ ./native/
+COPY benchmarks/results/voice-design-model-inventory.json \
+     benchmarks/results/speech-tokenizer-model-inventory.json \
+     ./benchmarks/results/
+ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} \
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 \
+    CARGO_PROFILE_RELEASE_DEBUG=0 \
+    CARGO_PROFILE_RELEASE_LTO=thin
+
+FROM rust-source AS artifact-verifier-build
+RUN --mount=type=cache,id=qwen3-tts-native-cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=qwen3-tts-native-cargo-git,target=/usr/local/cargo/git \
+    --mount=type=cache,id=qwen3-tts-native-artifact-target,target=/src/native/qwen3-tts-native/target \
+    cargo build --locked --release \
+      --manifest-path native/qwen3-tts-native/Cargo.toml \
+      --bin load_artifact \
+ && install -D -m 0555 \
+      native/qwen3-tts-native/target/release/load_artifact \
+      /out/load_artifact
+
+FROM rust-source AS rust-runtime-build
+RUN --mount=type=cache,id=qwen3-tts-native-cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=qwen3-tts-native-cargo-git,target=/usr/local/cargo/git \
+    --mount=type=cache,id=qwen3-tts-native-runtime-target,target=/src/native/qwen3-tts-runtime/target \
+    cargo build --locked --release \
+      --manifest-path native/qwen3-tts-runtime/Cargo.toml \
+      --lib \
+ && strip --strip-unneeded \
+      native/qwen3-tts-runtime/target/release/libqwen3_tts_runtime.so \
+ && readelf -h native/qwen3-tts-runtime/target/release/libqwen3_tts_runtime.so \
+      | grep -q 'Machine:.*AArch64' \
+ && install -D -m 0555 \
+      native/qwen3-tts-runtime/target/release/libqwen3_tts_runtime.so \
+      /out/lib/libqwen3_tts_runtime.so
+
+RUN --mount=type=cache,id=qwen3-tts-native-cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=qwen3-tts-native-cargo-git,target=/usr/local/cargo/git \
+    --mount=type=cache,id=qwen3-tts-native-server-target,target=/src/native/qwen3-tts-server/target \
+    cargo build --locked --release \
+      --manifest-path native/qwen3-tts-server/Cargo.toml \
+      --bin qwen3-tts-server \
+      --bin qwen3-tts-healthcheck \
+ && strip --strip-unneeded \
+      native/qwen3-tts-server/target/release/qwen3-tts-server \
+      native/qwen3-tts-server/target/release/qwen3-tts-healthcheck \
+ && readelf -h native/qwen3-tts-server/target/release/qwen3-tts-server \
+      | grep -q 'Machine:.*AArch64' \
+ && readelf -h native/qwen3-tts-server/target/release/qwen3-tts-healthcheck \
+      | grep -q 'Machine:.*AArch64' \
+ && install -D -m 0555 \
+      native/qwen3-tts-server/target/release/qwen3-tts-server \
+      /out/bin/qwen3-tts-server \
+ && install -D -m 0555 \
+      native/qwen3-tts-server/target/release/qwen3-tts-healthcheck \
+      /out/bin/qwen3-tts-healthcheck
+
+FROM --platform=linux/arm64 nvidia/cuda:13.0.3-devel-ubuntu24.04@sha256:2396393dc8a031a6faf810894ec8e40c8d80e2a1177cfda0c2bf81acac9aa240 AS cuda-build
+ARG TARGETARCH
+ARG SOURCE_DATE_EPOCH
+RUN test "${TARGETARCH}" = "arm64"
+ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      binutils \
+      cmake \
+      ninja-build \
+ && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY native/qwen3-tts-native/native/ ./talker/
+COPY native/qwen3-tts-native-codec/native/ ./codec/
+RUN set -eu; \
+    cmake -S /src/talker -B /build/talker -G Ninja \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_CUDA_ARCHITECTURES=121-real; \
+    cmake --build /build/talker --parallel; \
+    cmake -S /src/codec -B /build/codec -G Ninja \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_CUDA_ARCHITECTURES=121-real; \
+    cmake --build /build/codec --parallel; \
+    strip --strip-unneeded \
+      /build/talker/libqwen3_tts_cuda.so \
+      /build/codec/libqwen3_tts_codec_cuda.so; \
+    for library in \
+      /build/talker/libqwen3_tts_cuda.so \
+      /build/codec/libqwen3_tts_codec_cuda.so; \
+    do \
+      readelf -h "${library}" | grep -q 'Machine:.*AArch64'; \
+      architectures="$(cuobjdump --list-elf "${library}" 2>&1 \
+        | sed -n 's/.*\.\(sm_[^.]*\)\.cubin.*/\1/p' \
+        | sort -u)"; \
+      test "${architectures}" = "sm_121"; \
+      cuobjdump --list-ptx "${library}" >/tmp/cuda-ptx.txt 2>&1; \
+      grep -Fq 'No PTX file found' /tmp/cuda-ptx.txt; \
+      cuobjdump --dump-sass --gpu-architecture sm_121 "${library}" \
+        >/tmp/cuda-sass.txt 2>&1; \
+      grep -Fq 'code for sm_121' /tmp/cuda-sass.txt; \
+    done; \
+    readelf -d /build/talker/libqwen3_tts_cuda.so | grep -q 'libcublas.so.13'; \
+    readelf -d /build/talker/libqwen3_tts_cuda.so | grep -q 'libcudart.so.13'; \
+    readelf -d /build/codec/libqwen3_tts_codec_cuda.so | grep -q 'libcublas.so.13'; \
+    readelf -d /build/codec/libqwen3_tts_codec_cuda.so | grep -q 'libcudart.so.13'; \
+    test "$(dpkg-query -W -f='${Version}' libcublas-13-0)" = '13.1.1.3-1'; \
+    install -d /out/lib /out/cuda/lib /out/cuda/doc; \
+    install -m 0555 \
+      /build/talker/libqwen3_tts_cuda.so \
+      /out/lib/libqwen3_tts_cuda.so; \
+    install -m 0555 \
+      /build/codec/libqwen3_tts_codec_cuda.so \
+      /out/lib/libqwen3_tts_codec_cuda.so; \
+    cp -a \
+      /usr/local/cuda/targets/sbsa-linux/lib/libcublas.so* \
+      /usr/local/cuda/targets/sbsa-linux/lib/libcublasLt.so* \
+      /out/cuda/lib/; \
+    cp -a /usr/share/doc/libcublas-13-0 /out/cuda/doc/
+
+FROM rust-source AS model-verify
+COPY --from=artifact-verifier-build /out/load_artifact /usr/local/bin/load_artifact
+RUN --mount=type=bind,from=model,source=/,target=/model,ro \
+    printf '%s  %s\n%s  %s\n%s  %s\n' \
+      '9bb96a8d24bbb2d8933245e27083b8e7290346b776306dcb8a8f3aed68594527' /model/manifest.json \
+      '391e8db219f292c515297cdceeb43e4eae67cdde35fa57e79a6a8a532fca0522' /model/model.safetensors \
+      '062caa0a31346422410e4c0d2494aec14be20553f8cb0b71a875329de99ce180' /model/speech_tokenizer/model.safetensors \
+      | sha256sum --check --strict - \
+ && load_artifact /model --verification full \
+ && install -D -m 0444 /model/manifest.json /out/model-manifest.json
+
+FROM rust-source AS release-metadata-verify
+RUN --mount=type=bind,from=release-metadata,source=/,target=/release-metadata,ro \
+    set -eu; \
+    test "$(find /release-metadata -mindepth 1 -maxdepth 1 | wc -l)" -eq 3; \
+    test "$(find /release-metadata -mindepth 1 -maxdepth 1 -type f | wc -l)" -eq 3; \
+    cmp -s /src/LICENSE /release-metadata/APPLICATION-LICENSE.txt; \
+    grep -Fq 'Version 2.0, January 2004' /release-metadata/APPLICATION-LICENSE.txt; \
+    grep -Fq '<html lang="en">' /release-metadata/RUST-THIRD-PARTY-LICENSES.html; \
+    grep -Fq '<section class="license"' /release-metadata/RUST-THIRD-PARTY-LICENSES.html; \
+    grep -Eq '"bomFormat"[[:space:]]*:[[:space:]]*"CycloneDX"' /release-metadata/RUST-SBOM.cdx.json; \
+    grep -Eq '"specVersion"[[:space:]]*:[[:space:]]*"1\.5"' /release-metadata/RUST-SBOM.cdx.json; \
+    grep -Fq 'qwen3-tts-server' /release-metadata/RUST-SBOM.cdx.json; \
+    install -D -m 0444 /release-metadata/APPLICATION-LICENSE.txt /out/APPLICATION-LICENSE.txt; \
+    install -D -m 0444 /release-metadata/RUST-THIRD-PARTY-LICENSES.html /out/RUST-THIRD-PARTY-LICENSES.html; \
+    install -D -m 0444 /release-metadata/RUST-SBOM.cdx.json /out/RUST-SBOM.cdx.json
+
+FROM --platform=linux/arm64 nvidia/cuda:13.0.3-base-ubuntu24.04@sha256:56d9d8183e2181a20be6b0d3801d1f056a0e75c17706df939ba207b126e1cb9c AS runtime
+ARG TARGETARCH
+ARG VERSION
+ARG VCS_REF
+ARG BUILD_DATE
+RUN set -eu; \
+    test "${TARGETARCH}" = "arm64"; \
+    test -n "${VERSION}"; \
+    test "${#VCS_REF}" -eq 40; \
+    case "${VCS_REF}" in *[!0-9a-f]*) exit 1 ;; esac; \
+    printf '%s\n' "${BUILD_DATE}" \
+      | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}.*$'
+
+LABEL org.opencontainers.image.title="Qwen3-TTS Native VoiceDesign 1.7B" \
+      org.opencontainers.image.description="Native Rust/CUDA Qwen3-TTS VoiceDesign 1.7B runtime for NVIDIA DGX Spark" \
+      org.opencontainers.image.source="https://github.com/luka-loehr/qwen3-tts-native" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      org.opencontainers.image.base.name="docker.io/nvidia/cuda:13.0.3-base-ubuntu24.04" \
+      org.opencontainers.image.base.digest="sha256:56d9d8183e2181a20be6b0d3801d1f056a0e75c17706df939ba207b126e1cb9c" \
+      io.qwen3-tts.platform="linux/arm64" \
+      io.qwen3-tts.cuda="13.0.3" \
+      io.qwen3-tts.cuda-architecture="sm_121" \
+      io.qwen3-tts.cuda.cublas-package="libcublas-13-0=13.1.1.3-1" \
+      io.qwen3-tts.model.id="Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign" \
+      io.qwen3-tts.model.revision="5ecdb67327fd37bb2e042aab12ff7391903235d3" \
+      io.qwen3-tts.model.manifest.sha256="9bb96a8d24bbb2d8933245e27083b8e7290346b776306dcb8a8f3aed68594527" \
+      io.qwen3-tts.model.voice.sha256="391e8db219f292c515297cdceeb43e4eae67cdde35fa57e79a6a8a532fca0522" \
+      io.qwen3-tts.model.decoder.sha256="062caa0a31346422410e4c0d2494aec14be20553f8cb0b71a875329de99ce180" \
+      io.qwen3-tts.model.voice-clone="false" \
+      io.qwen3-tts.model.base="false"
+
+RUN groupadd --gid 10001 qwen3tts \
+ && useradd --uid 10001 --gid 10001 \
+      --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin qwen3tts \
+ && install -d -m 0755 \
+      /opt/qwen3-tts/bin \
+      /opt/qwen3-tts/include \
+      /opt/qwen3-tts/lib \
+      /opt/qwen3-tts/model/speech_tokenizer \
+      /usr/share/licenses/qwen3-tts-native/rust
+
+COPY --from=rust-runtime-build /out/bin/ /opt/qwen3-tts/bin/
+COPY --from=rust-runtime-build /out/lib/ /opt/qwen3-tts/lib/
+COPY --from=cuda-build /out/lib/ /opt/qwen3-tts/lib/
+COPY --from=cuda-build /out/cuda/lib/ /usr/local/cuda/targets/sbsa-linux/lib/
+COPY --from=cuda-build /out/cuda/doc/libcublas-13-0/ /usr/share/doc/libcublas-13-0/
+COPY native/qwen3-tts-runtime/include/qwen3_tts_runtime.h /opt/qwen3-tts/include/
+
+# The model is a separately named, read-only BuildKit context. Each weight is
+# copied once into its own linked layer so code-only releases can reuse both.
+COPY --link --from=model --chown=0:0 --chmod=0444 \
+     /model.safetensors \
+     /opt/qwen3-tts/model/model.safetensors
+COPY --link --from=model --chown=0:0 --chmod=0444 \
+     /speech_tokenizer/model.safetensors \
+     /opt/qwen3-tts/model/speech_tokenizer/model.safetensors
+COPY --link --from=model --chown=0:0 --chmod=0444 \
+     /config.json \
+     /generation_config.json \
+     /manifest.json \
+     /merges.txt \
+     /preprocessor_config.json \
+     /tokenizer_config.json \
+     /vocab.json \
+     /opt/qwen3-tts/model/
+COPY --link --from=model --chown=0:0 --chmod=0444 \
+     /speech_tokenizer/config.json \
+     /speech_tokenizer/configuration.json \
+     /speech_tokenizer/preprocessor_config.json \
+     /opt/qwen3-tts/model/speech_tokenizer/
+
+COPY --link licenses/ /usr/share/licenses/qwen3-tts-native/source/
+COPY --from=release-metadata-verify /out/APPLICATION-LICENSE.txt \
+     /usr/share/licenses/qwen3-tts-native/application/LICENSE.txt
+COPY --from=release-metadata-verify /out/RUST-THIRD-PARTY-LICENSES.html \
+     /usr/share/licenses/qwen3-tts-native/rust/RUST-THIRD-PARTY-LICENSES.html
+COPY --from=release-metadata-verify /out/RUST-SBOM.cdx.json \
+     /usr/share/licenses/qwen3-tts-native/rust/RUST-SBOM.cdx.json
+COPY --from=model-verify /out/model-manifest.json \
+     /usr/share/licenses/qwen3-tts-native/model-manifest.verified.json
+
+RUN set -eu; \
+    ldconfig; \
+    test "$(find /opt/qwen3-tts/model -type f -name '*.safetensors' | wc -l)" -eq 2; \
+    printf '%s  %s\n%s  %s\n%s  %s\n' \
+      '9bb96a8d24bbb2d8933245e27083b8e7290346b776306dcb8a8f3aed68594527' /opt/qwen3-tts/model/manifest.json \
+      '391e8db219f292c515297cdceeb43e4eae67cdde35fa57e79a6a8a532fca0522' /opt/qwen3-tts/model/model.safetensors \
+      '062caa0a31346422410e4c0d2494aec14be20553f8cb0b71a875329de99ce180' /opt/qwen3-tts/model/speech_tokenizer/model.safetensors \
+      | sha256sum --check --strict -; \
+    cmp -s \
+      /opt/qwen3-tts/model/manifest.json \
+      /usr/share/licenses/qwen3-tts-native/model-manifest.verified.json; \
+    for executable in \
+      /opt/qwen3-tts/bin/qwen3-tts-server \
+      /opt/qwen3-tts/bin/qwen3-tts-healthcheck; \
+    do \
+      test -x "${executable}"; \
+      ! ldd "${executable}" | grep -q 'not found'; \
+    done; \
+    for library in \
+      /opt/qwen3-tts/lib/libqwen3_tts_runtime.so \
+      /opt/qwen3-tts/lib/libqwen3_tts_cuda.so \
+      /opt/qwen3-tts/lib/libqwen3_tts_codec_cuda.so \
+      /usr/local/cuda/targets/sbsa-linux/lib/libcublas.so.13 \
+      /usr/local/cuda/targets/sbsa-linux/lib/libcublasLt.so.13; \
+    do \
+      test -e "${library}"; \
+      ! ldd "${library}" | grep -q 'not found'; \
+    done; \
+    for command in \
+      python python3 pip pip3 node npm cargo rustc cc c++ gcc g++ nvcc \
+      cmake ninja make; \
+    do \
+      ! command -v "${command}" >/dev/null 2>&1; \
+    done; \
+    ! dpkg-query -W -f='${Package}\n' \
+      | grep -Eq '(^|:)(build-essential|cmake|ninja-build|gcc|g\+\+|python[0-9.]*|python3.*|nodejs|npm|.*-dev|libcudnn.*|libnvinfer.*|tensorrt.*|libnpp.*|libcusparse.*|libnccl.*)$'; \
+    ! find /usr /opt -xdev \
+      \( -iname '*torch*' -o -iname '*sglang*' -o -iname '*vllm*' \
+         -o -name 'libcudnn*' -o -name 'libnvinfer*' -o -name 'libnpp*' \
+         -o -name 'libcusparse*' -o -name 'libnccl*' \) \
+      -print -quit | grep -q .; \
+    test "$(sha256sum /usr/share/licenses/qwen3-tts-native/application/LICENSE.txt | cut -d' ' -f1)" \
+      = 'cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30'; \
+    grep -Fq '<html lang="en">' \
+      /usr/share/licenses/qwen3-tts-native/rust/RUST-THIRD-PARTY-LICENSES.html; \
+    grep -Eq '"bomFormat"[[:space:]]*:[[:space:]]*"CycloneDX"' \
+      /usr/share/licenses/qwen3-tts-native/rust/RUST-SBOM.cdx.json; \
+    test "$(stat -c '%u:%g:%a' /opt/qwen3-tts/model/model.safetensors)" = '0:0:444'; \
+    test "$(stat -c '%u:%g:%a' /opt/qwen3-tts/model/speech_tokenizer/model.safetensors)" = '0:0:444'
+
+ENV QWEN3_TTS_LIBRARY_DIR=/opt/qwen3-tts/lib \
+    QWEN3_TTS_MODEL_ROOT=/opt/qwen3-tts/model \
+    QWEN3_TTS_TALKER_LIBRARY=/opt/qwen3-tts/lib/libqwen3_tts_cuda.so \
+    QWEN3_TTS_CODEC_LIBRARY=/opt/qwen3-tts/lib/libqwen3_tts_codec_cuda.so \
+    QWEN3_TTS_BIND=0.0.0.0:8080 \
+    QWEN3_TTS_DEVICE_INDEX=0 \
+    QWEN3_TTS_MAX_CONCURRENT_REQUESTS=6 \
+    LD_LIBRARY_PATH=/opt/qwen3-tts/lib:/usr/local/cuda/targets/sbsa-linux/lib:/usr/local/nvidia/lib:/usr/local/nvidia/lib64 \
+    CUDA_MODULE_LOADING=EAGER \
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility \
+    RUST_LOG=info \
+    HOME=/nonexistent \
+    TMPDIR=/tmp
+
+WORKDIR /opt/qwen3-tts
+USER 10001:10001
+EXPOSE 8080
+STOPSIGNAL SIGTERM
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=45s --retries=3 \
+  CMD ["/opt/qwen3-tts/bin/qwen3-tts-healthcheck", "--url", "http://127.0.0.1:8080/health/ready", "--expect-ready"]
+
+ENTRYPOINT ["/opt/qwen3-tts/bin/qwen3-tts-server"]
