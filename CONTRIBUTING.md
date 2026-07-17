@@ -19,7 +19,7 @@ buffered WAV.
 
 The following are outside the current project scope:
 
-- voice cloning, reference audio, speaker enrolment, or speaker databases;
+- voice cloning, reference audio, speaker enrollment, or speaker databases;
 - the Base, CustomVoice, and 0.6B checkpoints;
 - the speech-tokenizer encoder;
 - Python, Node.js, PyTorch, SGLang, vLLM, TensorRT, or another model framework
@@ -29,7 +29,7 @@ The following are outside the current project scope:
 - languages not exposed by the pinned VoiceDesign checkpoint.
 
 Offline reference tooling may use a language appropriate to the task, but it
-must remain outside the production runtime, be clearly labelled, and never
+must remain outside the production runtime, be clearly labeled, and never
 become a hidden inference dependency.
 
 Discuss a proposed scope expansion before implementing it. A contribution
@@ -80,7 +80,7 @@ direct source build, a local candidate image, or a clean pull of an exact
 registry digest. Link the raw machine-readable evidence and preserve its source
 commit, hardware, model identity, workload, and limitations. A final release
 claim requires the digest-specific gates; an earlier direct-runtime result may
-remain documented only when it is clearly labelled as a baseline.
+remain documented only when it is clearly labeled as a baseline.
 
 ## Repository safety
 

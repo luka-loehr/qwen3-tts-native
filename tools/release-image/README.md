@@ -40,7 +40,8 @@ RELEASE_VERSION=v0.1.0 ./tools/release-image/build-and-push.sh \
 docker logout ghcr.io
 ```
 
-The build produces only the immutable candidate and Git/model tags. It records
+The build produces only an immutable version-and-model candidate tag and a
+source-commit-and-model-revision tag. It records
 the real OCI index digest in `release-record.json`. Supply-chain verification
 rejects tag drift, a non-ARM64 runtime, absent BuildKit SPDX/SLSA evidence,
 credential-like provenance, private absolute provenance paths, Git-history
