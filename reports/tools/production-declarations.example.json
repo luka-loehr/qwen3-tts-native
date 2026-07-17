@@ -1,0 +1,91 @@
+{
+  "report": {
+    "benchmark_id": "spark-native-vs-sglang-2026-07-17",
+    "title": "Native Qwen3 TTS versus stock SGLang on DGX Spark",
+    "generated_at": "PENDING_UTC_TIMESTAMP",
+    "authors": [
+      "Luka Löhr"
+    ]
+  },
+  "system": {
+    "host_model": "NVIDIA DGX Spark",
+    "hostname_alias": "spark-benchmark-host",
+    "os": "PENDING_EXACT_OS_RELEASE",
+    "kernel": "PENDING_EXACT_KERNEL",
+    "architecture": "aarch64",
+    "cpu": "NVIDIA Grace",
+    "accelerator": "NVIDIA GB10 Blackwell",
+    "driver_version": "PENDING_EXACT_DRIVER_VERSION",
+    "cuda_version": "PENDING_EXACT_CUDA_VERSION",
+    "physical_unified_memory_bytes": 128000000000,
+    "power_measurement_source": "NVIDIA board power.draw sampled by nvidia-smi",
+    "notes": [
+      "Controlled single-GPU DGX Spark benchmark host."
+    ]
+  },
+  "workload": {
+    "profiles": [
+      {
+        "id": "B1",
+        "concurrency": 1,
+        "repetitions_per_request": 20
+      },
+      {
+        "id": "B3",
+        "concurrency": 3,
+        "repetitions_per_request": 21
+      },
+      {
+        "id": "B6",
+        "concurrency": 6,
+        "repetitions_per_request": 24
+      }
+    ],
+    "language_policy": "Use the explicit language in each canonical workload row."
+  },
+  "implementations": [
+    {
+      "id": "native",
+      "name": "Qwen3 TTS Native",
+      "version": "0.1.0",
+      "source_commit": "PENDING_NATIVE_40_CHARACTER_GIT_COMMIT",
+      "source_url": "https://github.com/luka-loehr/qwen3-tts-native",
+      "api_protocol": "HTTP/1.1 streaming raw PCM16",
+      "streaming_semantics": "Progressive PCM chunks while generation is active.",
+      "runtime_components": [
+        "Rust",
+        "CUDA"
+      ]
+    },
+    {
+      "id": "sglang",
+      "name": "Stock SGLang Omni",
+      "version": "PENDING_EXACT_SGLANG_VERSION",
+      "source_commit": "PENDING_SGLANG_40_CHARACTER_GIT_COMMIT",
+      "source_url": "https://github.com/sgl-project/sglang",
+      "api_protocol": "HTTP/1.1 raw PCM16",
+      "streaming_semantics": "Completion-buffered stock response.",
+      "runtime_components": [
+        "SGLang-Omni"
+      ]
+    }
+  ],
+  "methodology": {
+    "clock_source": "Client monotonic clock",
+    "ttfa_definition": "Elapsed request time to the first playable PCM byte.",
+    "rtf_definition": "Measured scenario wall time divided by generated audio time.",
+    "throughput_definition": "Successful requests divided by measured scenario wall time.",
+    "memory_definition": "Peak measured process RSS and NVIDIA unified memory.",
+    "power_definition": "NVIDIA board power sampled every one hundred milliseconds.",
+    "energy_definition": "Trapezoidal board energy minus measured idle baseline energy.",
+    "sampling_interval_ms": 100,
+    "run_order": "Round one Native then SGLang; round two reversed.",
+    "statistical_method": "Two complete rounds with raw-request percentiles.",
+    "environment_controls": [
+      "No competing CUDA processes from idle baseline through measured end."
+    ]
+  },
+  "limitations": [
+    "Stock SGLang exposes completion-buffered audio and unknown EOS metadata."
+  ]
+}
