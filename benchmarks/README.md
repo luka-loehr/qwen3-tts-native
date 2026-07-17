@@ -198,6 +198,12 @@ Container image compressed transfer size, unpacked size, startup-to-readiness,
 idle memory, peak memory, and server process count are reported outside the
 request-latency distributions.
 
+The canonical single-run implementation is documented in
+[`tools/README.md`](tools/README.md). It uses the Rust client's four-event phase
+file, an explicit server-idle baseline, 100 ms configured sampling, a 200 ms
+maximum observed-gap gate, per-PID cgroup RSS sampling, measured-only reduction,
+and manifest-root-relative evidence paths.
+
 ### Evidence layout and publication gate
 
 Each final comparison bundle contains:
