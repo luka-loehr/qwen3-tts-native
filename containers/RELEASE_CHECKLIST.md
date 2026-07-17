@@ -81,6 +81,55 @@ published as a shortcut around an incomplete gate.
 - [ ] Locally unpacked image size is no more than 10.0 GB.
 - [ ] A clean Spark pull by digest succeeds without a cached model layer.
 
+### Keyless GHCR signing
+
+After every preceding candidate gate has passed, dispatch
+[`sign-ghcr-image.yml`](../.github/workflows/sign-ghcr-image.yml) from `main`.
+Supply the accepted `v`-prefixed semantic version and the exact remote digest,
+including its `sha256:` prefix. For example:
+
+```bash
+gh workflow run sign-ghcr-image.yml \
+  --ref main \
+  --field version=v0.1.0 \
+  --field digest=sha256:<PUBLISHED_DIGEST>
+```
+
+The workflow is deliberately limited to
+`ghcr.io/luka-loehr/qwen3-tts-native`. It validates both inputs, authenticates
+to the private package with the ephemeral `GITHUB_TOKEN`, signs only
+`IMAGE@sha256:...`, and immediately verifies the signature. The verification
+requires all of the following exact claims:
+
+- certificate identity:
+  `https://github.com/luka-loehr/qwen3-tts-native/.github/workflows/sign-ghcr-image.yml@refs/heads/main`;
+- OIDC issuer: `https://token.actions.githubusercontent.com`;
+- repository: `luka-loehr/qwen3-tts-native`;
+- workflow ref: `refs/heads/main`;
+- workflow commit: the dispatch run's `GITHUB_SHA`;
+- trigger: `workflow_dispatch`;
+- signed version and source annotations matching the dispatch inputs.
+
+It does not build, push, tag, promote, or change package visibility. The GHCR
+package must already grant this repository Actions access; private-package
+verification also requires GHCR read access. Keyless signing publishes the
+certificate and signature metadata to Sigstore's public transparency
+infrastructure even when the image layers remain private.
+
+An authenticated independent verification of the accepted digest is:
+
+```bash
+cosign verify \
+  --certificate-identity \
+    'https://github.com/luka-loehr/qwen3-tts-native/.github/workflows/sign-ghcr-image.yml@refs/heads/main' \
+  --certificate-oidc-issuer \
+    'https://token.actions.githubusercontent.com' \
+  --annotations 'org.opencontainers.image.version=v0.1.0' \
+  --annotations \
+    'org.opencontainers.image.source=https://github.com/luka-loehr/qwen3-tts-native' \
+  'ghcr.io/luka-loehr/qwen3-tts-native@sha256:<PUBLISHED_DIGEST>'
+```
+
 ## Runtime behavior
 
 - [ ] The shared engine loads exactly once.
