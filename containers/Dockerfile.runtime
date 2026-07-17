@@ -2,7 +2,7 @@
 
 ARG SOURCE_DATE_EPOCH=0
 
-FROM --platform=$TARGETPLATFORM rust:1.97.0-bookworm@sha256:4334151ca823b4a52237f3a2d1b16973d6c3c0dd2a7e0ec66a9a8947713d4fa4 AS rust-source
+FROM rust:1.97.0-bookworm@sha256:4334151ca823b4a52237f3a2d1b16973d6c3c0dd2a7e0ec66a9a8947713d4fa4 AS rust-source
 ARG TARGETARCH
 ARG SOURCE_DATE_EPOCH
 RUN test "${TARGETARCH}" = "arm64"
@@ -64,7 +64,7 @@ RUN --mount=type=cache,id=qwen3-tts-native-cargo-registry,target=/usr/local/carg
       native/qwen3-tts-server/target/release/qwen3-tts-healthcheck \
       /out/bin/qwen3-tts-healthcheck
 
-FROM --platform=$TARGETPLATFORM nvidia/cuda:13.0.3-devel-ubuntu24.04@sha256:2396393dc8a031a6faf810894ec8e40c8d80e2a1177cfda0c2bf81acac9aa240 AS cuda-build
+FROM nvidia/cuda:13.0.3-devel-ubuntu24.04@sha256:2396393dc8a031a6faf810894ec8e40c8d80e2a1177cfda0c2bf81acac9aa240 AS cuda-build
 ARG TARGETARCH
 ARG SOURCE_DATE_EPOCH
 RUN test "${TARGETARCH}" = "arm64"
@@ -150,7 +150,7 @@ RUN --mount=type=bind,from=release-metadata,source=/,target=/release-metadata,ro
     install -D -m 0444 /release-metadata/RUST-THIRD-PARTY-LICENSES.html /out/RUST-THIRD-PARTY-LICENSES.html; \
     install -D -m 0444 /release-metadata/RUST-SBOM.cdx.json /out/RUST-SBOM.cdx.json
 
-FROM --platform=$TARGETPLATFORM nvidia/cuda:13.0.3-base-ubuntu24.04@sha256:56d9d8183e2181a20be6b0d3801d1f056a0e75c17706df939ba207b126e1cb9c AS runtime
+FROM nvidia/cuda:13.0.3-base-ubuntu24.04@sha256:56d9d8183e2181a20be6b0d3801d1f056a0e75c17706df939ba207b126e1cb9c AS runtime
 ARG TARGETARCH
 ARG VERSION
 ARG VCS_REF
