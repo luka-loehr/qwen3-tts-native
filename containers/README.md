@@ -243,7 +243,7 @@ capabilities:
 
 ```bash
 docker run --rm \
-  --gpus '"device=0"' \
+  --gpus device=0 \
   --read-only \
   --cap-drop=ALL \
   --security-opt=no-new-privileges \
