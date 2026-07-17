@@ -1,7 +1,15 @@
 use qwen3_tts_runtime::{
-    AudioPacketDescriptor, EngineConfig, GenerationConfig, Language, PacketQueue, PacketQueueError,
-    RequestInput, RequestMetrics, RequestPhase, RequestRecord, RuntimeStatus, SAMPLE_RATE,
+    AudioPacketDescriptor, EngineConfig, FinishReason, GenerationConfig, Language, PacketQueue,
+    PacketQueueError, RequestInput, RequestMetrics, RequestPhase, RequestRecord, RuntimeStatus,
+    SAMPLE_RATE,
 };
+
+#[test]
+fn finish_reason_values_are_stable_for_the_public_c_abi() {
+    assert_eq!(FinishReason::None as u32, 0);
+    assert_eq!(FinishReason::CodecEos as u32, 1);
+    assert_eq!(FinishReason::MaxCodecFrames as u32, 2);
+}
 
 #[test]
 fn public_c_layouts_are_stable() {

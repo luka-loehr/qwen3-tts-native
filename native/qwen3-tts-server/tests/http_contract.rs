@@ -8,9 +8,9 @@ use axum::http::{Request, StatusCode, header};
 use http_body_util::BodyExt;
 use qwen3_tts_runtime::{Language, SAMPLE_RATE, SAMPLES_PER_CODEC_FRAME};
 use qwen3_tts_server::{
-    EngineError, EngineErrorKind, EngineMetrics, EnginePacket, EnginePoll, EngineSynthesisRequest,
-    ServerConfig, ShutdownController, SpeechEngine, SpeechRequest, build_router,
-    build_router_with_shutdown,
+    EngineError, EngineErrorKind, EngineFinishReason, EngineMetrics, EnginePacket, EnginePoll,
+    EngineSynthesisRequest, ServerConfig, ShutdownController, SpeechEngine, SpeechRequest,
+    build_router, build_router_with_shutdown,
 };
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -29,6 +29,7 @@ struct FakeState {
     retires: AtomicBool,
     second_packet_delay: Duration,
     captured_language: Mutex<Option<Language>>,
+    finish_reason: Mutex<EngineFinishReason>,
 }
 
 impl FakeEngine {
@@ -43,6 +44,7 @@ impl FakeEngine {
                 retires: AtomicBool::new(true),
                 second_packet_delay,
                 captured_language: Mutex::new(None),
+                finish_reason: Mutex::new(EngineFinishReason::Stop),
             }),
         }
     }
@@ -100,7 +102,9 @@ impl SpeechRequest for FakeRequest {
             }
             _ => {
                 self.state.completed.store(true, Ordering::Release);
-                Ok(EnginePoll::EndOfStream)
+                Ok(EnginePoll::EndOfStream(*lock_unpoisoned(
+                    &self.state.finish_reason,
+                )))
             }
         }
     }
@@ -300,6 +304,11 @@ async fn multipart_audio_is_delivered_before_generation_completes() {
             .windows(end_marker.len())
             .any(|window| window == end_marker)
     );
+    assert!(
+        remainder
+            .windows(b"\"finish_reason\":\"stop\"".len())
+            .any(|window| window == b"\"finish_reason\":\"stop\"")
+    );
     assert!(state.completed.load(Ordering::Acquire));
 }
 
@@ -338,6 +347,7 @@ async fn buffered_mode_returns_a_final_length_correct_wav() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(response.headers()[header::CONTENT_TYPE], "audio/wav");
+    assert_eq!(response.headers()["x-finish-reason"], "stop");
     let declared = response.headers()[header::CONTENT_LENGTH]
         .to_str()
         .unwrap()
@@ -359,6 +369,39 @@ async fn buffered_mode_returns_a_final_length_correct_wav() {
         *lock_unpoisoned(&state.captured_language),
         Some(Language::German)
     );
+}
+
+#[tokio::test]
+async fn length_finish_reason_is_preserved_in_streaming_and_wav_outputs() {
+    let streaming_engine = FakeEngine::new(Duration::ZERO);
+    *lock_unpoisoned(&streaming_engine.state.finish_reason) = EngineFinishReason::Length;
+    let streaming_app = build_router(Arc::new(streaming_engine), ServerConfig::default()).unwrap();
+    let streaming = streaming_app
+        .oneshot(json_request("/v1/voice-design/speech", &speech_json()))
+        .await
+        .unwrap()
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
+    assert!(
+        streaming
+            .windows(b"\"finish_reason\":\"length\"".len())
+            .any(|window| window == b"\"finish_reason\":\"length\"")
+    );
+
+    let buffered_engine = FakeEngine::new(Duration::ZERO);
+    *lock_unpoisoned(&buffered_engine.state.finish_reason) = EngineFinishReason::Length;
+    let buffered_app = build_router(Arc::new(buffered_engine), ServerConfig::default()).unwrap();
+    let mut payload = speech_json();
+    payload["stream"] = json!(false);
+    let buffered = buffered_app
+        .oneshot(json_request("/v1/voice-design/speech", &payload))
+        .await
+        .unwrap();
+    assert_eq!(buffered.status(), StatusCode::OK);
+    assert_eq!(buffered.headers()["x-finish-reason"], "length");
 }
 
 #[tokio::test]

@@ -191,6 +191,21 @@ impl RequestPhase {
     }
 }
 
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum FinishReason {
+    #[default]
+    None = 0,
+    CodecEos = 1,
+    MaxCodecFrames = 2,
+}
+
+impl FinishReason {
+    pub const fn is_terminal(self) -> bool {
+        !matches!(self, Self::None)
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct AudioPacketDescriptor {

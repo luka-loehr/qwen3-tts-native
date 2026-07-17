@@ -3,7 +3,7 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::api::MODEL_ID;
-use crate::engine::{EngineMetrics, EnginePacket};
+use crate::engine::{EngineFinishReason, EngineMetrics, EnginePacket};
 
 #[derive(Serialize)]
 struct StartEvent<'a> {
@@ -28,7 +28,7 @@ struct EndEvent {
     #[serde(rename = "type")]
     event_type: &'static str,
     request_id: Uuid,
-    finish_reason: &'static str,
+    finish_reason: EngineFinishReason,
     metrics: EngineMetrics,
 }
 
@@ -71,12 +71,16 @@ pub fn audio_part(boundary: &str, packet: &EnginePacket) -> Bytes {
     )
 }
 
-pub fn end_part(boundary: &str, request_id: Uuid, metrics: EngineMetrics) -> Bytes {
+pub fn end_part(
+    boundary: &str,
+    request_id: Uuid,
+    finish_reason: EngineFinishReason,
+    metrics: EngineMetrics,
+) -> Bytes {
     let payload = serde_json::to_vec(&EndEvent {
         event_type: "end",
         request_id,
-        // The public runtime currently does not expose EOS versus max-frame termination.
-        finish_reason: "completed",
+        finish_reason,
         metrics,
     })
     .expect("serializing a fixed end event cannot fail");

@@ -5,8 +5,9 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use qwen3_tts_runtime::{
-    BackendError, EngineConfig, GenerationConfig, NativeBackend, PollError, PollOutcome,
-    RequestHandle, RequestInput, RequestMetrics, RuntimeStatus, Scheduler, SchedulerError,
+    BackendError, EngineConfig, FinishReason, GenerationConfig, NativeBackend, PollError,
+    PollOutcome, RequestHandle, RequestInput, RequestMetrics, RuntimeStatus, Scheduler,
+    SchedulerError,
 };
 use serde::Serialize;
 use thiserror::Error;
@@ -93,7 +94,24 @@ impl EngineError {
 pub enum EnginePoll {
     Packet(EnginePacket),
     WouldBlock,
-    EndOfStream,
+    EndOfStream(EngineFinishReason),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EngineFinishReason {
+    Stop,
+    Length,
+}
+
+impl EngineFinishReason {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Stop => "stop",
+            Self::Length => "length",
+        }
+    }
 }
 
 pub trait SpeechRequest: Send + 'static {
@@ -222,7 +240,16 @@ impl SpeechRequest for NativeSpeechRequest {
                 }))
             }
             Ok(PollOutcome::WouldBlock) => Ok(EnginePoll::WouldBlock),
-            Ok(PollOutcome::EndOfStream) => Ok(EnginePoll::EndOfStream),
+            Ok(PollOutcome::EndOfStream(reason)) => match reason {
+                FinishReason::CodecEos => Ok(EnginePoll::EndOfStream(EngineFinishReason::Stop)),
+                FinishReason::MaxCodecFrames => {
+                    Ok(EnginePoll::EndOfStream(EngineFinishReason::Length))
+                }
+                FinishReason::None => Err(EngineError::new(
+                    EngineErrorKind::Internal,
+                    "native runtime reached end-of-stream without a finish reason",
+                )),
+            },
             Err(PollError::Cancelled) => Err(EngineError::new(
                 EngineErrorKind::Cancelled,
                 "native request was cancelled",

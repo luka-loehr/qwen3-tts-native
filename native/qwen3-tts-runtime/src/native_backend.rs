@@ -8,7 +8,7 @@ use qwen3_tts_native::native_talker::{
     NativeTalkerModel, NativeTalkerSession, NativeTalkerStatusError,
     STATUS_ALLOCATION as TALKER_STATUS_ALLOCATION, STATUS_CUDA as TALKER_STATUS_CUDA,
     STATUS_INVALID_ARGUMENT as TALKER_STATUS_INVALID_ARGUMENT, STATUS_MODEL as TALKER_STATUS_MODEL,
-    STATUS_STATE as TALKER_STATUS_STATE, SamplingConfig, VoiceDesignRequest,
+    STATUS_STATE as TALKER_STATUS_STATE, SamplingConfig, SessionEndReason, VoiceDesignRequest,
 };
 use qwen3_tts_native_codec::{
     CODEBOOKS, DecoderWeights, MAX_PACKET_FRAMES as CODEC_MAX_PACKET_FRAMES, NativeCodecLibrary,
@@ -18,7 +18,7 @@ use qwen3_tts_native_codec::{
 
 use crate::cuda_packet_stager::{CudaPacketStager, CudaRuntime};
 use crate::{
-    BackendError, BackendPacket, BackendRequest, BackendStarted, BackendStepInput,
+    BackendError, BackendPacket, BackendRequest, BackendStarted, BackendStepInput, FinishReason,
     MAX_CODEC_FRAMES, RuntimeStatus, StreamingBackend,
 };
 
@@ -259,6 +259,7 @@ impl NativeBackend {
         }
 
         let is_final = session.talker.is_ended();
+        let finish_reason = map_finish_reason(&session.talker, is_final)?;
         let sample_count = frame_count * SAMPLES_PER_FRAME;
         let result = session
             .codec
@@ -279,6 +280,7 @@ impl NativeBackend {
         Ok(BackendPacket {
             codec_frames: frame_count as u32,
             is_final,
+            finish_reason,
             talker_gpu_microseconds,
             codec_gpu_microseconds: result.gpu_microseconds,
             peak_request_device_bytes: session.peak_request_device_bytes,
@@ -377,6 +379,7 @@ impl NativeBackend {
         })?;
 
         let is_final = session.talker.is_ended();
+        let finish_reason = map_finish_reason(&session.talker, is_final)?;
         let sample_count = frame_count * SAMPLES_PER_FRAME;
         let result =
             packet
@@ -397,12 +400,37 @@ impl NativeBackend {
         Ok(BackendPacket {
             codec_frames: frame_count as u32,
             is_final,
+            finish_reason,
             talker_gpu_microseconds,
             codec_gpu_microseconds: result.gpu_microseconds,
             peak_request_device_bytes: session.peak_request_device_bytes,
             peak_request_host_bytes: session.peak_request_host_bytes,
         })
     }
+}
+
+fn map_finish_reason(
+    talker: &NativeTalkerSession,
+    is_final: bool,
+) -> Result<FinishReason, BackendError> {
+    let reason = match talker.end_reason() {
+        None => FinishReason::None,
+        Some(SessionEndReason::CodecEos) => FinishReason::CodecEos,
+        Some(SessionEndReason::MaxFrames) => FinishReason::MaxCodecFrames,
+        Some(SessionEndReason::Cancelled) => {
+            return Err(BackendError::with_status(
+                RuntimeStatus::State,
+                "cancelled Talker session attempted to emit a successful final packet",
+            ));
+        }
+    };
+    if is_final != reason.is_terminal() {
+        return Err(BackendError::with_status(
+            RuntimeStatus::State,
+            "Talker final state and finish reason disagree",
+        ));
+    }
+    Ok(reason)
 }
 
 impl StreamingBackend for NativeBackend {

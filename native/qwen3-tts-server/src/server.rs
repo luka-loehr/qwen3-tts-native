@@ -31,7 +31,8 @@ use crate::api::{
 };
 use crate::config::ServerConfig;
 use crate::engine::{
-    EngineError, EngineErrorKind, EnginePacket, EnginePoll, SpeechEngine, SpeechRequest,
+    EngineError, EngineErrorKind, EngineFinishReason, EnginePacket, EnginePoll, SpeechEngine,
+    SpeechRequest,
 };
 use crate::error::ApiError;
 use crate::metrics::ServiceMetrics;
@@ -39,6 +40,7 @@ use crate::{multipart, wav};
 
 const X_REQUEST_ID: &str = "x-request-id";
 const X_QWEN3_SEED: &str = "x-qwen3-seed";
+const X_FINISH_REASON: &str = "x-finish-reason";
 const X_ACCEL_BUFFERING: &str = "x-accel-buffering";
 const BUFFERED_BODY_CHUNK_BYTES: usize = 64 * 1024;
 
@@ -453,8 +455,8 @@ impl StreamingWorker {
                         return;
                     }
                 }
-                Ok(EnginePoll::EndOfStream) => {
-                    self.handle_end_of_stream();
+                Ok(EnginePoll::EndOfStream(finish_reason)) => {
+                    self.handle_end_of_stream(finish_reason);
                     return;
                 }
                 Err(error) => {
@@ -491,7 +493,7 @@ impl StreamingWorker {
         true
     }
 
-    fn handle_end_of_stream(&mut self) {
+    fn handle_end_of_stream(&mut self, finish_reason: EngineFinishReason) {
         if let Err(error) = self.continuity.finish() {
             self.fail_native_output(error);
             return;
@@ -505,7 +507,12 @@ impl StreamingWorker {
             self.guard.retirement_timed_out();
             return;
         }
-        let chunk = multipart::end_part(&self.boundary, self.request_id, self.request.metrics());
+        let chunk = multipart::end_part(
+            &self.boundary,
+            self.request_id,
+            finish_reason,
+            self.request.metrics(),
+        );
         if self.send(chunk, true).is_err() {
             self.guard.cancelled();
         } else {
@@ -573,7 +580,7 @@ async fn buffered_response(
     })
     .await;
     cancel_on_drop.disarm();
-    let wav = result.map_err(|_| {
+    let output = result.map_err(|_| {
         ApiError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
             "worker_panicked",
@@ -582,7 +589,7 @@ async fn buffered_response(
         )
         .with_request_id(request_id)
     })??;
-    let length = wav.len();
+    let length = output.wav.len();
     Ok(Response::builder()
         .status(StatusCode::OK)
         .header(CONTENT_TYPE, "audio/wav")
@@ -591,8 +598,9 @@ async fn buffered_response(
         .header(CACHE_CONTROL, "no-store")
         .header(X_REQUEST_ID, request_id.to_string())
         .header(X_QWEN3_SEED, seed.to_string())
+        .header(X_FINISH_REASON, output.finish_reason.as_str())
         .body(Body::from_stream(BufferedWavStream::new(
-            Bytes::from(wav),
+            Bytes::from(output.wav),
             buffered_permit,
         )))
         .expect("generated WAV response headers are valid"))
@@ -603,7 +611,7 @@ fn run_buffered_worker(
     request: Box<dyn SpeechRequest>,
     request_id: Uuid,
     cancellation: CancellationToken,
-) -> Result<Vec<u8>, ApiError> {
+) -> Result<BufferedOutput, ApiError> {
     let mut guard = ActiveGuard::new(state.clone(), request_id);
     let mut pcm = Vec::new();
     let mut continuity = PacketContinuity::default();
@@ -653,7 +661,7 @@ fn run_buffered_worker(
                 }
                 pcm.extend_from_slice(&packet.pcm_s16le);
             }
-            Ok(EnginePoll::EndOfStream) => {
+            Ok(EnginePoll::EndOfStream(finish_reason)) => {
                 if let Err(error) = continuity.finish() {
                     let _ = request.cancel();
                     mark_retirement(
@@ -679,7 +687,10 @@ fn run_buffered_worker(
                     .with_request_id(request_id)
                 })?;
                 guard.completed(sample_count);
-                return Ok(output);
+                return Ok(BufferedOutput {
+                    wav: output,
+                    finish_reason,
+                });
             }
             Err(error) => {
                 let cancelled = error.kind == EngineErrorKind::Cancelled;
@@ -697,6 +708,11 @@ fn run_buffered_worker(
             }
         }
     }
+}
+
+struct BufferedOutput {
+    wav: Vec<u8>,
+    finish_reason: EngineFinishReason,
 }
 
 fn validate_packet(packet: &EnginePacket) -> Result<(), EngineError> {
