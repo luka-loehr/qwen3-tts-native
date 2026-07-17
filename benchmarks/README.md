@@ -117,7 +117,7 @@ The comparison record must pin all of the following:
 - Qwen3-TTS VoiceDesign model ID and immutable model revision
   `5ecdb67327fd37bb2e042aab12ff7391903235d3` on both sides;
 - BF16 weights, language, text, voice description, seed, sampling parameters,
-  natural-EOS policy, and output limits;
+  termination policy, and every portable output limit;
 - 24 kHz, signed 16-bit, mono PCM at the client-visible measurement boundary.
 
 The stock SGLang-Omni series must remain byte-provenanced to upstream release
@@ -137,7 +137,10 @@ Before a qualifying series:
 3. run exactly one server subject at a time with the same host, model revision,
    client binary, and localhost network path;
 4. complete 24 unmeasured warm requests for the active concurrency bucket;
-5. measure at least 200 natural-EOS requests at each of B1, B3, and B6;
+5. measure at least 200 successfully completed requests at each of B1, B3, and
+   B6; Native requests must report natural EOS and no length limit, while stock
+   SGLang PCM completion is accepted with EOS classification explicitly unknown
+   because that endpoint exposes no finish reason;
 6. alternate subject order between rounds, with at least two rounds per subject,
    so warm host state and thermal drift do not always favor one engine;
 7. stop the subject, preserve its logs and raw measurements, and verify request
@@ -209,6 +212,8 @@ Each final comparison bundle contains:
 
 The PDF is a view over this bundle, not the source of truth. Publication is
 blocked if the workload hashes differ, either subject has fewer than 200 valid
-requests in any required bucket, a competing CUDA process was present, the
-first-PCM boundary differs, raw files are missing, or a stock comparator contains
-an undisclosed execution patch.
+requests in any required bucket, any Native valid request is not natural EOS, a
+competing CUDA process was present, the first-PCM boundary differs, raw files are
+missing, or a stock comparator contains an undisclosed execution patch. The
+stock SGLang series must retain `eos_unknown`; tooling must not infer natural EOS
+from a closed PCM response.

@@ -1,0 +1,25 @@
+[package]
+name = "qwen3-tts-http-bench"
+version = "0.1.0"
+edition = "2024"
+description = "Reproducible external HTTP benchmark client for Qwen3-TTS VoiceDesign runtimes"
+license = "Apache-2.0"
+repository = "https://github.com/luka-loehr/qwen3-tts-native"
+readme = "README.md"
+publish = false
+
+[dependencies]
+clap = { version = "=4.5.54", features = ["derive"] }
+hex = "=0.4.3"
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.149"
+sha2 = "=0.10.9"
+thiserror = "=2.0.18"
+tokio = { version = "=1.49.0", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"

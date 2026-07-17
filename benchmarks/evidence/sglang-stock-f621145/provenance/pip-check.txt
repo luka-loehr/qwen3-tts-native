@@ -1,0 +1,11 @@
+google-auth 2.53.0 requires cryptography, which is not installed.
+nixl 1.1.0 requires nixl-cu12, which is not installed.
+azure-identity 1.25.3 requires cryptography, which is not installed.
+msal 1.36.0 requires cryptography, which is not installed.
+msal 1.36.0 requires pyjwt, which is not installed.
+azure-storage-blob 12.29.0 requires cryptography, which is not installed.
+qwen-tts 0.1.1 has requirement accelerate==1.12.0, but you have accelerate 1.14.0.
+qwen-tts 0.1.1 has requirement transformers==4.57.3, but you have transformers 5.6.0.
+descript-audiotools 0.7.2 has requirement protobuf<3.20,>=3.9.2, but you have protobuf 6.33.6.
+moviepy 2.2.1 has requirement pillow<12.0,>=9.2.0, but you have pillow 12.2.0.
+nvidia-cusparselt-cu13 0.8.0 is not supported on this platform
