@@ -103,7 +103,7 @@ fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 fn workload(path: &Path) {
     fs::write(
         path,
-        "{\"id\":\"fixture-001\",\"text\":\"Sensitive fixture prompt\",\"voice_description\":\"Calm test voice\",\"language\":\"English\",\"seed\":42,\"sampling\":{\"strategy\":\"sample\",\"temperature\":0.8,\"top_p\":0.95,\"top_k\":50,\"repetition_penalty\":1.05,\"predictor\":{\"strategy\":\"sample\",\"temperature\":0.9,\"top_p\":1.0,\"top_k\":50}},\"stream\":true}\n",
+        "{\"id\":\"fixture-001\",\"text\":\"Sensitive fixture prompt\",\"voice_description\":\"Calm test voice\",\"language\":\"English\",\"seed\":42,\"max_duration_seconds\":20.48,\"sampling\":{\"strategy\":\"sample\",\"temperature\":0.8,\"top_p\":0.95,\"top_k\":50,\"repetition_penalty\":1.05,\"predictor\":{\"strategy\":\"sample\",\"temperature\":0.9,\"top_p\":1.0,\"top_k\":50}},\"stream\":true}\n",
     )
     .unwrap();
 }

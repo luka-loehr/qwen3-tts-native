@@ -12,6 +12,11 @@ use crate::{BenchError, Result};
 pub const SCHEMA_VERSION: &str = "qwen3-tts-http-bench/v1";
 pub const SAMPLE_RATE_HZ: u64 = 24_000;
 const SAMPLING_CONTRACT: &str = "qwen3-tts-native-sglang-common/v1";
+const CODEC_FRAMES_PER_SECOND: f64 = 12.5;
+const MAX_COMMON_CODEC_FRAMES: u32 = 8_192;
+const SGLANG_STOCK_PREDICTOR_TEMPERATURE: f64 = 0.9;
+const SGLANG_STOCK_PREDICTOR_TOP_P: f64 = 1.0;
+const SGLANG_STOCK_PREDICTOR_TOP_K: u64 = 50;
 
 /// Request/response contract implemented by the target endpoint.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -357,12 +362,8 @@ impl WorkloadEntry {
                 self.id
             )));
         }
-        if self.max_duration_seconds.is_some() {
-            return Err(BenchError::Workload(format!(
-                "entry {:?}: max_duration_seconds has no exact SGLang-Omni API equivalent",
-                self.id
-            )));
-        }
+        let max_new_tokens = self.sglang_max_new_tokens()?;
+        self.validate_sglang_sampling_contract()?;
         let model = model.ok_or_else(|| {
             BenchError::Configuration(
                 "--sglang-model is required for the sglang-omni profile".to_owned(),
@@ -390,14 +391,11 @@ impl WorkloadEntry {
             "response_format".to_owned(),
             Value::String("pcm".to_owned()),
         );
+        object.insert("max_new_tokens".to_owned(), Value::from(max_new_tokens));
         if let Some(seed) = self.seed {
             object.insert("seed".to_owned(), Value::from(seed));
         }
         if let Some(sampling) = &self.sampling {
-            object.insert(
-                "do_sample".to_owned(),
-                Value::Bool(sampling.strategy == SamplingStrategy::Sample),
-            );
             insert_optional(&mut object, "temperature", sampling.temperature);
             insert_optional(&mut object, "top_p", sampling.top_p);
             insert_optional(&mut object, "top_k", sampling.top_k);
@@ -406,17 +404,58 @@ impl WorkloadEntry {
                 "repetition_penalty",
                 sampling.repetition_penalty,
             );
-            if let Some(predictor) = &sampling.predictor {
-                object.insert(
-                    "subtalker_dosample".to_owned(),
-                    Value::Bool(predictor.strategy == SamplingStrategy::Sample),
-                );
-                insert_optional(&mut object, "subtalker_temperature", predictor.temperature);
-                insert_optional(&mut object, "subtalker_top_p", predictor.top_p);
-                insert_optional(&mut object, "subtalker_top_k", predictor.top_k);
-            }
         }
         Ok(serde_json::to_vec(&Value::Object(object))?)
+    }
+
+    fn sglang_max_new_tokens(&self) -> Result<u64> {
+        let duration = self.max_duration_seconds.ok_or_else(|| {
+            BenchError::Workload(format!(
+                "entry {:?}: sglang-omni comparison requires an explicit max_duration_seconds",
+                self.id
+            ))
+        })?;
+        let frames = (duration * CODEC_FRAMES_PER_SECOND).ceil();
+        if !frames.is_finite() || frames < 1.0 || frames > f64::from(MAX_COMMON_CODEC_FRAMES) {
+            return Err(BenchError::Workload(format!(
+                "entry {:?}: max_duration_seconds must map to 1..={MAX_COMMON_CODEC_FRAMES} codec frames at 12.5 Hz",
+                self.id
+            )));
+        }
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        Ok(u64::from(frames as u32))
+    }
+
+    fn validate_sglang_sampling_contract(&self) -> Result<()> {
+        let Some(sampling) = &self.sampling else {
+            return Ok(());
+        };
+        if sampling.strategy != SamplingStrategy::Sample {
+            return Err(BenchError::Workload(format!(
+                "entry {:?}: stock SGLang-Omni fixes talker do_sample=true",
+                self.id
+            )));
+        }
+        let Some(predictor) = &sampling.predictor else {
+            return Ok(());
+        };
+        if predictor.strategy != SamplingStrategy::Sample
+            || predictor
+                .temperature
+                .is_some_and(|value| value != SGLANG_STOCK_PREDICTOR_TEMPERATURE)
+            || predictor
+                .top_p
+                .is_some_and(|value| value != SGLANG_STOCK_PREDICTOR_TOP_P)
+            || predictor
+                .top_k
+                .is_some_and(|value| value != SGLANG_STOCK_PREDICTOR_TOP_K)
+        {
+            return Err(BenchError::Workload(format!(
+                "entry {:?}: stock SGLang-Omni fixes predictor sampling to sample/0.9/1.0/50",
+                self.id
+            )));
+        }
+        Ok(())
     }
 
     #[must_use]
@@ -621,7 +660,7 @@ mod tests {
             voice_description: "Calm".to_owned(),
             language: "English".to_owned(),
             seed: Some(42),
-            max_duration_seconds: None,
+            max_duration_seconds: Some(20.48),
             sampling: Some(portable_sampling()),
             stream: true,
         };
@@ -637,18 +676,50 @@ mod tests {
         assert_eq!(body["response_format"], "pcm");
         assert_eq!(body["stream"], true);
         assert_eq!(body["stream_format"], "audio");
-        assert_eq!(body["do_sample"], true);
+        assert_eq!(body["max_new_tokens"], 256);
+        assert!(body.get("do_sample").is_none());
         assert_eq!(body["temperature"], 0.8);
         assert_eq!(body["top_p"], 0.95);
         assert_eq!(body["top_k"], 50);
         assert_eq!(body["repetition_penalty"], 1.05);
-        assert_eq!(body["subtalker_dosample"], true);
-        assert_eq!(body["subtalker_temperature"], 0.9);
-        assert_eq!(body["subtalker_top_p"], 1.0);
-        assert_eq!(body["subtalker_top_k"], 50);
+        assert!(body.get("subtalker_dosample").is_none());
+        assert!(body.get("subtalker_temperature").is_none());
+        assert!(body.get("subtalker_top_p").is_none());
+        assert!(body.get("subtalker_top_k").is_none());
         let audit = entry.sampling_audit();
         assert!(audit.parity_qualifying);
         assert!(audit.non_qualifying_reasons.is_empty());
+    }
+
+    #[test]
+    fn sglang_rejects_unbounded_or_uncontrollable_generation() {
+        let mut entry = WorkloadEntry {
+            id: "safe-id".to_owned(),
+            text: "Hello".to_owned(),
+            voice_description: "Calm".to_owned(),
+            language: "English".to_owned(),
+            seed: Some(42),
+            max_duration_seconds: None,
+            sampling: Some(portable_sampling()),
+            stream: true,
+        };
+        let model = Some("Qwen/VoiceDesign");
+        assert!(entry.sglang_request_body(model).is_err());
+
+        entry.max_duration_seconds = Some(20.48);
+        entry.sampling.as_mut().unwrap().strategy = SamplingStrategy::Greedy;
+        assert!(entry.sglang_request_body(model).is_err());
+
+        entry.sampling.as_mut().unwrap().strategy = SamplingStrategy::Sample;
+        entry
+            .sampling
+            .as_mut()
+            .unwrap()
+            .predictor
+            .as_mut()
+            .unwrap()
+            .temperature = Some(0.8);
+        assert!(entry.sglang_request_body(model).is_err());
     }
 
     #[test]
