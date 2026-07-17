@@ -68,12 +68,12 @@ canonical VoiceDesign fields (`text`, `voice_description`, `language`,
 endpoint fields (`input`, `voice`, and `response_format`). Never describe a
 textual voice description as a speaker name, reference sample, or clone.
 
-Before an image is published and accepted, use conspicuous placeholders for
-the registry reference, tag, and digest. After acceptance, installation and
-run examples must name the actual registry image and immutable digest; mutable
-tags may be shown only as secondary convenience aliases. Do not make an image
-public, claim that it can be pulled, or replace a placeholder merely because a
-local candidate exists.
+Before an image is published and accepted, make deployment examples require a
+caller-supplied immutable reference and reject a missing value or mutable tag.
+After acceptance, direct readers to the exact reference in the GitHub release;
+mutable tags may be shown only as secondary convenience aliases. Do not make
+an image public or claim that it can be pulled merely because a local candidate
+exists.
 
 Release-facing performance text must identify whether evidence came from a
 direct source build, a local candidate image, or a clean pull of an exact
@@ -312,6 +312,24 @@ The static check does not replace an image build or any digest-specific gate.
 - container-versus-direct performance and memory regression checks.
 
 A successful source build or locally tagged image is not a release result.
+
+### Release-document finalization
+
+Release documentation has one source of truth for each claim:
+
+- the `v0.1.0` GitHub release records the immutable
+  `ghcr.io/luka-loehr/qwen3-tts-native@sha256:...` reference;
+- `reports/output/` contains only a schema-validated, visually reviewed
+  production report, never a fixture or partial matrix;
+- `CHANGELOG.md` records the release date and links the accepted report and
+  immutable evidence identity;
+- deployment examples consume `QWEN3_TTS_IMAGE` from the GitHub release and
+  reject mutable tags instead of embedding an unverified digest.
+
+Do not copy candidate values into public prose while qualification is running.
+Finalize all claim-bearing documents from the same accepted manifest and image
+digest, run the documentation checks, and review the resulting diff before the
+semantic tag is created.
 
 ## Benchmark integrity
 

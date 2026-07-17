@@ -11,15 +11,12 @@ handoff, the neural speech decoder, scheduling, and HTTP delivery—runs in
 native Rust and CUDA. Python, Node.js, PyTorch, SGLang, and vLLM are not part of
 the runtime or production image.
 
-> **Release status:** the native service and hardened image definition are
-> implemented, but the first registry digest is still undergoing final
-> container qualification. No image should be treated as released until the
-> exact digest is published here and every item in the
-> [release checklist](containers/RELEASE_CHECKLIST.md) is complete. In this
-> document, `<PUBLISHED_IMAGE>`, `sha256:<PUBLISHED_DIGEST>`, and
-> `<PUBLISHED_RELEASE_TAG>` are deliberate release placeholders, not working
-> values. The registry location is intentionally not promised before the first
-> accepted digest exists.
+> **Release-candidate status:** the native service and hardened image
+> definition are implemented. A container becomes a release only when its
+> immutable GHCR digest is recorded in the `v0.1.0` GitHub release and every
+> item in the [release checklist](containers/RELEASE_CHECKLIST.md) has passed
+> for that same digest. Until then, use the repository as source and do not
+> infer a deployable image from a branch, local tag, or candidate tag.
 
 ## What this project provides
 
@@ -95,14 +92,19 @@ The production image targets NVIDIA DGX Spark (`linux/arm64`, GB10,
 `sm_121`). It is not a portable CPU image and is not qualified for x86-64 or a
 different GPU architecture.
 
-After the release digest has been published, pull and run it by immutable
-digest:
+Copy the complete immutable image reference from the `v0.1.0` GitHub release,
+then pull and run it by digest. The validation below intentionally fails for a
+missing value, a mutable tag, or an image from another repository:
 
 ```bash
-IMAGE='<PUBLISHED_IMAGE>'
-DIGEST='sha256:<PUBLISHED_DIGEST>'
+: "${QWEN3_TTS_IMAGE:?Set QWEN3_TTS_IMAGE from the v0.1.0 release notes}"
+if [[ ! "$QWEN3_TTS_IMAGE" =~ ^ghcr.io/luka-loehr/qwen3-tts-native@sha256:[0-9a-f]{64}$ ]]; then
+  printf 'Expected the immutable v0.1.0 GHCR reference, got: %s\n' \
+    "$QWEN3_TTS_IMAGE" >&2
+  exit 1
+fi
 
-docker pull "$IMAGE@$DIGEST"
+docker pull "$QWEN3_TTS_IMAGE"
 
 docker run --rm \
   --gpus '"device=0"' \
@@ -112,14 +114,13 @@ docker run --rm \
   --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001 \
   --pids-limit=256 \
   -p 127.0.0.1:8080:8080 \
-  "$IMAGE@$DIGEST"
+  "$QWEN3_TTS_IMAGE"
 ```
 
-Replace both placeholders with the image reference and digest published in the
-release notes. Production execution uses the immutable digest. The
-human-readable release tag is recorded in the release notes and OCI labels. Do
-not mount alternate weights over `/opt/qwen3-tts/model`, as that would
-invalidate the model identity recorded in the OCI metadata.
+Production execution uses the immutable digest. The human-readable release tag
+is recorded in the release notes and OCI labels. Do not mount alternate
+weights over `/opt/qwen3-tts/model`, as that would invalidate the model identity
+recorded in the OCI metadata.
 
 Wait for the complete native warm-up:
 
@@ -276,10 +277,13 @@ A direct native server run became ready after a full pipeline warm-up in
 request returned a valid, unclipped 24 kHz PCM WAV at RTF 0.707. SIGTERM closed
 the process and loopback port in under one second.
 
-That run used a warm host filesystem cache and coexisted with an already
-running SGLang service. Coexistence is not a performance comparison. No
-controlled native-versus-SGLang benchmark has been completed or claimed in
-this repository.
+That historical run used a warm host filesystem cache and coexisted with an
+already running SGLang service. Coexistence is not a performance comparison,
+and this result is not used as the SGLang comparator. A controlled comparison
+may be summarized here only after the complete two-engine, B1/B3/B6,
+two-round production bundle passes the schema-1.2 validator and its generated
+report is committed under `reports/output/`. Until both artifacts exist, no
+comparative result should be inferred from this section.
 
 Full evidence:
 [`native-server-startup-warmup-ce46acb.json`](benchmarks/results/native-server-startup-warmup-ce46acb.json).

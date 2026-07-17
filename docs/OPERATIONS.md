@@ -190,6 +190,12 @@ cancellation, and metrics share one unauthenticated listener.
 Minimum container controls:
 
 ```bash
+: "${QWEN3_TTS_IMAGE:?Set QWEN3_TTS_IMAGE from the v0.1.0 release notes}"
+if [[ ! "$QWEN3_TTS_IMAGE" =~ ^ghcr.io/luka-loehr/qwen3-tts-native@sha256:[0-9a-f]{64}$ ]]; then
+  printf 'Invalid immutable image reference: %s\n' "$QWEN3_TTS_IMAGE" >&2
+  exit 1
+fi
+
 docker run --detach \
   --name qwen3-tts-native \
   --gpus device=0 \
@@ -199,10 +205,13 @@ docker run --detach \
   --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001 \
   --pids-limit=256 \
   --publish 127.0.0.1:8080:8080 \
-  'ghcr.io/luka-loehr/qwen3-tts-native@sha256:<PUBLISHED_DIGEST>'
+  "$QWEN3_TTS_IMAGE"
 ```
 
-The digest is a publication placeholder until qualification finishes.
+Set `QWEN3_TTS_IMAGE` to the complete digest-pinned GHCR reference from the
+`v0.1.0` GitHub release. The validation matches the
+[Quickstart](QUICKSTART.md#1-select-the-immutable-image). Never substitute a
+candidate or mutable tag in this production profile.
 
 The qualified image contract also provides these controls:
 

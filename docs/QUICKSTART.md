@@ -8,22 +8,25 @@ DGX Spark GPU and exercises readiness, buffered WAV, and progressive PCM.
 - An NVIDIA DGX Spark or equivalent `linux/arm64` host with an NVIDIA GB10 GPU.
 - A host driver compatible with the CUDA 13.0.3 userspace in the image.
 - Docker Engine with the NVIDIA Container Toolkit configured.
-- Access to the private image repository while the project remains private.
+- Registry authentication if the published package visibility requires it.
 
 The image already contains the pinned VoiceDesign and decoder weights. Do not
 download a model separately and do not mount model files into the container.
 
 ## 1. Select the immutable image
 
-```bash
-IMAGE='ghcr.io/luka-loehr/qwen3-tts-native@sha256:<PUBLISHED_DIGEST>'
-```
-
-`<PUBLISHED_DIGEST>` is deliberately a placeholder while registry publication
-and clean-pull qualification are pending. Replace it with the release digest;
-do not deploy a mutable `latest` tag.
+Copy the complete image reference from the `v0.1.0` GitHub release. Do not
+derive a digest from a candidate tag or copy one from a benchmark run.
 
 ```bash
+: "${QWEN3_TTS_IMAGE:?Set QWEN3_TTS_IMAGE from the v0.1.0 release notes}"
+if [[ ! "$QWEN3_TTS_IMAGE" =~ ^ghcr.io/luka-loehr/qwen3-tts-native@sha256:[0-9a-f]{64}$ ]]; then
+  printf 'Expected the immutable v0.1.0 GHCR reference, got: %s\n' \
+    "$QWEN3_TTS_IMAGE" >&2
+  exit 1
+fi
+IMAGE="$QWEN3_TTS_IMAGE"
+
 docker pull "$IMAGE"
 ```
 
