@@ -1,53 +1,49 @@
 # Production manifest assembler
 
-`assemble_production_manifest.py` turns one canonical workload and exactly
-twelve completed `run-qualifying-benchmark.sh` directories into a create-new
-`evidence.schema.json` version `1.1` production manifest. The tool uses only the
-Python standard library. It never edits, repairs, normalizes, or copies source
-evidence.
+`assemble_production_manifest.py` turns one canonical workload, two
+implementation-artifact manifests, and exactly twelve completed qualifying-run
+directories into a create-new `evidence.schema.json` version `1.2` production
+manifest. It uses only the Python standard library and never repairs, normalizes,
+or rewrites source evidence.
 
-The manifest is intentionally assembled only after all benchmark runs finish.
-No system, model, implementation, methodology, limitation, author, timestamp,
-or startup claim is inferred from the host. Every such claim must be supplied
-in the explicit configuration file.
+Production schema v1.2 separates three identities that must not be conflated:
 
-## Expected evidence set
+- the local Docker reference, local Docker `.Id`, and Docker's inspected local
+  unpacked/virtual `Size`;
+- an optional OCI registry reference, registry manifest digest, and optional
+  compressed transfer size; and
+- the model artifact actually visible to each implementation at benchmark time.
 
-The manifest output directory is the evidence root. Both the central workload
-and the runs root must already be inside it. A recommended layout is:
+The qualifying runs use already-running containers. They contain no startup
+measurement and no canonical launch-command record. Consequently v1.2 reports
+neither `startup_ms` nor `command_sha256`; manually supplied scalars are rejected.
+
+## Evidence-root layout
 
 ```text
 evidence-root/
-  workload/
-    workload.jsonl
+  workload/workload.jsonl
+  artifacts/
+    native/model-artifact.json
+    sglang/model-artifact.json
+    native/registry-image.json       optional
+    sglang/registry-image.json       optional
   runs/
-    round-01/
-      native/{B1,B3,B6}/
-      sglang/{B1,B3,B6}/
-    round-02/
-      native/{B1,B3,B6}/
-      sglang/{B1,B3,B6}/
-  manifest.json                 created by the assembler
+    round-01/{native,sglang}/{B1,B3,B6}/
+    round-02/{native,sglang}/{B1,B3,B6}/
+  manifest.json                     created by the assembler
 ```
 
 Directory names are not trusted as run identity. The assembler discovers runs
 through `provenance/invocation.json` and `run-resource.json`, then requires the
-embedded engine, profile, round, evidence prefix, image, workload, client, and
-telemetry identities to agree. The final set must be exactly:
+embedded engine, profile, round, evidence prefix, local image, workload, client,
+and telemetry identities to agree. The final set is exactly two engines, three
+profiles, two rounds, and twelve unique triples. Failed staging directories,
+unowned files, missing runs, duplicate identities, and extra runs fail assembly.
 
-- engines `native` and `sglang`;
-- profiles `B1`, `B3`, and `B6`;
-- rounds `1` and `2`;
-- one and only one directory for each of the twelve triples.
+## Static configuration
 
-Failed staging directories, a third round, a duplicate identity, or a missing
-run cause assembly to fail. Every directory and file below the runs root must
-belong to one of the twelve discovered run directories; unowned partial logs,
-empty staging directories, and other leftover artifacts are rejected.
-
-## Required metadata configuration
-
-Pass one UTF-8 JSON object containing exactly these top-level keys:
+The UTF-8 configuration contains exactly:
 
 ```json
 {
@@ -61,40 +57,129 @@ Pass one UTF-8 JSON object containing exactly these top-level keys:
 }
 ```
 
-Each value must already satisfy its corresponding definition in
-`reports/evidence.schema.json`. Use the schema as the field-level template; do
-not copy placeholder values into production evidence. In particular:
+Use `reports/evidence.schema.json` as the field-level contract. In v1.2:
 
-- `report.generated_at` is an explicit evidence timestamp, not the time the
-  assembler happens to run;
-- `system` must contain the observed Spark identity, software versions,
-  physical unified memory, power source, and notes;
-- `model` must contain the immutable repository revision, precision, model
-  manifest digest, and every declared weight digest and byte length;
-- both `implementations` must contain the actually tested image ID in
-  `image_digest`, measured startup time, source commit, command digest, and
-  exact runtime description;
-- `methodology` must define all clocks and metrics and must set the actual
-  telemetry interval used by every run;
-- `limitations` must state the real comparison limitations, including the
-  stock SGLang completion-buffered boundary where applicable.
+- `model` contains only the genuinely common repository, revision, and variant;
+- every implementation has its own required `model_artifact`, which may differ
+  in parameter count, precision, manifest, weight files, bytes, and hashes;
+- `local_image.id` is a Docker `.Id`, not an OCI registry manifest digest;
+- `local_image.unpacked_size_bytes` is Docker inspect `Size`, not registry
+  compressed size;
+- optional `registry_image` metadata requires separate digest-bound evidence;
+- `methodology` describes measured clocks and metrics but has no startup claim.
 
-The configuration's `workload.corpus_sha256` must equal the byte-for-byte
-SHA-256 of the supplied central workload. Production workload metadata is
-fixed to mono 24 kHz PCM16 streaming, at least 24 warmups, at least 200
-successful measured requests per run, exactly two rounds, and exactly the B1,
-B3, and B6 profiles.
+`workload.corpus_sha256` must equal the byte-for-byte SHA-256 of the central
+workload. `workload.ordered_seeds` must exactly equal the ordered `seed` values
+in every workload row. There is no corpus-wide seed. Every row requires
+`stream=true`, an integer seed, and `max_duration_seconds=20.48` exactly.
+Schema v1.2 does not contain the old optional workload-level
+`voice_description_sha256` or `generation` summaries; the canonical per-row
+VoiceDesign and sampling values remain in the workload and client evidence.
 
-Every canonical workload row must explicitly set `stream=true` and
-`max_duration_seconds=20.48`. For successful stock SGLang requests, the
-assembler also enforces the conservative report boundary: fewer than 255 codec
-frames, fewer than 489,600 PCM samples, and less than 20.40 seconds. The SGLang
-EOS fields must remain unknown. Successful Native requests must declare
-natural EOS, no length limit, and `finish_reason="stop"`.
+Production remains fixed to mono 24 kHz PCM16 streaming, at least 24 warmups
+per run, at least 200 measured requests per run, exactly B1/B3/B6, and exactly
+two rounds. Successful Native requests require natural EOS, no length limit,
+and `finish_reason="stop"`. Stock SGLang EOS stays unknown and successful audio
+must remain below the exclusive 255-frame / 489,600-sample / 20.40-second gate.
+
+## Required model-artifact evidence
+
+Each implementation's `model_artifact.evidence.path` is a normalized JSON path
+inside the evidence root. `model_artifact.evidence.sha256` is the exact file
+digest. The minimal Stock file is:
+
+```json
+{
+  "schema_version": "qwen3-tts-model-artifact/v1",
+  "implementation_id": "sglang",
+  "local_image_id": "sha256:<64 lowercase hex Docker .Id>",
+  "repository": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+  "revision": "5ecdb67327fd37bb2e042aab12ff7391903235d3",
+  "variant": "1.7B VoiceDesign",
+  "parameter_count": 2087233793,
+  "precision": ["bfloat16", "float32"],
+  "manifest_sha256": null,
+  "weight_files": [
+    {
+      "path": "model.safetensors",
+      "sha256": "391e8db219f292c515297cdceeb43e4eae67cdde35fa57e79a6a8a532fca0522",
+      "bytes": 3833402552,
+      "parameter_count": 1916676352,
+      "precision": "bfloat16"
+    },
+    {
+      "path": "speech_tokenizer/model.safetensors",
+      "sha256": "836b7b357f5ea43e889936a3709af68dfe3751881acefe4ecf0dbd30ba571258",
+      "bytes": 682293092,
+      "parameter_count": 170557441,
+      "precision": "float32"
+    }
+  ],
+  "source": {
+    "kind": "read_only_bind_mount",
+    "container_path": "/models/hf-repository",
+    "read_only": true,
+    "host_path": "/home/administrator/qwen3-tts-sglang/cache/huggingface/hub/models--Qwen--Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+    "snapshot_path": "snapshots/5ecdb67327fd37bb2e042aab12ff7391903235d3",
+    "revision_ref_path": "refs/main"
+  }
+}
+```
+
+The matching implementation configuration repeats the claim-bearing artifact
+fields verbatim and adds the evidence reference:
+
+```json
+{
+  "model_artifact": {
+    "repository": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+    "revision": "5ecdb67327fd37bb2e042aab12ff7391903235d3",
+    "variant": "1.7B VoiceDesign",
+    "parameter_count": 2087233793,
+    "precision": ["bfloat16", "float32"],
+    "manifest_sha256": null,
+    "weight_files": [
+      {
+        "path": "model.safetensors",
+        "sha256": "391e8db219f292c515297cdceeb43e4eae67cdde35fa57e79a6a8a532fca0522",
+        "bytes": 3833402552,
+        "parameter_count": 1916676352,
+        "precision": "bfloat16"
+      },
+      {
+        "path": "speech_tokenizer/model.safetensors",
+        "sha256": "836b7b357f5ea43e889936a3709af68dfe3751881acefe4ecf0dbd30ba571258",
+        "bytes": 682293092,
+        "parameter_count": 170557441,
+        "precision": "float32"
+      }
+    ],
+    "evidence": {
+      "path": "artifacts/sglang/model-artifact.json",
+      "sha256": "<SHA-256 of the exact JSON file>"
+    }
+  }
+}
+```
+
+The assembler cross-validates exact metadata equality, parameter-count sums,
+the sorted unique precision set, common repository/revision/variant, and the
+artifact's `local_image_id` against the tested local Docker ID. Stock SGLang
+must identify its observed read-only bind mount. Missing or changed Stock
+artifact evidence fails explicitly; Native values are never substituted.
+
+Native uses the same file format with `implementation_id="native"`, source kind
+`container_image`, its BF16 decoder-only artifact, and its actual artifact
+manifest digest. A null `manifest_sha256` explicitly means no single artifact
+manifest was observed; it is not a placeholder digest.
+
+Optional registry metadata uses `qwen3-tts-registry-image/v1` and records
+`implementation_id`, `local_image_id`, `reference`, `manifest_digest`, and
+optional `compressed_size_bytes`. The implementation's `registry_image.evidence`
+must reference that exact digest-inventoried file. Registry claims are omitted
+when this evidence does not exist.
 
 ## Assemble once
-
-Run from the repository root:
 
 ```bash
 python3 reports/tools/assemble_production_manifest.py \
@@ -102,78 +187,43 @@ python3 reports/tools/assemble_production_manifest.py \
   --workload /absolute/path/to/evidence-root/workload/workload.jsonl \
   --runs-root /absolute/path/to/evidence-root/runs \
   --output /absolute/path/to/evidence-root/manifest.json
-```
 
-The output parent must already exist. `manifest.json` must not exist. The tool
-opens it with create-new semantics, writes deterministic UTF-8 JSON, flushes it
-to disk, and refuses every overwrite. The generated top-level fields are only
-`schema_version`, `evidence_kind`, `evidence_files`, and `run_resources`; all
-claim-bearing static sections are copied unchanged from the configuration.
-
-After assembly, run the complete semantic report validator:
-
-```bash
 python3 reports/generate_report.py \
   /absolute/path/to/evidence-root/manifest.json \
   --validate-only
 ```
 
-The assembler validates the final object against the repository's schema before
-writing, while `generate_report.py` additionally performs full request/packet
-arithmetic, workload parity, statistical, and report-specific validation.
+The output parent must exist and `manifest.json` must not. The assembler uses
+create-new semantics, deterministic UTF-8 JSON, flushes the output, and refuses
+overwrites. Claim-bearing static sections are copied unchanged only after all
+cross-validation succeeds. Observed evidence descriptors and run resources are
+derived from the files.
 
-## Integrity and path policy
+## Integrity policy
 
-For every run, the assembler requires and recalculates the complete
-`SHA256SUMS` inventory. The inventory must cover every regular run file exactly
-once except `SHA256SUMS` itself. Missing entries, extra entries, malformed
-paths, changed bytes, and duplicate paths fail assembly.
+Every run's complete `SHA256SUMS` inventory is recalculated. Every representable
+non-empty artifact receives an evidence descriptor; binaries, shell scripts,
+the checksum file, and zero-byte streams remain covered by the complete run
+inventory even where they do not receive a descriptor. Absolute paths,
+traversal, non-normalized paths, backslashes, symlinks, files outside the
+evidence root, and duplicate paths are rejected.
 
-Every non-empty artifact whose extension is representable by schema v1.1
-(`json`, `jsonl`, `csv`, `txt`, `log`, `stdout`, or `stderr`) receives an
-`evidence_files` descriptor with its observed SHA-256 and byte count. The three
-canonical client artifacts receive their dedicated roles. Schema v1.1 cannot
-represent extensionless binaries, shell scripts, `SHA256SUMS`, or zero-byte
-streams as evidence descriptors; those files are still mandatory where the
-controller always produces them and remain fully verified through the run's
-complete checksum inventory.
-
-Absolute manifest paths, traversal, backslashes, non-normalized paths, symlink
-files, symlink directories, files outside the evidence root, mismatched
-`evidence_prefix` values, and output symlinks are rejected. Raw telemetry paths
-in each `run-resource.json` must equal the reducer's canonical eight-file set
-and must resolve to digest-bound raw descriptors for the same run.
-
-Additional production gates include:
-
-- one clean immutable benchmark-tooling commit and one client digest across all
-  twelve runs;
-- one resolved container image ID and one image reference per engine;
-- resolved image IDs equal to their configured implementation image digests;
-- identical captured workload bytes in all twelve runs;
-- configured, invoked, and reduced sampling intervals agree;
-- no competing CUDA process and no unclean benchmark-tooling worktree;
-- all eleven `resource-audit.json` source-file SHA-256/byte records agree with
-  the recalculated run inventory, and its sampling, power, energy, RSS, and GPU
-  memory reductions agree with `run-resource.json`;
-- run, resource audit, summary, and invocation identities agree.
+Additional gates include one clean immutable tooling commit, one client digest,
+one local image ID/reference per engine, exact invocation and Docker-inspect ID
+agreement, exact Docker-inspect local `Size`, identical workload bytes, aligned
+sampling intervals, no competing CUDA process, complete resource-audit source
+digests, and matching invocation/resource/summary identities.
 
 ## Tests
 
-The tests use only temporary directories and require no Docker or GPU:
-
 ```bash
-python3 -m unittest discover \
-  -s reports/tools/tests \
-  -p 'test_*.py' \
-  -v
-
+python3 -m unittest discover -s reports/tools/tests -p 'test_*.py' -v
 ruff check --no-cache reports/tools
 ruff format --check --no-cache reports/tools
 ```
 
-The fixtures exercise a complete twelve-run, 2,400-request matrix and explicit
-rejection of missing and extra runs, checksum changes, symlinks, identity
-conflicts, a non-20.48-second workload, the stock SGLang 255-frame boundary,
-image-digest drift, stale internally referenced audit digests, and output
-overwrites.
+The fixtures exercise the complete twelve-run matrix plus missing/extra runs,
+checksum mutation, symlinks, identity conflicts, duration and SGLang boundary
+violations, local-image ID/size drift, ordered-seed drift, missing and changed
+Stock artifacts, invalid parameter sums, registry-evidence drift, stale audit
+digests, and output overwrite protection.

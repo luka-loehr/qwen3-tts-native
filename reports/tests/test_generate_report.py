@@ -30,6 +30,15 @@ def update_descriptor(manifest_path: Path, relative_path: str) -> None:
             descriptor["sha256"] = hashlib.sha256(payload).hexdigest()
             if descriptor["role"] == "requests":
                 manifest["workload"]["corpus_sha256"] = descriptor["sha256"]
+            elif descriptor["role"] == "model_artifact":
+                implementation = next(
+                    item
+                    for item in manifest["implementations"]
+                    if item["id"] == descriptor["engine_id"]
+                )
+                implementation["model_artifact"]["evidence"]["sha256"] = descriptor[
+                    "sha256"
+                ]
             break
     manifest_path.write_text(
         json.dumps(manifest, indent=2, sort_keys=False) + "\n",
@@ -321,15 +330,15 @@ def create_client_bundle(base: Path) -> Path:
                 }
             )
     manifest = json.loads((FIXTURE_DIR / "manifest.json").read_text(encoding="utf-8"))
-    manifest["schema_version"] = "1.1"
+    manifest["schema_version"] = "1.2"
     manifest["workload"] = {
         "corpus_sha256": hashlib.sha256(workload_path.read_bytes()).hexdigest(),
-        "seed": 42,
+        "ordered_seeds": [42, 43],
         "sample_rate_hz": 24000,
         "channels": 1,
         "sample_format": "pcm_s16le",
         "response_mode": "streaming",
-        "warmup_requests_per_engine": 2,
+        "warmup_requests_per_run": 2,
         "minimum_measured_requests_per_profile": 2,
         "minimum_rounds_per_subject": 1,
         "profiles": [
@@ -338,9 +347,92 @@ def create_client_bundle(base: Path) -> Path:
         ],
         "language_policy": "Synthetic bilingual direct client fixture",
     }
-    manifest["model"]["repository"] = "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign"
-    for implementation in manifest["implementations"]:
-        implementation["model_repository"] = manifest["model"]["repository"]
+    manifest["model"] = {
+        "repository": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+        "revision": "5ecdb67327fd37bb2e042aab12ff7391903235d3",
+        "variant": "1.7B VoiceDesign",
+    }
+
+    implementations = []
+    for engine in ("native", "sglang"):
+        native = engine == "native"
+        local_id = "sha256:" + ("3" if native else "4") * 64
+        weights = [
+            {
+                "path": "model.safetensors",
+                "sha256": "a" * 64,
+                "bytes": 3_833_402_552,
+                "parameter_count": 1_916_676_352,
+                "precision": "bfloat16",
+            },
+            {
+                "path": "speech_tokenizer/model.safetensors",
+                "sha256": ("b" if native else "c") * 64,
+                "bytes": 228_678_506 if native else 682_293_092,
+                "parameter_count": 114_323_137 if native else 170_557_441,
+                "precision": "bfloat16" if native else "float32",
+            },
+        ]
+        artifact: dict[str, Any] = {
+            **manifest["model"],
+            "parameter_count": sum(item["parameter_count"] for item in weights),
+            "precision": sorted({item["precision"] for item in weights}),
+            "manifest_sha256": "d" * 64 if native else None,
+            "weight_files": weights,
+        }
+        artifact_payload = {
+            "schema_version": "qwen3-tts-model-artifact/v1",
+            "implementation_id": engine,
+            "local_image_id": local_id,
+            **artifact,
+            "source": {
+                "kind": "container_image" if native else "read_only_bind_mount",
+                "container_path": "/opt/qwen3-tts/model"
+                if native
+                else "/models/hf-repository",
+                "read_only": True,
+                **(
+                    {}
+                    if native
+                    else {
+                        "host_path": "/srv/fixture/hf-cache",
+                        "snapshot_path": "snapshots/5ecdb673",
+                        "revision_ref_path": "refs/main",
+                    }
+                ),
+            },
+        }
+        artifact_path = base / "artifacts" / engine / "model-artifact.json"
+        write_json(artifact_path, artifact_payload)
+        artifact_descriptor = descriptor(
+            "model_artifact", artifact_path, base, engine_id=engine
+        )
+        evidence.append(artifact_descriptor)
+        artifact["evidence"] = {
+            "path": artifact_descriptor["path"],
+            "sha256": artifact_descriptor["sha256"],
+        }
+        implementations.append(
+            {
+                "id": engine,
+                "role": engine,
+                "name": "Qwen3 TTS Native" if native else "SGLang Omni",
+                "version": "0.1.0",
+                "source_commit": ("1" if native else "2") * 40,
+                "source_url": f"https://example.invalid/{engine}",
+                "local_image": {
+                    "reference": f"fixture/{engine}:candidate",
+                    "id": local_id,
+                    "unpacked_size_bytes": 5_000_000_000 if native else 29_000_000_000,
+                },
+                "model_artifact": artifact,
+                "api_protocol": "HTTP/1.1 raw PCM16",
+                "streaming_semantics": "progressive" if native else "buffered",
+                "runtime_components": ["Rust", "CUDA"] if native else ["SGLang-Omni"],
+            }
+        )
+    manifest["implementations"] = implementations
+    manifest["methodology"].pop("startup_definition")
     manifest["evidence_files"] = evidence
     manifest["run_resources"] = resources
     manifest_path = base / "manifest.json"
@@ -599,16 +691,61 @@ class ReportPipelineTests(unittest.TestCase):
 
     def test_model_revision_mismatch_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            copied = Path(temporary) / "fixture"
-            shutil.copytree(FIXTURE_DIR, copied)
-            manifest_path = copied / "manifest.json"
+            manifest_path = create_client_bundle(Path(temporary))
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            manifest["implementations"][1]["model_revision"] = "different-revision"
+            manifest["implementations"][1]["model_artifact"]["revision"] = (
+                "different-revision"
+            )
             manifest_path.write_text(
                 json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
             )
             with self.assertRaisesRegex(
                 generate_report.EvidenceError, "must exactly match model.revision"
+            ):
+                generate_report.load_bundle(manifest_path, allow_test_fixture=True)
+
+    def test_v12_ordered_seed_mismatch_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest_path = create_client_bundle(Path(temporary))
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["workload"]["ordered_seeds"] = [42, 99]
+            write_json(manifest_path, manifest)
+            with self.assertRaisesRegex(generate_report.EvidenceError, "ordered_seeds"):
+                generate_report.load_bundle(manifest_path, allow_test_fixture=True)
+
+    def test_v12_artifact_payload_mismatch_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            manifest_path = create_client_bundle(base)
+            artifact_path = base / "artifacts/sglang/model-artifact.json"
+            payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+            payload["weight_files"][1]["bytes"] += 1
+            write_json(artifact_path, payload)
+            update_descriptor(manifest_path, artifact_path.relative_to(base).as_posix())
+            with self.assertRaisesRegex(
+                generate_report.EvidenceError, "differs from digest-bound evidence"
+            ):
+                generate_report.load_bundle(manifest_path, allow_test_fixture=True)
+
+    def test_v12_local_image_id_mismatch_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest_path = create_client_bundle(Path(temporary))
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["implementations"][1]["local_image"]["id"] = "sha256:" + "9" * 64
+            write_json(manifest_path, manifest)
+            with self.assertRaisesRegex(
+                generate_report.EvidenceError, "tested local Docker image ID"
+            ):
+                generate_report.load_bundle(manifest_path, allow_test_fixture=True)
+
+    def test_v12_rejects_unverified_startup_scalar(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest_path = create_client_bundle(Path(temporary))
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["implementations"][0]["startup_ms"] = 123.0
+            write_json(manifest_path, manifest)
+            with self.assertRaisesRegex(
+                generate_report.EvidenceError, "unrecognized fields: startup_ms"
             ):
                 generate_report.load_bundle(manifest_path, allow_test_fixture=True)
 

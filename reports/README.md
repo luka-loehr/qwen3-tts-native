@@ -22,7 +22,7 @@ reports/
 
 ## Production evidence bundle
 
-The generator accepts one JSON manifest. Production uses schema version `1.1`
+The generator accepts one JSON manifest. Production uses schema version `1.2`
 and consumes the Rust benchmark client's files directly. There is no normalized
 measurement export and no hand-edited intermediate statistics file.
 
@@ -34,6 +34,9 @@ A production bundle contains:
 - raw timestamped telemetry files for every run;
 - one `run_resources` manifest record for every run, with digest-bound links to
   its raw telemetry;
+- one digest-bound model-artifact manifest per implementation;
+- optional, separately digest-bound OCI registry metadata when registry digest
+  or compressed-size claims are reported;
 - one manifest containing immutable system, model, implementation, workload,
   methodology, and evidence-file metadata.
 
@@ -45,13 +48,27 @@ absolute paths, path
 traversal, duplicate records, non-finite numbers, unrecognized fields, digest
 mismatches, and missing run triples are rejected.
 
-The workload JSONL is the canonical workload identity. For each profile and
+The workload JSONL is the canonical workload identity. Its exact ordered row
+seeds are repeated as `workload.ordered_seeds` and cross-validated; there is no
+meaningful single corpus seed. For each profile and
 round, Native and SGLang must have exactly the same ordered request indices,
 workload IDs, text hashes, VoiceDesign hashes, languages, streaming mode, and
 normalized sampling hashes. The validator recomputes text, VoiceDesign, and
-normalized-sampling SHA-256 values rather than trusting the summaries. It also
-rejects an implementation whose repository, model revision, precision, or
-model-manifest digest differs from the shared model declaration.
+normalized-sampling SHA-256 values rather than trusting the summaries.
+
+The top-level model declares only the genuinely common repository, revision,
+and variant. Precision, parameter count, optional artifact-manifest digest, and
+complete weight metadata belong to each implementation's separately
+digest-bound `model_artifact`. Native and Stock values may differ and are never
+forced equal. The artifact evidence also binds the metadata to the tested local
+Docker image ID. A missing Stock artifact file fails validation rather than
+copying the Native declaration.
+
+Local Docker identity and OCI registry identity are separate. `local_image.id`
+is Docker's local `.Id`; `local_image.unpacked_size_bytes` is Docker inspect's
+local unpacked/virtual `Size`. An optional registry manifest digest and optional
+compressed size appear only with their own registry evidence. Neither value is
+inferred from the local image ID or local size.
 
 Every production workload entry must set `stream=true` and
 `max_duration_seconds=20.48` exactly. At 24 kHz with 1,920 samples per codec
@@ -71,8 +88,8 @@ the observed count of competing CUDA processes. Production is rejected when
 sampling is slower than 200 ms, competing CUDA work is present, or a telemetry
 path is absent, unverified, or assigned to another run.
 
-Raw telemetry may start before warmup so the audit trail includes startup and
-thermal state. The values placed in `run_resources` must nevertheless be
+Raw telemetry may start before warmup so the audit trail includes the idle and
+pre-warmup thermal state. The values placed in `run_resources` must nevertheless be
 reduced over the measured scenario window only. Warmup energy and warmup-only
 peaks must not be charged to measured audio. The collection controller therefore
 needs unambiguous measured-phase boundaries that can be aligned with telemetry
@@ -93,8 +110,11 @@ Each successful client request records:
 
 Failed, cancelled, and timed-out requests remain in the evidence and contribute
 to reliability results. Performance percentiles only use successful requests.
-All definitions, clock sources, measurement tools, sampling intervals, run
-ordering, and environmental controls are mandatory manifest fields.
+All measured definitions, clock sources, measurement tools, sampling intervals,
+run ordering, and environmental controls are mandatory manifest fields. These
+runs use already-running containers, so they do not support a startup-time or
+canonical launch-command claim; schema v1.2 rejects unverified scalar fields for
+either claim.
 
 The client summary is verified against raw requests. The report distinguishes:
 
@@ -218,7 +238,7 @@ The generated report includes:
 9. power and energy;
 10. streaming cadence;
 11. reliability;
-12. startup time and image size;
+12. local container footprint and optional registry provenance;
 13. limitations;
 14. raw evidence and artifact digest appendix.
 
