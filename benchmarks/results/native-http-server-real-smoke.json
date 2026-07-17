@@ -1,0 +1,132 @@
+{
+  "schema_version": 1,
+  "status": "pass",
+  "collected_at_utc": "2026-07-17T07:53:00Z",
+  "scope": "real DGX Spark HTTP smoke of the native Rust/CUDA VoiceDesign server",
+  "source": {
+    "branch": "perf/device-code-handoff",
+    "commit": "deaa01947a0fa445785d8de4740c07ff106e5504",
+    "worktree": "/home/administrator/codex-playground-worktrees/server-deaa019",
+    "build_seconds": 11.16,
+    "target": "aarch64-unknown-linux-gnu",
+    "rust": "1.97.0"
+  },
+  "model": {
+    "id": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+    "revision": "5ecdb67327fd37bb2e042aab12ff7391903235d3",
+    "artifact": "/home/administrator/codex-playground-artifacts/qwen3-tts-1.7b-voice-design-bf16-indexed",
+    "manifest_sha256": "9bb96a8d24bbb2d8933245e27083b8e7290346b776306dcb8a8f3aed68594527",
+    "voice_design_dtype": "BF16",
+    "speech_decoder_dtype": "BF16",
+    "voice_clone": false
+  },
+  "artifacts": {
+    "server_sha256": "d0668d8d8f744622e931ae9623ba8c64912d5a35150e66f959eecfa3f2cec29c",
+    "healthcheck_sha256": "7f035ad8630e88267a651551d24eaafec8c6af34e9980962ef2aab6bef6bdf4a",
+    "talker_library_sha256": "c91d6306402d00520a5f5688a8e0bfce1779011fc205a0ba1a5399304f6b9d84",
+    "codec_library_sha256": "2262aea07134842b73cf7df66f5f321736341183b05f4a573bca3a8808670594"
+  },
+  "coexistence": {
+    "existing_sglang_process_untouched": true,
+    "existing_sglang_gpu_memory_mib": 96855,
+    "host_memory_available_before_server_bytes": 21914005504,
+    "host_memory_available_after_load_bytes": 16894050304,
+    "host_memory_available_delta_bytes": 5019955200,
+    "server_gpu_memory_after_load_mib": 4269,
+    "server_gpu_memory_after_smokes_mib": 4406,
+    "host_memory_available_after_smokes_bytes": 16687173632
+  },
+  "health": {
+    "healthcheck_exit_code": 0,
+    "ready_http_status": 200,
+    "engine_loaded": true,
+    "model_kind": "voice_design",
+    "sample_rate_hz": 24000
+  },
+  "streaming_request": {
+    "request_id": "0198f65d-a679-7411-8f7c-151dbf0486c0",
+    "language": "german",
+    "seed": 42,
+    "send_completed_at": "09:50:25.149698+02:00",
+    "start_part_at": "09:50:25.150231+02:00",
+    "first_audio_part_at": "09:50:25.444143+02:00",
+    "network_time_to_first_audio_microseconds": 294445,
+    "internal_first_audio_microseconds": 293651,
+    "prefill_microseconds": 240105,
+    "model_wall_microseconds": 3896056,
+    "curl_total_seconds": 3.898181,
+    "generated_codec_frames": 63,
+    "emitted_packets": 17,
+    "emitted_samples": 120960,
+    "audio_seconds": 5.04,
+    "model_wall_rtf": 0.773027,
+    "talker_gpu_microseconds": 2755176.01171875,
+    "codec_gpu_microseconds": 868989.9091796875,
+    "peak_request_device_bytes": 65032852,
+    "peak_request_host_bytes": 46080,
+    "download_bytes": 247159,
+    "multipart_sha256": "fa3550b0d3014c5e1cd19b1e3e2602d77e1550054d54154886d4750a571d0254",
+    "progressive_audio_before_end": true,
+    "finish_reason": "completed"
+  },
+  "buffered_wav_request": {
+    "request_id": "0198f65d-a679-7411-8f7c-151dbf0486c1",
+    "http_status": 200,
+    "total_seconds": 3.656619,
+    "bytes": 241964,
+    "format": "RIFF WAVE PCM signed 16-bit little-endian mono 24000 Hz",
+    "audio_seconds": 5.04,
+    "sha256": "bcc8be0cf6d7715e2889f86fbfbf520440b2496af2af1e956b589d90d939a1b6"
+  },
+  "cancellation": {
+    "streaming": {
+      "delete_http_status": 202,
+      "terminal_event": "error",
+      "terminal_code": "request_cancelled",
+      "engine_ready_after_retirement": true
+    },
+    "buffered_before_headers": {
+      "request_id": "0198f65d-a679-7411-8f7c-151dbf0486c4",
+      "delete_after_milliseconds": 250,
+      "delete_http_status": 202,
+      "request_http_status": 409,
+      "request_total_milliseconds": 297.587,
+      "terminal_code": "request_cancelled",
+      "engine_ready_after_retirement": true
+    }
+  },
+  "metrics_after_smokes": {
+    "accepted_requests": 5,
+    "active_requests": 0,
+    "streaming_requests": 2,
+    "buffered_requests": 3,
+    "completed_requests": 3,
+    "failed_requests": 0,
+    "cancelled_requests": 2,
+    "rejected_requests": 0,
+    "retirement_timeouts": 0,
+    "emitted_samples": 503040
+  },
+  "shutdown": {
+    "signal": "SIGTERM",
+    "active_requests_at_signal": 0,
+    "milliseconds_to_process_exit": 304,
+    "exit_code": 0,
+    "hard_deadline_seconds": 35,
+    "watchdog_forced_exit": false
+  },
+  "local_quality_gates": {
+    "tests_passed": 31,
+    "tests_failed": 0,
+    "cargo_check_all_targets": "pass",
+    "cargo_clippy_all_targets_deny_warnings": "pass",
+    "cargo_fmt_check": "pass"
+  },
+  "remaining_release_gates": [
+    "multilingual real-model validation",
+    "subjective audio-quality review",
+    "at least 200 full requests on this server/runtime revision",
+    "final runtime terminal reason instead of generic completed",
+    "clean Docker image build, pull, and runtime smoke"
+  ]
+}
