@@ -1,0 +1,30 @@
+# Default-deny: only inputs referenced by Dockerfile.runtime enter BuildKit.
+**
+
+!LICENSE
+
+!native/
+!native/qwen3-tts-native/
+!native/qwen3-tts-native/**
+!native/qwen3-tts-native-codec/
+!native/qwen3-tts-native-codec/**
+!native/qwen3-tts-runtime/
+!native/qwen3-tts-runtime/**
+!native/qwen3-tts-server/
+!native/qwen3-tts-server/**
+
+!benchmarks/
+!benchmarks/results/
+!benchmarks/results/voice-design-model-inventory.json
+!benchmarks/results/speech-tokenizer-model-inventory.json
+
+!licenses/
+!licenses/**
+
+# Re-exclude generated or heavyweight material inside allowed directories.
+native/**/target
+native/**/target/**
+native/**/*.wav
+native/**/*.safetensors
+native/**/*.cdx.json
+**/.DS_Store

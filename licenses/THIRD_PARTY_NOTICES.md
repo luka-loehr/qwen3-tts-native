@@ -19,10 +19,14 @@ the model subdirectory.
 
 ## NVIDIA CUDA runtime
 
-The final image derives from NVIDIA's official CUDA 13.0.2 runtime image for
-Ubuntu 24.04 ARM64. NVIDIA and operating-system license material inherited from
-that base image must remain present. The runtime image must not copy TensorRT,
-cuDNN, compiler, Python, or Node.js material from build stages.
+The final image derives from NVIDIA's official CUDA 13.0.3 `base` image for
+Ubuntu 24.04 ARM64 at platform-manifest digest
+`sha256:56d9d8183e2181a20be6b0d3801d1f056a0e75c17706df939ba207b126e1cb9c`.
+It additionally copies only the runtime files and notices from
+`libcublas-13-0=13.1.1.3-1` in the pinned official CUDA devel image. NVIDIA and
+operating-system license material inherited from those inputs must remain
+present. The runtime image must not copy TensorRT, cuDNN, NPP, cuSPARSE, NCCL,
+compiler, Python, or Node.js material from build stages.
 
 Official image:
 
