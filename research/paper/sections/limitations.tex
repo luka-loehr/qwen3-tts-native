@@ -6,12 +6,10 @@ The implementation and measurements target one platform:
 \code{linux/arm64} on NVIDIA DGX Spark with \code{sm\_121}. They do not
 establish portability or performance on x86-64, another GPU architecture, a
 multi-GPU server, or a cloud accelerator. Two rounds on one host expose
-run-to-run variation but cannot characterize population-level hardware
-variance. The production matrix groups all stock runs before all Native runs
-to avoid repeated eviction and loading of the stock working set. Consequently,
-the comparison is not order-counterbalanced and may retain persistent
-host-state or thermal bias despite idle baselines and one-at-a-time CUDA
-isolation.
+run-to-run variation and reverse subject order, but they cannot characterize
+population-level hardware variance or eliminate all persistent host-state and
+thermal effects. Idle baselines and one-at-a-time CUDA isolation constrain
+these effects without proving that they are absent.
 
 The runtime supports only the pinned 1.7B, 12-Hz VoiceDesign checkpoint. It
 does not implement voice cloning, reference-audio conditioning, speaker
