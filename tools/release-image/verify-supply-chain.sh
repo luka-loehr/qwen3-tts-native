@@ -91,6 +91,7 @@ fi
 jq -e 'type == "array" and length == 0' "$EVIDENCE_DIR/gitleaks.json" >/dev/null ||
   release_die "Gitleaks report is not an empty JSON array"
 
+"$GRYPE_BIN" db update >"$EVIDENCE_DIR/grype-db-update.txt"
 "$GRYPE_BIN" db status >"$EVIDENCE_DIR/grype-db-status.txt"
 "$GRYPE_BIN" "$REFERENCE" --output json >"$EVIDENCE_DIR/grype.json"
 jq -e '.matches | type == "array"' "$EVIDENCE_DIR/grype.json" >/dev/null ||

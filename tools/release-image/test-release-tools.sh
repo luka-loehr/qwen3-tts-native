@@ -45,6 +45,7 @@ fi
 grep -Fq -- '--provenance=mode=max' "$SCRIPT_DIR/build-and-push.sh"
 grep -Fq -- 'docker/buildkit-syft-scanner@sha256:' "$SCRIPT_DIR/build-and-push.sh"
 grep -Fq -- 'high/critical release blockers' "$SCRIPT_DIR/verify-supply-chain.sh"
+grep -Fq -- 'db update' "$SCRIPT_DIR/verify-supply-chain.sh"
 grep -Fq -- 'provenance contains a credential-like field' "$SCRIPT_DIR/verify-supply-chain.sh"
 grep -Fq -- 'image store is not empty' "$SCRIPT_DIR/clean-pull-gpu-acceptance.sh"
 grep -Fq -- '--gpus' "$SCRIPT_DIR/clean-pull-gpu-acceptance.sh"
