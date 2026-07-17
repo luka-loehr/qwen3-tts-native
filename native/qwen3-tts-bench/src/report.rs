@@ -32,6 +32,7 @@ pub struct PreflightReport {
 #[derive(Debug, Serialize)]
 pub struct QualificationGates {
     pub all_requests_completed: bool,
+    pub natural_codec_eos_all_requests: bool,
     pub at_least_200_requests_per_scenario: bool,
     pub progressive_streaming_observed: bool,
     pub packet_positions_contiguous: bool,
@@ -53,6 +54,7 @@ pub struct ScenarioReport {
     pub aggregate_rtf: f64,
     pub requests_per_second: f64,
     pub progressive_streaming_requests: usize,
+    pub natural_codec_eos_requests: usize,
     pub exact_copy_bound_requests: usize,
     pub host_rss_start_bytes: Option<u64>,
     pub host_rss_peak_bytes: Option<u64>,
@@ -72,6 +74,7 @@ pub struct RequestReport {
     pub ordinal: usize,
     pub corpus_id: String,
     pub language: String,
+    pub finish_reason: String,
     pub packets: u64,
     pub codec_frames: u64,
     pub samples: u64,

@@ -10,8 +10,37 @@ pub const STATUS_WOULD_BLOCK: i32 = 1;
 pub const STATUS_END_OF_STREAM: i32 = 2;
 pub const SAMPLE_RATE: u32 = 24_000;
 pub const SAMPLES_PER_FRAME: u32 = 1_920;
+const FINISH_REASON_NONE: u32 = 0;
+const FINISH_REASON_CODEC_EOS: u32 = 1;
+const FINISH_REASON_MAX_CODEC_FRAMES: u32 = 2;
 const ERROR_CAPACITY: usize = 1_024;
 const PCM_SENTINEL: i16 = i16::MIN;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FinishReason {
+    None,
+    CodecEos,
+    MaxCodecFrames,
+}
+
+impl FinishReason {
+    fn from_raw(value: u32) -> Result<Self> {
+        match value {
+            FINISH_REASON_NONE => Ok(Self::None),
+            FINISH_REASON_CODEC_EOS => Ok(Self::CodecEos),
+            FINISH_REASON_MAX_CODEC_FRAMES => Ok(Self::MaxCodecFrames),
+            unknown => bail!("request_finish_reason returned unknown value {unknown}"),
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::CodecEos => "codec_eos",
+            Self::MaxCodecFrames => "max_codec_frames",
+        }
+    }
+}
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -156,6 +185,7 @@ type RequestPoll = unsafe extern "C" fn(
 type RequestCancel = unsafe extern "C" fn(*mut c_void, *mut c_char, usize) -> i32;
 type RequestMetricsFn =
     unsafe extern "C" fn(*const c_void, *mut RequestMetrics, *mut c_char, usize) -> i32;
+type RequestFinishReason = unsafe extern "C" fn(*const c_void, *mut u32, *mut c_char, usize) -> i32;
 type RequestDestroy = unsafe extern "C" fn(*mut c_void, *mut c_char, usize) -> i32;
 
 pub struct Api {
@@ -167,6 +197,7 @@ pub struct Api {
     request_poll: RequestPoll,
     request_cancel: RequestCancel,
     request_metrics: RequestMetricsFn,
+    request_finish_reason: RequestFinishReason,
     request_destroy: RequestDestroy,
 }
 
@@ -211,6 +242,10 @@ impl Api {
         let request_metrics =
             unsafe { *library.get::<RequestMetricsFn>(b"qwen3_tts_request_metrics_v1\0")? };
         // SAFETY: See the versioned C header shipped with qwen3-tts-runtime.
+        let request_finish_reason = unsafe {
+            *library.get::<RequestFinishReason>(b"qwen3_tts_request_finish_reason_v1\0")?
+        };
+        // SAFETY: See the versioned C header shipped with qwen3-tts-runtime.
         let request_destroy =
             unsafe { *library.get::<RequestDestroy>(b"qwen3_tts_request_destroy_v1\0")? };
 
@@ -223,6 +258,7 @@ impl Api {
             request_poll,
             request_cancel,
             request_metrics,
+            request_finish_reason,
             request_destroy,
         })
     }
@@ -402,6 +438,23 @@ impl Request<'_> {
         Ok(output)
     }
 
+    pub fn finish_reason(&self) -> Result<FinishReason> {
+        let mut output = FINISH_REASON_NONE;
+        let mut error = ErrorBuffer::new();
+        // SAFETY: The request remains live and output points to a correctly
+        // aligned writable u32.
+        let status = unsafe {
+            (self.api.request_finish_reason)(
+                self.raw()?.as_ptr(),
+                &mut output,
+                error.as_mut_ptr(),
+                error.capacity(),
+            )
+        };
+        ensure_status(status, STATUS_OK, &error, "request_finish_reason")?;
+        FinishReason::from_raw(output)
+    }
+
     pub fn cancel(&mut self) -> Result<()> {
         let mut error = ErrorBuffer::new();
         // SAFETY: The request is live and the call does not retain pointers.
@@ -475,4 +528,20 @@ fn ensure_status(status: i32, expected: i32, error: &ErrorBuffer, operation: &st
         bail!("{operation} failed with runtime status {status}");
     }
     bail!("{operation} failed with runtime status {status}: {message}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FinishReason;
+
+    #[test]
+    fn finish_reason_mapping_rejects_unknown_abi_values() {
+        assert_eq!(FinishReason::from_raw(0).unwrap(), FinishReason::None);
+        assert_eq!(FinishReason::from_raw(1).unwrap(), FinishReason::CodecEos);
+        assert_eq!(
+            FinishReason::from_raw(2).unwrap(),
+            FinishReason::MaxCodecFrames
+        );
+        assert!(FinishReason::from_raw(3).is_err());
+    }
 }
