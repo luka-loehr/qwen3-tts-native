@@ -1,164 +1,327 @@
 # Qwen3-TTS Native
 
-Native Rust and CUDA research runtime for
-`Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign`, developed and measured on NVIDIA DGX
-Spark.
+Native Rust and CUDA inference for
+[`Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign`](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign),
+designed and qualified for NVIDIA DGX Spark.
 
-The repository contains a real incremental text-to-code-to-PCM path. It loads
-the official 1.7B VoiceDesign and speech-tokenizer decoder weights, generates
-codec frames on the GPU, decodes them into 24 kHz mono PCM, and exposes the
-stream through a versioned C ABI. Python and Node.js are not part of the
-inference runtime.
+The project turns text plus a natural-language voice description into
+progressive 24 kHz mono PCM. The complete inference path—prompt preparation,
+the 1.7B VoiceDesign talker, its 15-step code predictor, device-to-device token
+handoff, the neural speech decoder, scheduling, and HTTP delivery—runs in
+native Rust and CUDA. Python, Node.js, PyTorch, SGLang, and vLLM are not part of
+the runtime or production image.
 
-> **Status:** working research implementation, not a production service. The
-> public C ABI and native audio path are functional. Single-stream generation
-> is faster than real time, while per-request B3/B6 latency and multilingual
-> audio-quality qualification still require work.
+> **Release status:** the native service and hardened image definition are
+> implemented, but the first registry digest is still undergoing final
+> container qualification. No image should be treated as released until the
+> exact digest is published here and every item in the
+> [release checklist](containers/RELEASE_CHECKLIST.md) is complete. In the
+> commands below, `sha256:<PUBLISHED_DIGEST>` and `<PUBLISHED_RELEASE_TAG>` are
+> deliberate release placeholders, not working values.
 
-## What is implemented
+## What this project provides
 
-- Native Qwen3-TTS 1.7B VoiceDesign talker and 15-step code predictor.
-- Native speech-tokenizer decoder with exact incremental PCM continuity.
-- Rust orchestration around CUDA 13, cuBLAS, and narrow C ABIs.
-- Shared immutable model weights with independently owned request sessions.
-- Bounded session pooling and adjacent-request prefill coalescing.
-- Public engine/request lifecycle, streaming polling, cancellation, metrics,
-  typed failures, and panic containment.
-- Exact-capacity PCM preflight without consuming or losing a packet.
-- Contract, parity, concurrency, lifecycle, sanitizer, C-ABI smoke, memory,
-  energy, and performance evidence.
+- Native Qwen3-TTS 1.7B VoiceDesign inference with custom CUDA kernels and
+  cuBLAS execution on real `sm_121` SASS.
+- Incremental speech-token generation and neural decoding without a Python or
+  framework sidecar.
+- Progressive multipart PCM delivery before synthesis completes, plus bounded
+  buffered WAV output.
+- One shared, warmed model engine with independently owned request sessions,
+  bounded concurrency, backpressure, cancellation, and graceful shutdown.
+- A versioned native C ABI beneath the HTTP service.
+- Reproducible benchmark evidence, model provenance, third-party license
+  reports, a CycloneDX SBOM, and BuildKit provenance/attestation support.
+- A hardened `linux/arm64` container that runs as an unprivileged user with a
+  read-only root filesystem, no Linux capabilities, and the pinned model
+  weights included.
 
-The runtime emits signed 16-bit mono PCM at 24 kHz. One codec frame represents
-1,920 samples, or 80 ms of audio. The first packet contains one frame; later
-packets contain up to four frames.
+The project intentionally supports **VoiceDesign only**. It does not include
+voice cloning, reference audio, speaker enrolment, the Base or CustomVoice
+checkpoints, the speech-tokenizer encoder, or the retired 0.6B model.
 
-## Verified DGX Spark result
+## Supported languages and audio
 
-The latest public C-ABI qualification used the official model revision
-`5ecdb67327fd37bb2e042aab12ff7391903235d3`, 24 warmups, and 200 measured
-requests at each concurrency level.
+The pinned model exposes ten explicit languages:
+
+`Chinese`, `English`, `Japanese`, `Korean`, `German`, `French`, `Russian`,
+`Portuguese`, `Spanish`, and `Italian`.
+
+`Auto` is also available for automatic language selection. Values are
+case-insensitive at the HTTP boundary. Languages outside this list are
+rejected; in particular, Turkish is not represented by an explicit language ID
+in the pinned VoiceDesign checkpoint and is not advertised as supported.
+
+Audio is emitted as 24,000 Hz, mono, signed 16-bit little-endian PCM. Each
+codec frame represents 1,920 samples, or 80 ms. The first streaming packet
+contains one frame; subsequent packets contain up to four frames.
+
+## Architecture
+
+```text
+HTTP client
+    |
+    v
+native Rust HTTP server (validation, limits, streaming, cancellation)
+    |
+    v
+Rust scheduler and versioned C ABI
+    |
+    +--> VoiceDesign talker + 15-step code predictor (CUDA/cuBLAS)
+    |          |
+    |          `-- ordered device-to-device codec frames
+    |
+    `--> incremental neural speech decoder (CUDA/cuBLAS)
+               |
+               `-- progressive 24 kHz PCM
+```
+
+The process constructs one shared engine and performs a real one-frame warm-up
+through the complete native pipeline before binding the listener. Readiness is
+therefore a model-and-pipeline gate rather than a process-only check.
+
+The runtime image contains the pinned VoiceDesign and decoder-only model
+artifacts. It contains exactly the inference material it needs and excludes
+compilers, development packages, Python, Node.js, PyTorch, SGLang, vLLM,
+TensorRT, cuDNN, NPP, cuSPARSE, and NCCL. See the
+[container documentation](containers/README.md) for the exact inputs, hashes,
+labels, and build gates.
+
+## Run the published image
+
+The production image targets NVIDIA DGX Spark (`linux/arm64`, GB10,
+`sm_121`). It is not a portable CPU image and is not qualified for x86-64 or a
+different GPU architecture.
+
+After the release digest has been published, pull and run it by immutable
+digest:
+
+```bash
+IMAGE=docker.io/luka-loehr/qwen3-tts-native
+RELEASE_TAG=<PUBLISHED_RELEASE_TAG>
+DIGEST=sha256:<PUBLISHED_DIGEST>
+
+docker pull "$IMAGE@$DIGEST"
+
+docker run --rm \
+  --gpus '"device=0"' \
+  --read-only \
+  --cap-drop=ALL \
+  --security-opt=no-new-privileges \
+  --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001 \
+  --pids-limit=256 \
+  -p 127.0.0.1:8080:8080 \
+  "$IMAGE@$DIGEST"
+```
+
+`RELEASE_TAG` is shown for human release identification; production execution
+uses the digest. Do not mount alternate weights over `/opt/qwen3-tts/model`, as
+that would invalidate the model identity recorded in the OCI metadata.
+
+Wait for the complete native warm-up:
+
+```bash
+curl --fail --silent --show-error \
+  http://127.0.0.1:8080/health/ready
+```
+
+Create a buffered WAV file:
+
+```bash
+curl --fail --silent --show-error \
+  --header 'Content-Type: application/json' \
+  --header 'x-request-id: 018f3df0-5a86-7e75-bec5-135764f0218a' \
+  --data '{
+    "text": "Good morning. This is a native voice-design test.",
+    "voice_description": "A calm adult male voice with measured delivery and a warm low register.",
+    "language": "english",
+    "seed": 42,
+    "max_duration_seconds": 30,
+    "stream": false,
+    "output_format": "wav"
+  }' \
+  --output speech.wav \
+  http://127.0.0.1:8080/v1/voice-design/speech
+```
+
+Request progressive audio instead:
+
+```bash
+curl --fail --silent --show-error --no-buffer \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "text": "Guten Morgen. Dies ist ein nativer Streaming-Test.",
+    "voice_description": "A calm adult male voice with clear, unhurried articulation.",
+    "language": "german",
+    "seed": 42,
+    "max_duration_seconds": 30,
+    "stream": true,
+    "output_format": "pcm_s16le"
+  }' \
+  --output speech.multipart \
+  http://127.0.0.1:8080/v1/voice-design/speech
+```
+
+The streaming response is `multipart/mixed`: a JSON start event, one or more
+binary PCM parts, and exactly one JSON end or error event. Applications must
+parse multipart boundaries; HTTP DATA-frame boundaries are not audio-packet
+boundaries. See the [server contract](native/qwen3-tts-server/README.md) for
+sampling controls, limits, packet headers, request IDs, and cancellation.
+
+## HTTP API
+
+| Method and path | Purpose |
+| --- | --- |
+| `GET /health/live` | Process and event-loop liveness. |
+| `GET /health/ready` | Shared engine loaded, full native path warmed, and capacity healthy. |
+| `GET /v1/capabilities` | VoiceDesign-only languages, formats, and limits. |
+| `POST /v1/voice-design/speech` | Progressive multipart PCM or buffered WAV synthesis. |
+| `POST /v1/audio/speech` | Conservative buffered-WAV compatibility endpoint. |
+| `DELETE /v1/requests/{request-id}` | Bounded cancellation of an admitted request. |
+| `GET /metrics` | Prompt-free Prometheus counters and latency metrics. |
+
+The service binds to `127.0.0.1:8080` by default. It deliberately does not
+terminate TLS or provide an identity provider. Public deployments must place
+it behind an authenticated, rate-limited proxy with request and response
+timeouts. Review [SECURITY.md](SECURITY.md) before exposing the service.
+
+## Verified performance
+
+All results in this section are checked JSON evidence from direct native runs
+on NVIDIA DGX Spark. They are **not final-container measurements**. The final
+image must be measured again by exact registry digest, and container results
+must remain distinct from these baselines.
+
+### Full natural-end-of-sequence endurance
+
+The native C ABI completed 200 measured single-stream requests after three
+warm-ups. Every request reached natural codec EOS; none failed or hit the
+512-frame emergency guard.
+
+| Measurement | Result |
+| --- | ---: |
+| Completed requests | 200 / 200 |
+| TTFA p50 / p95 / p99 | 74.01 / 76.95 / 79.82 ms |
+| Request RTF p50 / p95 / p99 | 0.733 / 0.740 / 0.743 |
+| Aggregate RTF | 0.734 |
+| Generated audio | 926.72 s |
+| Peak process RSS | 4,045,112 KiB |
+| Peak additional device allocation per request | 141,285,524 bytes |
+
+An RTF below 1.0 means synthesis completed faster than the generated audio's
+playback duration. Full evidence:
+[`native-runtime-natural-eos-endurance-a6bc32e.json`](benchmarks/results/native-runtime-natural-eos-endurance-a6bc32e.json).
+
+### Official-language qualification
+
+The multilingual native C-ABI run completed all 24 corpus entries covering all
+ten explicit languages plus `Auto`. Every request streamed progressively,
+preserved exact PCM copy bounds, and ended at natural codec EOS.
+
+| Measurement | Result |
+| --- | ---: |
+| Completed corpus entries | 24 / 24 |
+| TTFA p95 | 78.47 ms |
+| Request RTF p50 / p95 | 0.745 / 0.763 |
+| Aggregate RTF | 0.751 |
+| Generated audio | 200.24 s |
+
+Full evidence:
+[`native-multilingual-natural-eos-ff061b6.json`](benchmarks/results/native-multilingual-natural-eos-ff061b6.json).
+The saved WAV corpus is listening evidence, not an automated claim about
+pronunciation, naturalness, or instruction adherence.
+
+### Warmed HTTP server qualification
+
+A direct native server run became ready after a full pipeline warm-up in
+10.261 seconds. A German progressive request delivered its first audio in
+77.884 ms and generated 4.72 seconds of audio at RTF 0.710. An Italian `Auto`
+request returned a valid, unclipped 24 kHz PCM WAV at RTF 0.707. SIGTERM closed
+the process and loopback port in under one second.
+
+That run used a warm host filesystem cache and coexisted with an already
+running SGLang service. Coexistence is not a performance comparison. No
+controlled native-versus-SGLang benchmark has been completed or claimed in
+this repository.
+
+Full evidence:
+[`native-server-startup-warmup-ce46acb.json`](benchmarks/results/native-server-startup-warmup-ce46acb.json).
+
+### Fixed-length concurrency throughput
+
+An earlier C-ABI scheduler qualification measured 200 fixed 320 ms requests at
+each concurrency level. It is a packet-delivery and throughput test, not a
+natural-EOS or audio-quality corpus.
 
 | Concurrency | Completed | TTFA p95 | Request RTF p50 | Aggregate RTF |
 | ---: | ---: | ---: | ---: | ---: |
-| 1 | 200/200 | 78.24 ms | 0.765 | 0.767 |
-| 3 | 200/200 | 186.42 ms | 1.800 | 0.601 |
-| 6 | 200/200 | 364.62 ms | 3.557 | 0.594 |
+| 1 | 200 / 200 | 78.24 ms | 0.765 | 0.767 |
+| 3 | 200 / 200 | 186.42 ms | 1.800 | 0.601 |
+| 6 | 200 / 200 | 364.62 ms | 3.557 | 0.594 |
 
-All 600 measured requests completed with contiguous packet positions, exact
-sample counts, untouched PCM tails, final-then-end-of-stream behavior, and
-delivery metrics matching the packets observed by the C caller.
+At B3 and B6, aggregate throughput was faster than real time while an
+individual request was not. Full evidence:
+[`native-runtime-public-c-abi-qualification.json`](benchmarks/results/native-runtime-public-c-abi-qualification.json).
 
-Interpret the concurrency numbers carefully: aggregate throughput remains
-faster than real time at B3 and B6, but an individual request sharing the GPU
-does not. The stricter single-stream RTF target below 0.50 is also not met yet.
-See
-[`benchmarks/results/native-runtime-public-c-abi-qualification.json`](benchmarks/results/native-runtime-public-c-abi-qualification.json)
-for the complete measured record.
+Read [the benchmark protocol](benchmarks/README.md) before comparing or
+republishing any result. In particular, model loading, artifact hashing, fixed
+length scheduling, natural-EOS generation, HTTP transport, container overhead,
+energy, and subjective listening results are separate measurements.
 
-### Memory
+## Build and verification
 
-- Shared VoiceDesign weights: 3,833,352,704 device bytes.
-- Shared decoder weights: 457,292,548 device bytes.
-- Peak additional device allocation per request: 47,042,708 bytes.
-- Peak pinned host allocation per request: 46,080 bytes.
-- Computed B6 device total: 4,572,901,500 bytes.
-- Peak benchmark process RSS: 4,034,776 KiB.
+Rust 1.97.0, CUDA 13.0.3, cuBLAS 13.1.1.3, Ubuntu 24.04 ARM64, and real
+`sm_121` SASS are pinned for the production image. Reproducing the image also
+requires the audited model artifact and generated release-metadata contexts.
 
-### Functional audio evidence
+Start with these documents:
 
-The public C-ABI smoke generated valid 24 kHz s16le mono WAV output and proved
-engine/request ownership, cancellation, invalid-input handling, packet
-continuity, and metrics. Its 40-frame safety cap stopped the sample after 3.2
-seconds and cut the final word short. It is therefore transport evidence, not a
-completed audio-quality gate. The final quality corpus must run to the model's
-natural end-of-sequence with only a generous emergency limit.
+- [Production image, immutable inputs, and build command](containers/README.md)
+- [Exact release gates](containers/RELEASE_CHECKLIST.md)
+- [HTTP server contract](native/qwen3-tts-server/README.md)
+- [Native runtime and C ABI](native/qwen3-tts-runtime/README.md)
+- [VoiceDesign talker and predictor](native/qwen3-tts-native/README.md)
+- [Incremental neural codec](native/qwen3-tts-native-codec/README.md)
+- [Benchmark protocol and evidence](benchmarks/README.md)
+- [Release metadata generation](tools/release-metadata/README.md)
+
+The Dockerfile validates the pinned artifact hashes, CUDA architecture,
+dynamic dependencies, final package inventory, non-root ownership, licenses,
+and SBOM inputs during the build. Registry attestations, vulnerability scans,
+signature verification, clean pull, and digest-specific GPU qualification are
+post-build release gates.
 
 ## Repository layout
 
 | Path | Contents |
 | --- | --- |
-| `native/qwen3-tts-native` | Model contracts, tokenizer, artifact loader, VoiceDesign talker, code predictor, CUDA kernels, and session benchmark. |
-| `native/qwen3-tts-native-codec` | Incremental neural speech-tokenizer decoder, shared model/session APIs, and CUDA implementation. |
-| `native/qwen3-tts-runtime` | Scheduler, native backend, public C ABI, C header, smoke harness, and concurrency benchmark. |
-| `native/qwen3-tts-bench` | Native benchmark utilities and WAV/report helpers. |
-| `benchmarks/fixtures` | Small deterministic decoder parity fixtures; no model weights. |
-| `benchmarks/results` | Checked measurement and qualification evidence. |
-| `benchmarks/corpora` | Official-language and exploratory multilingual prompt corpora. |
+| `native/qwen3-tts-native` | Artifact contract, tokenizer, VoiceDesign talker, code predictor, and CUDA kernels. |
+| `native/qwen3-tts-native-codec` | Stateful incremental speech-tokenizer decoder. |
+| `native/qwen3-tts-runtime` | Scheduler, native backend, versioned C ABI, and lifecycle tests. |
+| `native/qwen3-tts-server` | Bounded Rust HTTP transport, healthcheck, metrics, streaming, and WAV output. |
+| `native/qwen3-tts-bench` | Real-runtime qualification harness and report helpers. |
+| `benchmarks` | Corpora, deterministic fixtures, protocols, and immutable result records. |
+| `containers` | Reproducible builder, hardened runtime image, and release checklist. |
+| `licenses` | Model provenance and third-party notices. |
+| `tools/release-metadata` | Pinned license and CycloneDX metadata pipeline. |
 | `notes` | Architecture, model-contract, artifact, codec, and toolchain decisions. |
-| `containers` | Reproducible development-builder definition and container roadmap. |
-| `tools` | Offline reference-fixture tooling; not used by the production runtime. |
 
-## Model files
+## Contributing and security
 
-Model weights are deliberately not stored in Git or baked into an image. Use
-the official
-[`Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign`](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign)
-checkpoint and mount the prepared artifact read-only at runtime.
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a change. Documentation
+and benchmark narratives must be written in English, measured evidence must
+remain reproducible and unaltered, model weights and secrets must never enter
+Git, and shared branches must never be force-pushed.
 
-The qualifying artifact hashes are recorded in the benchmark JSON. This keeps
-the source repository small, makes model provenance explicit, and avoids
-silently redistributing multi-gigabyte third-party material.
+Report vulnerabilities privately according to [SECURITY.md](SECURITY.md).
+Community participation is governed by the
+[Code of Conduct](CODE_OF_CONDUCT.md).
 
-## Toolchain
+## License and model provenance
 
-The tested target is Ubuntu 24.04 AArch64, NVIDIA GB10, CUDA 13.0.88, and real
-SM 12.1 SASS. Rust 1.97.0 is pinned for reproducibility.
-
-Build the local Rust tooling image:
-
-```bash
-docker build \
-  --file containers/Dockerfile.builder \
-  --tag qwen3-tts-native/builder:rust-1.97.0 \
-  .
-```
-
-CUDA libraries are currently built with the pinned upstream
-`nvcr.io/nvidia/tensorrt:25.11-py3` image. Exact component commands and
-verification procedures live in the component READMEs:
-
-- [`native/qwen3-tts-native/README.md`](native/qwen3-tts-native/README.md)
-- [`native/qwen3-tts-native-codec/README.md`](native/qwen3-tts-native-codec/README.md)
-- [`native/qwen3-tts-runtime/README.md`](native/qwen3-tts-runtime/README.md)
-
-There is not yet a production runtime image. The Spark currently has only the
-research builder image `codex/qwen3-tts-rust-builder:1.97.0`. A runtime image
-will be added after the streaming ABI and performance work stabilizes; it will
-contain only the three native libraries, public header, and a service/runner,
-with weights mounted read-only rather than copied into the image.
-
-## Public ABI
-
-The stable entry surface is declared in
-[`native/qwen3-tts-runtime/include/qwen3_tts_runtime.h`](native/qwen3-tts-runtime/include/qwen3_tts_runtime.h).
-It covers:
-
-- ABI version discovery;
-- engine creation and destruction;
-- request creation, cancellation, polling, metrics, and destruction;
-- explicit status values and caller-owned error buffers.
-
-The implementation is a library, not an HTTP or gRPC server. Network service
-design remains deliberately outside this research milestone.
-
-## Current boundaries
-
-- No Ephraim backend, frontend, or production container is changed by this
-  repository.
-- The 0.6B model is out of scope.
-- No permanent TTS daemon is currently installed on the Spark.
-- B3/B6 per-request RTF below 1.0 and B1 RTF below 0.50 are not achieved yet.
-- Multilingual intelligibility, speaker consistency, instruction adherence,
-  and natural end-of-sequence still need final listening/ASR qualification.
-- The checked sample WAV is intentionally excluded from Git; benchmark reports
-  contain its format, byte count, and SHA-256 evidence.
-
-Research artifacts should be promoted into another system only after latency,
-memory, cancellation, concurrency, energy, and audio-quality gates pass.
-
-## License
-
-The application source in this repository is licensed under the Apache License
-2.0. See [`LICENSE`](LICENSE). Embedded or redistributed third-party material,
-including the pinned Qwen3-TTS model and NVIDIA CUDA runtime, remains subject to
-its respective license and attribution; see [`licenses/`](licenses/).
+The application source is licensed under the
+[Apache License 2.0](LICENSE). The pinned Qwen3-TTS model is separately
+attributed and licensed by its upstream publisher under Apache-2.0. NVIDIA,
+Ubuntu, Rust dependency, and other third-party material remains subject to its
+respective terms. See the [license inventory](licenses/README.md) and
+[third-party notices](licenses/THIRD_PARTY_NOTICES.md).

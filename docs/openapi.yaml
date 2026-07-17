@@ -1,0 +1,956 @@
+openapi: 3.1.0
+info:
+  title: Qwen3-TTS Native VoiceDesign API
+  version: 0.1.0
+  description: |
+    Native Rust/CUDA HTTP service for Qwen3-TTS 1.7B VoiceDesign.
+
+    The service accepts text and a textual voice description. It does not
+    support voice cloning, reference audio, Base or CustomVoice checkpoints,
+    or 0.6B checkpoints. Progressive audio is a multipart/mixed response; a
+    terminal error can therefore occur inside an HTTP 200 stream after headers
+    have been sent.
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
+servers:
+  - url: http://127.0.0.1:8080
+    description: Default loopback publication
+tags:
+  - name: Synthesis
+  - name: Lifecycle
+  - name: Introspection
+paths:
+  /health/live:
+    get:
+      tags: [Lifecycle]
+      operationId: getLiveness
+      summary: Check process liveness
+      description: Liveness does not imply that the native GPU engine is ready.
+      responses:
+        "200":
+          description: The HTTP process is live.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LiveStatus"
+              examples:
+                live:
+                  value:
+                    status: live
+  /health/ready:
+    get:
+      tags: [Lifecycle]
+      operationId: getReadiness
+      summary: Check native-engine readiness
+      description: |
+        The process binds its listener only after model loading and a real
+        one-frame warm-up. A later non-retiring native request marks the engine
+        unavailable and changes this endpoint to HTTP 503.
+      responses:
+        "200":
+          description: The shared native engine is loaded, warmed, and healthy.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadyStatus"
+              examples:
+                ready:
+                  value:
+                    status: ready
+                    model: qwen3-tts-1.7b-voice-design
+                    model_kind: voice_design
+                    sample_rate_hz: 24000
+                    engine_loaded: true
+        "503":
+          description: The HTTP process is live but the native engine is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotReadyStatus"
+              examples:
+                notReady:
+                  value:
+                    status: not_ready
+                    model: qwen3-tts-1.7b-voice-design
+                    model_kind: voice_design
+                    sample_rate_hz: 24000
+                    engine_loaded: false
+  /v1/capabilities:
+    get:
+      tags: [Introspection]
+      operationId: getCapabilities
+      summary: Read the effective model and deployment limits
+      responses:
+        "200":
+          description: Fixed audio/model capabilities plus effective server limits.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Capabilities"
+  /metrics:
+    get:
+      tags: [Introspection]
+      operationId: getMetrics
+      summary: Read prompt-free Prometheus metrics
+      description: |
+        Exposes aggregate counters and an active-request gauge. Prompt text,
+        voice descriptions, languages, and request IDs are not metric labels.
+      responses:
+        "200":
+          description: Prometheus text exposition format.
+          content:
+            "text/plain; version=0.0.4; charset=utf-8":
+              schema:
+                type: string
+              examples:
+                emptyInstance:
+                  value: |
+                    # HELP qwen3_tts_http_requests_total Accepted synthesis requests.
+                    # TYPE qwen3_tts_http_requests_total counter
+                    qwen3_tts_http_requests_total 0
+                    # HELP qwen3_tts_active_requests Currently active native requests.
+                    # TYPE qwen3_tts_active_requests gauge
+                    qwen3_tts_active_requests 0
+  /v1/voice-design/speech:
+    post:
+      tags: [Synthesis]
+      operationId: synthesizeVoiceDesign
+      summary: Generate progressive PCM or a buffered WAV
+      description: |
+        This is the full native VoiceDesign contract. Streaming PCM is the
+        default. Set stream=false, output_format=wav, or both for buffered WAV.
+
+        For a multipart response, the HTTP status is already 200 when native
+        generation continues. Clients must inspect the terminal JSON part and
+        reject truncated streams or terminal error parts.
+      parameters:
+        - $ref: "#/components/parameters/OptionalRequestId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VoiceDesignRequest"
+            examples:
+              streamingGerman:
+                summary: Progressive PCM using default sampling
+                value:
+                  text: Guten Morgen. Dies ist ein nativer Streaming-Test.
+                  voice_description: A calm adult male voice with measured delivery and a warm low register.
+                  language: german
+                  seed: 42
+                  max_duration_seconds: 30
+              bufferedEnglish:
+                summary: Complete WAV response
+                value:
+                  text: This response is returned as a complete WAV file.
+                  voice_description: A composed technical narrator with clear articulation.
+                  language: english
+                  stream: false
+                  output_format: wav
+      responses:
+        "200":
+          description: |
+            Either progressive multipart PCM or a complete WAV, selected by
+            the request. Multipart completion is represented by a terminal end
+            part, not an HTTP header.
+          headers:
+            x-request-id:
+              $ref: "#/components/headers/RequestId"
+            x-qwen3-seed:
+              $ref: "#/components/headers/Seed"
+            x-finish-reason:
+              $ref: "#/components/headers/FinishReason"
+            cache-control:
+              $ref: "#/components/headers/NoStore"
+            x-accel-buffering:
+              $ref: "#/components/headers/AccelBuffering"
+            content-disposition:
+              $ref: "#/components/headers/WavDisposition"
+            content-length:
+              $ref: "#/components/headers/WavContentLength"
+          content:
+            multipart/mixed:
+              schema:
+                type: string
+                format: binary
+                contentMediaType: multipart/mixed
+                description: |
+                  Boundary-delimited start, audio, and terminal JSON parts.
+                  Parse each part using Content-Length; do not scan binary PCM
+                  for a boundary string.
+              x-multipart-parts:
+                order:
+                  - contentType: application/json
+                    schema:
+                      $ref: "#/components/schemas/StreamStartEvent"
+                  - description: One or more binary PCM parts with AudioPartHeaders.
+                    contentType: audio/pcm;rate=24000;channels=1;format=s16le
+                    headers:
+                      $ref: "#/components/schemas/AudioPartHeaders"
+                  - contentType: application/json
+                    schema:
+                      oneOf:
+                        - $ref: "#/components/schemas/StreamEndEvent"
+                        - $ref: "#/components/schemas/StreamErrorEvent"
+            audio/wav:
+              schema:
+                type: string
+                format: binary
+                contentMediaType: audio/wav
+                description: Complete mono 24 kHz PCM16 RIFF/WAVE file.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/CapacityExhausted"
+        "500":
+          $ref: "#/components/responses/InternalFailure"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /v1/audio/speech:
+    post:
+      tags: [Synthesis]
+      operationId: synthesizeCompatibleWav
+      summary: Generate a buffered WAV through the compatibility alias
+      description: |
+        Narrow compatibility endpoint. Only model
+        qwen3-tts-1.7b-voice-design, speed=1.0, stream=false, and buffered WAV
+        are supported. Language is fixed to auto. Use the native endpoint for
+        streaming, explicit language, seeds, duration, or sampling controls.
+      parameters:
+        - $ref: "#/components/parameters/OptionalRequestId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CompatibleSpeechRequest"
+            examples:
+              bufferedWav:
+                value:
+                  model: qwen3-tts-1.7b-voice-design
+                  input: Hello from the compatibility endpoint.
+                  voice: A calm and clear adult narrator.
+                  response_format: wav
+      responses:
+        "200":
+          description: Complete mono 24 kHz PCM16 RIFF/WAVE file.
+          headers:
+            x-request-id:
+              $ref: "#/components/headers/RequestId"
+            x-qwen3-seed:
+              $ref: "#/components/headers/Seed"
+            x-finish-reason:
+              $ref: "#/components/headers/FinishReason"
+            cache-control:
+              $ref: "#/components/headers/NoStore"
+            content-disposition:
+              $ref: "#/components/headers/WavDisposition"
+            content-length:
+              $ref: "#/components/headers/WavContentLength"
+          content:
+            audio/wav:
+              schema:
+                type: string
+                format: binary
+                contentMediaType: audio/wav
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/CapacityExhausted"
+        "500":
+          $ref: "#/components/responses/InternalFailure"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /v1/requests/{request_id}:
+    delete:
+      tags: [Lifecycle]
+      operationId: cancelRequest
+      summary: Request cancellation
+      description: |
+        Signals cancellation for an active request. HTTP acceptance means that
+        cancellation was requested, not that native retirement has completed.
+      parameters:
+        - name: request_id
+          in: path
+          required: true
+          description: UUID returned by or supplied to a synthesis request.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "202":
+          description: Cancellation was signalled to the active request.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CancellationAccepted"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+components:
+  parameters:
+    OptionalRequestId:
+      name: x-request-id
+      in: header
+      required: false
+      description: |
+        Caller-selected ASCII UUID. The server generates a UUIDv7 when this
+        header is omitted. A UUID may identify only one active request.
+      schema:
+        type: string
+        format: uuid
+  headers:
+    RequestId:
+      description: UUID assigned to the synthesis request.
+      schema:
+        type: string
+        format: uuid
+    Seed:
+      description: Effective JSON-safe generation seed.
+      schema:
+        type: integer
+        format: int64
+        minimum: 0
+        maximum: 9007199254740991
+    FinishReason:
+      description: Present only on buffered WAV success.
+      schema:
+        $ref: "#/components/schemas/FinishReason"
+    NoStore:
+      description: Generated audio must not be cached.
+      schema:
+        type: string
+        const: no-store
+    AccelBuffering:
+      description: Present only on progressive responses to discourage proxy buffering.
+      schema:
+        type: string
+        const: "no"
+    WavDisposition:
+      description: Present only on buffered WAV success.
+      schema:
+        type: string
+        const: inline; filename=voice-design.wav
+    WavContentLength:
+      description: Complete WAV byte length; present only on buffered WAV success.
+      schema:
+        type: integer
+        format: int64
+        minimum: 44
+    RetryAfter:
+      description: Suggested delay before retrying exhausted capacity.
+      schema:
+        type: integer
+        minimum: 1
+        const: 1
+  responses:
+    BadRequest:
+      description: Malformed JSON, unknown fields, or an invalid request UUID.
+      headers:
+        x-request-id:
+          $ref: "#/components/headers/RequestId"
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetails"
+          examples:
+            malformedJson:
+              value:
+                type: https://qwen3-tts.local/problems/malformed_json
+                title: Malformed JSON request
+                status: 400
+                code: malformed_json
+                detail: the request body must be valid JSON and contain no unknown fields
+    NotFound:
+      description: The cancellation target is not active or has already retired.
+      headers:
+        x-request-id:
+          $ref: "#/components/headers/RequestId"
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetails"
+    Conflict:
+      description: The request UUID is already active or a buffered request was cancelled.
+      headers:
+        x-request-id:
+          $ref: "#/components/headers/RequestId"
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetails"
+    PayloadTooLarge:
+      description: The JSON request exceeds the configured aggregate byte limit.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetails"
+    UnsupportedMediaType:
+      description: Content-Type is not application/json.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetails"
+    UnprocessableEntity:
+      description: |
+        Semantic validation or native request validation failed. Codes include
+        invalid_text, invalid_voice_description, unsupported_language,
+        invalid_max_duration, invalid_seed, invalid_sampling,
+        unsupported_response_format, unsupported_model, unsupported_speed, and
+        invalid_request.
+      headers:
+        x-request-id:
+          $ref: "#/components/headers/RequestId"
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetails"
+    CapacityExhausted:
+      description: Native request slots or buffered response capacity are full.
+      headers:
+        x-request-id:
+          $ref: "#/components/headers/RequestId"
+        retry-after:
+          $ref: "#/components/headers/RetryAfter"
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetails"
+    InternalFailure:
+      description: An internal invariant, worker, bounded-buffer, or WAV failure occurred.
+      headers:
+        x-request-id:
+          $ref: "#/components/headers/RequestId"
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetails"
+    ServiceUnavailable:
+      description: |
+        The backend is unavailable, shutdown has closed admission, or a native
+        request exceeded its retirement deadline.
+      headers:
+        x-request-id:
+          $ref: "#/components/headers/RequestId"
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetails"
+  schemas:
+    LiveStatus:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status:
+          type: string
+          const: live
+    ReadyStatus:
+      type: object
+      additionalProperties: false
+      required: [status, model, model_kind, sample_rate_hz, engine_loaded]
+      properties:
+        status:
+          type: string
+          const: ready
+        model:
+          type: string
+          const: qwen3-tts-1.7b-voice-design
+        model_kind:
+          type: string
+          const: voice_design
+        sample_rate_hz:
+          type: integer
+          const: 24000
+        engine_loaded:
+          type: boolean
+          const: true
+    NotReadyStatus:
+      type: object
+      additionalProperties: false
+      required: [status, model, model_kind, sample_rate_hz, engine_loaded]
+      properties:
+        status:
+          type: string
+          const: not_ready
+        model:
+          type: string
+          const: qwen3-tts-1.7b-voice-design
+        model_kind:
+          type: string
+          const: voice_design
+        sample_rate_hz:
+          type: integer
+          const: 24000
+        engine_loaded:
+          type: boolean
+          const: false
+    Capabilities:
+      type: object
+      additionalProperties: false
+      required:
+        - model
+        - model_kind
+        - voice_clone
+        - sample_rate_hz
+        - channels
+        - encoding
+        - samples_per_codec_frame
+        - max_codec_frames
+        - max_concurrent_requests
+        - max_text_bytes
+        - max_voice_description_bytes
+        - max_duration_seconds
+        - languages
+        - streaming
+      properties:
+        model:
+          type: string
+          const: qwen3-tts-1.7b-voice-design
+        model_kind:
+          type: string
+          const: voice_design
+        voice_clone:
+          type: boolean
+          const: false
+        sample_rate_hz:
+          type: integer
+          const: 24000
+        channels:
+          type: integer
+          const: 1
+        encoding:
+          type: string
+          const: pcm_s16le
+        samples_per_codec_frame:
+          type: integer
+          const: 1920
+        max_codec_frames:
+          type: integer
+          const: 8192
+        max_concurrent_requests:
+          type: integer
+          minimum: 1
+          maximum: 6
+        max_text_bytes:
+          type: integer
+          minimum: 1
+          maximum: 1048576
+        max_voice_description_bytes:
+          type: integer
+          minimum: 1
+          maximum: 262144
+        max_duration_seconds:
+          type: number
+          minimum: 0.08
+          maximum: 655.36
+        languages:
+          type: array
+          minItems: 11
+          maxItems: 11
+          items:
+            type: string
+            enum:
+              - auto
+              - chinese
+              - english
+              - japanese
+              - korean
+              - german
+              - french
+              - russian
+              - portuguese
+              - spanish
+              - italian
+        streaming:
+          type: string
+          const: multipart/mixed
+    VoiceDesignRequest:
+      type: object
+      additionalProperties: false
+      required: [text, voice_description]
+      properties:
+        text:
+          type: string
+          minLength: 1
+          description: |
+            UTF-8 text. Whitespace-only strings and NUL characters are
+            rejected. The effective limit is measured in UTF-8 bytes and is
+            advertised by /v1/capabilities.
+        voice_description:
+          type: string
+          minLength: 1
+          description: |
+            Textual VoiceDesign instruction. Whitespace-only strings and NUL
+            characters are rejected. It is not a named voice or audio sample.
+        language:
+          type: string
+          default: auto
+          description: |
+            Case-insensitive after trimming. Accepted names are auto, chinese,
+            english, japanese, korean, german, french, russian, portuguese,
+            spanish, and italian.
+          examples: [auto, english, german, italian]
+        seed:
+          type: integer
+          format: int64
+          minimum: 0
+          maximum: 9007199254740991
+          description: Random JSON-safe seed when omitted.
+        max_duration_seconds:
+          type: number
+          minimum: 0.08
+          maximum: 655.36
+          description: |
+            Safety ceiling. It must not exceed the lower effective maximum
+            returned by /v1/capabilities. The production image default is 120.
+        sampling:
+          $ref: "#/components/schemas/SamplingOptions"
+        stream:
+          type: boolean
+          description: Defaults to true unless output_format=wav implies false.
+        output_format:
+          type: string
+          enum: [pcm_s16le, wav]
+          description: Defaults to pcm_s16le unless stream=false implies wav.
+      allOf:
+        - if:
+            required: [stream]
+            properties:
+              stream:
+                const: true
+          then:
+            properties:
+              output_format:
+                const: pcm_s16le
+        - if:
+            required: [stream]
+            properties:
+              stream:
+                const: false
+          then:
+            properties:
+              output_format:
+                const: wav
+        - if:
+            required: [output_format]
+            properties:
+              output_format:
+                const: wav
+          then:
+            properties:
+              stream:
+                const: false
+        - if:
+            required: [output_format]
+            properties:
+              output_format:
+                const: pcm_s16le
+          then:
+            properties:
+              stream:
+                const: true
+    SamplingOptions:
+      type: object
+      additionalProperties: false
+      properties:
+        strategy:
+          $ref: "#/components/schemas/SamplingStrategy"
+        temperature:
+          type: number
+          minimum: 0.01
+          maximum: 2.0
+          default: 0.9
+          description: Omit when strategy=greedy.
+        top_p:
+          type: number
+          minimum: 1.17549435e-38
+          maximum: 1.0
+          default: 1.0
+          description: Omit when strategy=greedy.
+        top_k:
+          type: integer
+          minimum: 0
+          maximum: 3072
+          default: 50
+          description: Omit when strategy=greedy.
+        repetition_penalty:
+          type: number
+          minimum: 0.1
+          maximum: 2.0
+          default: 1.05
+        predictor:
+          $ref: "#/components/schemas/PredictorSamplingOptions"
+    PredictorSamplingOptions:
+      type: object
+      additionalProperties: false
+      properties:
+        strategy:
+          allOf:
+            - $ref: "#/components/schemas/SamplingStrategy"
+          description: Inherits sampling.strategy when omitted.
+        temperature:
+          type: number
+          minimum: 0.01
+          maximum: 2.0
+          default: 0.9
+          description: Omit when the effective predictor strategy is greedy.
+        top_p:
+          type: number
+          minimum: 1.17549435e-38
+          maximum: 1.0
+          default: 1.0
+          description: Omit when the effective predictor strategy is greedy.
+        top_k:
+          type: integer
+          minimum: 0
+          maximum: 2048
+          default: 50
+          description: Omit when the effective predictor strategy is greedy.
+    SamplingStrategy:
+      type: string
+      enum: [sample, greedy]
+      default: sample
+    CompatibleSpeechRequest:
+      type: object
+      additionalProperties: false
+      required: [model, input, voice]
+      properties:
+        model:
+          type: string
+          const: qwen3-tts-1.7b-voice-design
+        input:
+          type: string
+          minLength: 1
+          description: Maps to native text and uses the effective text byte limit.
+        voice:
+          type: string
+          minLength: 1
+          description: Maps to textual voice_description, not a named or cloned voice.
+        response_format:
+          type: string
+          enum: [wav, pcm]
+          default: wav
+          description: pcm is parsed but returns HTTP 422; only wav is supported.
+        speed:
+          type: number
+          const: 1.0
+          default: 1.0
+        stream:
+          type: boolean
+          const: false
+          default: false
+    FinishReason:
+      type: string
+      enum: [stop, length]
+      description: Natural model EOS or configured codec-frame ceiling.
+    StreamStartEvent:
+      type: object
+      additionalProperties: false
+      required: [type, request_id, model, seed, audio]
+      properties:
+        type:
+          type: string
+          const: start
+        request_id:
+          type: string
+          format: uuid
+        model:
+          type: string
+          const: qwen3-tts-1.7b-voice-design
+        seed:
+          type: integer
+          format: int64
+          minimum: 0
+          maximum: 9007199254740991
+        audio:
+          $ref: "#/components/schemas/AudioDescription"
+    AudioDescription:
+      type: object
+      additionalProperties: false
+      required: [encoding, sample_rate_hz, channels, samples_per_codec_frame]
+      properties:
+        encoding:
+          type: string
+          const: pcm_s16le
+        sample_rate_hz:
+          type: integer
+          const: 24000
+        channels:
+          type: integer
+          const: 1
+        samples_per_codec_frame:
+          type: integer
+          const: 1920
+    AudioPartHeaders:
+      type: object
+      additionalProperties: false
+      required:
+        - X-Sequence
+        - X-First-Codec-Frame
+        - X-First-Sample
+        - X-Sample-Count
+        - X-Codec-Frames
+        - X-Final
+      properties:
+        X-Sequence:
+          type: integer
+          minimum: 0
+        X-First-Codec-Frame:
+          type: integer
+          minimum: 0
+        X-First-Sample:
+          type: integer
+          minimum: 0
+        X-Sample-Count:
+          type: integer
+          minimum: 1920
+          maximum: 7680
+        X-Codec-Frames:
+          type: integer
+          minimum: 1
+          maximum: 4
+        X-Final:
+          type: boolean
+    StreamEndEvent:
+      type: object
+      additionalProperties: false
+      required: [type, request_id, finish_reason, metrics]
+      properties:
+        type:
+          type: string
+          const: end
+        request_id:
+          type: string
+          format: uuid
+        finish_reason:
+          $ref: "#/components/schemas/FinishReason"
+        metrics:
+          $ref: "#/components/schemas/RequestMetrics"
+    StreamErrorEvent:
+      type: object
+      additionalProperties: false
+      required: [type, request_id, error]
+      properties:
+        type:
+          type: string
+          const: error
+        request_id:
+          type: string
+          format: uuid
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, detail]
+          properties:
+            code:
+              type: string
+            detail:
+              type: string
+    RequestMetrics:
+      type: object
+      additionalProperties: false
+      required:
+        - queue_microseconds
+        - prefill_microseconds
+        - first_codec_frame_microseconds
+        - first_audio_microseconds
+        - wall_microseconds
+        - generated_codec_frames
+        - emitted_samples
+        - emitted_packets
+        - talker_gpu_microseconds
+        - codec_gpu_microseconds
+        - peak_request_device_bytes
+        - peak_request_host_bytes
+      properties:
+        queue_microseconds:
+          type: integer
+          minimum: 0
+        prefill_microseconds:
+          type: integer
+          minimum: 0
+        first_codec_frame_microseconds:
+          type: integer
+          minimum: 0
+        first_audio_microseconds:
+          type: integer
+          minimum: 0
+        wall_microseconds:
+          type: integer
+          minimum: 0
+        generated_codec_frames:
+          type: integer
+          minimum: 0
+        emitted_samples:
+          type: integer
+          minimum: 0
+        emitted_packets:
+          type: integer
+          minimum: 0
+        talker_gpu_microseconds:
+          type: number
+          minimum: 0
+        codec_gpu_microseconds:
+          type: number
+          minimum: 0
+        peak_request_device_bytes:
+          type: integer
+          minimum: 0
+        peak_request_host_bytes:
+          type: integer
+          minimum: 0
+    CancellationAccepted:
+      type: object
+      additionalProperties: false
+      required: [request_id, status]
+      properties:
+        request_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          const: cancellation_requested
+    ProblemDetails:
+      type: object
+      additionalProperties: false
+      required: [type, title, status, code, detail]
+      properties:
+        type:
+          type: string
+          format: uri
+          description: Stable identifier; the service does not serve this URL.
+        title:
+          type: string
+        status:
+          type: integer
+          minimum: 400
+          maximum: 599
+        code:
+          type: string
+        detail:
+          type: string
+        request_id:
+          type: string
+          format: uuid

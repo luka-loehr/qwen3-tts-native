@@ -96,3 +96,119 @@ A final candidate requires:
 
 Turkish is not listed as an officially supported VoiceDesign language and must be
 reported as an empirical best-effort result, never as guaranteed support.
+
+## Controlled Native versus SGLang comparison
+
+A comparison is qualifying only when it measures the native release candidate
+and the pinned stock SGLang-Omni comparator with one external client, one corpus,
+and one definition of every metric. Coexistence measurements taken while another
+CUDA workload is active are diagnostic and must not appear in comparison charts.
+
+### Fixed subjects
+
+The comparison record must pin all of the following:
+
+- DGX Spark hardware identity, firmware, driver, CUDA runtime, kernel, and power
+  mode;
+- native Git commit, OCI manifest digest, image configuration digest, and model
+  artifact hashes;
+- SGLang-Omni tag and commit, SGLang image manifest digest, Python package lock,
+  and every compatibility patch hash;
+- Qwen3-TTS VoiceDesign model ID and immutable model revision
+  `5ecdb67327fd37bb2e042aab12ff7391903235d3` on both sides;
+- BF16 weights, language, text, voice description, seed, sampling parameters,
+  natural-EOS policy, and output limits;
+- 24 kHz, signed 16-bit, mono PCM at the client-visible measurement boundary.
+
+The stock SGLang-Omni series must remain byte-provenanced to upstream release
+`0.1.0`. A compatibility patch required only to package that release on ARM64 is
+allowed when it is listed and hashed. A patch that changes scheduling, model
+execution, codec cadence, or streaming behavior creates a separate
+`SGLang-Omni patched` subject and must never replace the stock series silently.
+
+### Isolation and order
+
+Before a qualifying series:
+
+1. stop unrelated inference workloads and verify that no competing CUDA compute
+   process remains;
+2. record available host/unified memory, swap use, temperature, clocks, and
+   power mode;
+3. run exactly one server subject at a time with the same host, model revision,
+   client binary, and localhost network path;
+4. complete 24 unmeasured warm requests for the active concurrency bucket;
+5. measure at least 200 natural-EOS requests at each of B1, B3, and B6;
+6. alternate subject order between rounds, with at least two rounds per subject,
+   so warm host state and thermal drift do not always favor one engine;
+7. stop the subject, preserve its logs and raw measurements, and verify request
+   retirement before starting the other subject.
+
+Cold model load, first-request warm-up, and steady-state request measurements are
+separate series. A failed setup trial is preserved in the audit log but excluded
+from distributions. Retry counts and exclusion reasons are reported explicitly.
+
+### Shared metric definitions
+
+The external Rust HTTP client owns the comparison clock. It records `t0`
+immediately before writing the request and uses one monotonic clock for both
+subjects.
+
+- **TTFA** is the elapsed time from `t0` until the first non-empty decoded PCM
+  payload byte reaches the client. HTTP headers, multipart JSON, SSE framing,
+  WAV headers, and zero-length chunks do not count as audio.
+- **Request wall time** ends only after the complete valid response and transport
+  terminator have arrived.
+- **Audio duration** is decoded PCM samples divided by 24,000 Hz.
+- **Request RTF** is request wall time divided by generated audio duration.
+- **Aggregate RTF** is scenario wall time divided by the sum of generated audio
+  seconds; it is reported together with requests per second.
+- **Streaming window** is final PCM arrival minus first PCM arrival. Packet or
+  transport-chunk arrival timestamps are preserved so a one-burst response is
+  distinguishable from progressive synthesis.
+- **Reliability** includes accepted, completed, natural-EOS, length-limited,
+  cancelled, failed, timed-out, and malformed responses without collapsing
+  categories.
+
+Every latency distribution reports minimum, mean, p50, p95, p99, and maximum.
+Raw per-request values remain available; charts must not be reconstructed from
+rounded table values.
+
+### Resource and energy capture
+
+Resource sampling begins before warm-up and continues until all measured
+requests retire. Use a sampling period no slower than 200 ms and preserve the
+raw timestamped series.
+
+- process and container resident memory are reported separately from mapped
+  model bytes;
+- DGX Spark unified/GPU memory is sampled from NVIDIA telemetry and must not be
+  added to host RSS as though it were independent physical memory;
+- CPU and GPU utilization, temperature, clocks, and board power are recorded
+  when the driver exposes them;
+- joules are integrated from the timestamped power series after subtracting a
+  separately measured idle baseline, and are normalized per generated audio
+  minute;
+- an unavailable sensor is reported as unavailable, never replaced by an
+  estimate presented as a measurement.
+
+Container image compressed transfer size, unpacked size, startup-to-readiness,
+idle memory, peak memory, and server process count are reported outside the
+request-latency distributions.
+
+### Evidence layout and publication gate
+
+Each final comparison bundle contains:
+
+- a machine-readable manifest with all pins, commands, timestamps, and hashes;
+- the exact workload JSONL and its SHA-256;
+- raw per-request JSONL and raw packet-arrival JSONL for both subjects;
+- timestamped resource and power samples;
+- server logs, client summary JSON, container inspection, and image provenance;
+- the generated tables, monochrome chart sources, and final rendered PDF;
+- SHA-256 values for every evidence file.
+
+The PDF is a view over this bundle, not the source of truth. Publication is
+blocked if the workload hashes differ, either subject has fewer than 200 valid
+requests in any required bucket, a competing CUDA process was present, the
+first-PCM boundary differs, raw files are missing, or a stock comparator contains
+an undisclosed execution patch.
