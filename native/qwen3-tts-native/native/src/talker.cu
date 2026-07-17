@@ -490,6 +490,14 @@ public:
                 cudaEventCreate(&predictor_stop_),
                 "cudaEventCreate(predictor stop)"
             );
+            check_cuda(
+                cudaEventCreateWithFlags(&frame_codes_ready_, cudaEventDisableTiming),
+                "cudaEventCreate(frame codes ready)"
+            );
+            check_cuda(
+                cudaEventCreateWithFlags(&semantic_ready_, cudaEventDisableTiming),
+                "cudaEventCreate(semantic ready)"
+            );
 
             const size_t workspace_rows = static_cast<size_t>(max_sequence_length_);
             hidden_ = DeviceBuffer(workspace_rows * kTalkerHidden * sizeof(__nv_bfloat16));
@@ -564,6 +572,14 @@ public:
                 cudaFreeHost(host_sampled_token_);
                 host_sampled_token_ = nullptr;
             }
+            if (semantic_ready_ != nullptr) {
+                cudaEventDestroy(semantic_ready_);
+                semantic_ready_ = nullptr;
+            }
+            if (frame_codes_ready_ != nullptr) {
+                cudaEventDestroy(frame_codes_ready_);
+                frame_codes_ready_ = nullptr;
+            }
             if (predictor_stop_ != nullptr) {
                 cudaEventDestroy(predictor_stop_);
                 predictor_stop_ = nullptr;
@@ -603,6 +619,12 @@ public:
         if (host_sampled_token_ != nullptr) {
             cudaFreeHost(host_sampled_token_);
         }
+        if (semantic_ready_ != nullptr) {
+            cudaEventDestroy(semantic_ready_);
+        }
+        if (frame_codes_ready_ != nullptr) {
+            cudaEventDestroy(frame_codes_ready_);
+        }
         if (predictor_stop_ != nullptr) {
             cudaEventDestroy(predictor_stop_);
         }
@@ -628,6 +650,9 @@ public:
 
     void reset(uint64_t seed) {
         check_cuda(cudaSetDevice(device_index_), "cudaSetDevice(reset)");
+        if (frame_in_flight_) {
+            throw std::runtime_error("cannot reset while a device frame lease is in flight");
+        }
         position_ = 0;
         generated_semantic_count_ = 0;
         frames_generated_ = 0;
@@ -659,6 +684,12 @@ public:
     ) {
         check_cuda(cudaSetDevice(device_index_), "cudaSetDevice(prefill)");
         ensure_ready();
+        if (poisoned_) {
+            throw std::runtime_error("talker session is poisoned and must be destroyed");
+        }
+        if (frame_in_flight_) {
+            throw std::runtime_error("cannot prefill while a device frame lease is in flight");
+        }
         if (text_ids == nullptr || codec_ids == nullptr || token_count <= 0) {
             throw std::runtime_error("prefill requires non-empty text and codec ID arrays");
         }
@@ -704,19 +735,32 @@ public:
         return result;
     }
 
-    Qwen3TtsCodecFrameResult next_frame(
+    Qwen3TtsDeviceFrameViewV2 begin_frame(
         uint16_t semantic_token,
         int trailing_text_token,
         const Qwen3TtsSamplingConfig& talker_sampling,
-        const Qwen3TtsSamplingConfig& predictor_sampling
+        const Qwen3TtsSamplingConfig& predictor_sampling,
+        bool copy_codes_to_host
     ) {
-        check_cuda(cudaSetDevice(device_index_), "cudaSetDevice(next frame)");
+        check_cuda(cudaSetDevice(device_index_), "cudaSetDevice(begin frame)");
         ensure_ready();
+        if (poisoned_) {
+            throw std::runtime_error("talker session is poisoned and must be destroyed");
+        }
+        if (frame_in_flight_) {
+            throw std::runtime_error("a device frame lease is already in flight");
+        }
+        if (phase_ != QWEN3_TTS_TALKER_PREFILLED) {
+            throw std::runtime_error("talker must be prefilled before frame generation");
+        }
         if (semantic_token == kCodecEos) {
             throw std::runtime_error("EOS must not be expanded into a codec frame");
         }
         if (semantic_token >= kTalkerVocabulary) {
             throw std::runtime_error("semantic token is outside the talker vocabulary");
+        }
+        if (semantic_token != current_semantic_token_) {
+            throw std::runtime_error("semantic token does not match talker session state");
         }
         if (trailing_text_token < 0 || trailing_text_token >= kTextVocabulary) {
             throw std::runtime_error("next-frame text token is outside the text vocabulary");
@@ -725,104 +769,175 @@ public:
             throw std::runtime_error("talker KV cache is full");
         }
 
-        Qwen3TtsCodecFrameResult result{};
-        check_cuda(
-            qwen3_tts::launch_store_token(
-                frame_tokens_.as<int>(),
-                0,
-                semantic_token,
-                stream_
-            ),
-            "store semantic frame token"
-        );
-        check_cuda(
-            cudaEventRecord(predictor_start_, stream_),
-            "cudaEventRecord(predictor start)"
-        );
+        uint64_t lease_id = next_lease_id_++;
+        if (next_lease_id_ == 0) {
+            next_lease_id_ = 1;
+        }
+        frame_in_flight_ = true;
+        pending_host_code_copy_ = copy_codes_to_host;
+        pending_lease_id_ = lease_id;
+        pending_talker_position_ = static_cast<uint32_t>(position_);
 
-        run_predictor_position(last_hidden_.as<__nv_bfloat16>(), 0, -1);
-        check_cuda(
-            qwen3_tts::launch_gather_embedding(
-                codec_embedding_,
-                kTalkerVocabulary,
-                kTalkerHidden,
-                frame_tokens_.as<int>(),
-                text_output_.as<__nv_bfloat16>(),
-                stream_
-            ),
-            "gather semantic predictor embedding"
-        );
-        run_predictor_position(text_output_.as<__nv_bfloat16>(), 1, 0);
-        sample_logits_device(kPredictorVocabulary, predictor_sampling, false);
-        check_cuda(
-            qwen3_tts::launch_store_sampled_token(
-                frame_tokens_.as<int>(),
-                1,
-                sampled_token_.as<int>(),
-                stream_
-            ),
-            "store predictor codebook token"
-        );
+        try {
+            check_cuda(
+                qwen3_tts::launch_store_token(
+                    frame_tokens_.as<int>(),
+                    0,
+                    semantic_token,
+                    stream_
+                ),
+                "store semantic frame token"
+            );
+            check_cuda(
+                cudaEventRecord(predictor_start_, stream_),
+                "cudaEventRecord(predictor start)"
+            );
 
-        for (int residual = 1; residual < kResidualCodebooks; ++residual) {
+            run_predictor_position(last_hidden_.as<__nv_bfloat16>(), 0, -1);
             check_cuda(
                 qwen3_tts::launch_gather_embedding(
-                    predictor_embeddings_[residual - 1],
-                    kPredictorVocabulary,
+                    codec_embedding_,
+                    kTalkerVocabulary,
                     kTalkerHidden,
-                    frame_tokens_.as<int>() + residual,
+                    frame_tokens_.as<int>(),
                     text_output_.as<__nv_bfloat16>(),
                     stream_
                 ),
-                "gather residual predictor embedding"
+                "gather semantic predictor embedding"
             );
-            run_predictor_position(
-                text_output_.as<__nv_bfloat16>(),
-                residual + 1,
-                residual
-            );
+            run_predictor_position(text_output_.as<__nv_bfloat16>(), 1, 0);
             sample_logits_device(kPredictorVocabulary, predictor_sampling, false);
             check_cuda(
                 qwen3_tts::launch_store_sampled_token(
                     frame_tokens_.as<int>(),
-                    residual + 1,
+                    1,
                     sampled_token_.as<int>(),
                     stream_
                 ),
-                "store residual codebook token"
+                "store predictor codebook token"
+            );
+
+            for (int residual = 1; residual < kResidualCodebooks; ++residual) {
+                check_cuda(
+                    qwen3_tts::launch_gather_embedding(
+                        predictor_embeddings_[residual - 1],
+                        kPredictorVocabulary,
+                        kTalkerHidden,
+                        frame_tokens_.as<int>() + residual,
+                        text_output_.as<__nv_bfloat16>(),
+                        stream_
+                    ),
+                    "gather residual predictor embedding"
+                );
+                run_predictor_position(
+                    text_output_.as<__nv_bfloat16>(),
+                    residual + 1,
+                    residual
+                );
+                sample_logits_device(kPredictorVocabulary, predictor_sampling, false);
+                check_cuda(
+                    qwen3_tts::launch_store_sampled_token(
+                        frame_tokens_.as<int>(),
+                        residual + 1,
+                        sampled_token_.as<int>(),
+                        stream_
+                    ),
+                    "store residual codebook token"
+                );
+            }
+            check_cuda(
+                cudaEventRecord(predictor_stop_, stream_),
+                "cudaEventRecord(predictor stop)"
+            );
+            check_cuda(
+                qwen3_tts::launch_pack_frame_codes(
+                    frame_tokens_.as<int>(),
+                    frame_codes_.as<uint16_t>(),
+                    stream_
+                ),
+                "pack codec frame"
+            );
+            check_cuda(
+                cudaEventRecord(frame_codes_ready_, stream_),
+                "cudaEventRecord(frame codes ready)"
+            );
+            if (copy_codes_to_host) {
+                check_cuda(
+                    cudaMemcpyAsync(
+                        host_frame_codes_,
+                        frame_codes_.as<uint16_t>(),
+                        kPredictorSequence * sizeof(uint16_t),
+                        cudaMemcpyDeviceToHost,
+                        stream_
+                    ),
+                    "copy codec frame to pinned host memory"
+                );
+            }
+
+            prepare_generated_embedding(trailing_text_token);
+            check_cuda(cudaEventRecord(start_, stream_), "cudaEventRecord(talker start)");
+            run_talker_step(position_, true);
+            check_cuda(cudaEventRecord(stop_, stream_), "cudaEventRecord(talker stop)");
+            ++position_;
+            sample_logits_device(kTalkerVocabulary, talker_sampling, true);
+            enqueue_sampled_token_to_host();
+            check_cuda(
+                cudaEventRecord(semantic_ready_, stream_),
+                "cudaEventRecord(semantic ready)"
+            );
+        } catch (...) {
+            poisoned_ = true;
+            cudaStreamSynchronize(stream_);
+            frame_in_flight_ = false;
+            pending_host_code_copy_ = false;
+            pending_lease_id_ = 0;
+            throw;
+        }
+
+        Qwen3TtsDeviceFrameViewV2 view{};
+        view.struct_size = sizeof(Qwen3TtsDeviceFrameViewV2);
+        view.code_count = kPredictorSequence;
+        view.device_codes = frame_codes_.as<uint16_t>();
+        view.ready_event = reinterpret_cast<Qwen3TtsCudaEventHandle>(frame_codes_ready_);
+        view.lease_id = lease_id;
+        view.device_index = device_index_;
+        return view;
+    }
+
+    Qwen3TtsCodecFrameResult finish_frame(
+        uint64_t lease_id,
+        Qwen3TtsCudaEventHandle consumer_done_event
+    ) {
+        check_cuda(cudaSetDevice(device_index_), "cudaSetDevice(finish frame)");
+        ensure_ready();
+        if (poisoned_) {
+            throw std::runtime_error("talker session is poisoned and must be destroyed");
+        }
+        if (!frame_in_flight_) {
+            throw std::runtime_error("no device frame lease is in flight");
+        }
+        if (lease_id == 0 || lease_id != pending_lease_id_) {
+            throw std::runtime_error("device frame lease ID is stale or invalid");
+        }
+        if (consumer_done_event != nullptr) {
+            check_cuda(
+                cudaStreamWaitEvent(
+                    stream_,
+                    reinterpret_cast<cudaEvent_t>(consumer_done_event),
+                    0
+                ),
+                "cudaStreamWaitEvent(frame consumer done)"
             );
         }
         check_cuda(
-            cudaEventRecord(predictor_stop_, stream_),
-            "cudaEventRecord(predictor stop)"
+            cudaEventSynchronize(semantic_ready_),
+            "cudaEventSynchronize(semantic ready)"
         );
-        check_cuda(
-            qwen3_tts::launch_pack_frame_codes(
-                frame_tokens_.as<int>(),
-                frame_codes_.as<uint16_t>(),
-                stream_
-            ),
-            "pack codec frame"
-        );
-        check_cuda(
-            cudaMemcpyAsync(
-                host_frame_codes_,
-                frame_codes_.as<uint16_t>(),
-                kPredictorSequence * sizeof(uint16_t),
-                cudaMemcpyDeviceToHost,
-                stream_
-            ),
-            "copy codec frame to pinned host memory"
-        );
+        ++host_sync_count_;
+        const int next_semantic = validated_host_sampled_token();
 
-        prepare_generated_embedding(trailing_text_token);
-        result.talker_position = static_cast<uint32_t>(position_);
-        check_cuda(cudaEventRecord(start_, stream_), "cudaEventRecord(talker start)");
-        run_talker_step(position_, true);
-        check_cuda(cudaEventRecord(stop_, stream_), "cudaEventRecord(talker stop)");
-        ++position_;
-        sample_logits_device(kTalkerVocabulary, talker_sampling, true);
-        const int next_semantic = copy_sampled_token_to_host();
+        Qwen3TtsCodecFrameResult result{};
+        result.talker_position = pending_talker_position_;
         check_cuda(
             cudaEventElapsedTime(
                 &result.predictor_gpu_milliseconds,
@@ -835,7 +950,9 @@ public:
             cudaEventElapsedTime(&result.talker_gpu_milliseconds, start_, stop_),
             "cudaEventElapsedTime(talker)"
         );
-        std::copy_n(host_frame_codes_, kPredictorSequence, result.codes);
+        if (pending_host_code_copy_) {
+            std::copy_n(host_frame_codes_, kPredictorSequence, result.codes);
+        }
         result.next_semantic_token = static_cast<uint16_t>(next_semantic);
         result.ended_by_eos = next_semantic == kCodecEos ? 1 : 0;
         current_semantic_token_ = result.next_semantic_token;
@@ -843,7 +960,30 @@ public:
         phase_ = result.ended_by_eos != 0
             ? QWEN3_TTS_TALKER_ENDED
             : QWEN3_TTS_TALKER_PREFILLED;
+        frame_in_flight_ = false;
+        pending_host_code_copy_ = false;
+        pending_lease_id_ = 0;
         return result;
+    }
+
+    Qwen3TtsCodecFrameResult next_frame(
+        uint16_t semantic_token,
+        int trailing_text_token,
+        const Qwen3TtsSamplingConfig& talker_sampling,
+        const Qwen3TtsSamplingConfig& predictor_sampling
+    ) {
+        const Qwen3TtsDeviceFrameViewV2 view = begin_frame(
+            semantic_token,
+            trailing_text_token,
+            talker_sampling,
+            predictor_sampling,
+            true
+        );
+        return finish_frame(view.lease_id, nullptr);
+    }
+
+    uint16_t current_semantic_token() const noexcept {
+        return current_semantic_token_;
     }
 
 private:
@@ -2062,7 +2202,7 @@ private:
         }
     }
 
-    int copy_sampled_token_to_host() {
+    void enqueue_sampled_token_to_host() {
         check_cuda(
             cudaMemcpyAsync(
                 host_sampled_token_,
@@ -2073,12 +2213,20 @@ private:
             ),
             "copy sampled token to pinned host memory"
         );
-        ++host_sync_count_;
-        check_cuda(cudaStreamSynchronize(stream_), "synchronize sampled token");
+    }
+
+    int validated_host_sampled_token() const {
         if (*host_sampled_token_ < 0 || *host_sampled_token_ >= kTalkerVocabulary) {
             throw std::runtime_error("device sampler returned an invalid token");
         }
         return *host_sampled_token_;
+    }
+
+    int copy_sampled_token_to_host() {
+        enqueue_sampled_token_to_host();
+        ++host_sync_count_;
+        check_cuda(cudaStreamSynchronize(stream_), "synchronize sampled token");
+        return validated_host_sampled_token();
     }
 
 public:
@@ -2141,6 +2289,14 @@ private:
     cudaEvent_t stop_ = nullptr;
     cudaEvent_t predictor_start_ = nullptr;
     cudaEvent_t predictor_stop_ = nullptr;
+    cudaEvent_t frame_codes_ready_ = nullptr;
+    cudaEvent_t semantic_ready_ = nullptr;
+    bool frame_in_flight_ = false;
+    bool pending_host_code_copy_ = false;
+    bool poisoned_ = false;
+    uint64_t next_lease_id_ = 1;
+    uint64_t pending_lease_id_ = 0;
+    uint32_t pending_talker_position_ = 0;
     std::vector<DecoderWeights> talker_layers_;
     std::vector<DecoderWeights> predictor_layers_;
     std::vector<LayerCache> talker_cache_;
@@ -2367,6 +2523,66 @@ extern "C" QWEN3_TTS_API int32_t qwen3_tts_session_next_frame(
             predictor_sampling
         );
         std::copy_n(frame.codes, kPredictorSequence, output_codes);
+        *next_semantic_token = frame.next_semantic_token;
+        frame_info->talker_position = frame.talker_position;
+        frame_info->ended_by_eos = frame.ended_by_eos;
+        frame_info->predictor_gpu_milliseconds = frame.predictor_gpu_milliseconds;
+        frame_info->talker_gpu_milliseconds = frame.talker_gpu_milliseconds;
+    }, QWEN3_TTS_TALKER_STATUS_STATE, error, error_capacity);
+}
+
+extern "C" QWEN3_TTS_API int32_t qwen3_tts_session_next_frame_begin_v2(
+    Qwen3TtsSessionHandle handle,
+    int32_t trailing_text_token_id,
+    Qwen3TtsSamplingConfig talker_sampling,
+    Qwen3TtsSamplingConfig predictor_sampling,
+    Qwen3TtsDeviceFrameViewV2* output,
+    char* error,
+    size_t error_capacity
+) {
+    if (output == nullptr) {
+        write_error(error, error_capacity, "device-frame output is null");
+        return QWEN3_TTS_TALKER_STATUS_INVALID_ARGUMENT;
+    }
+    if (output->struct_size != sizeof(Qwen3TtsDeviceFrameViewV2)
+        || output->reserved != 0) {
+        write_error(
+            error,
+            error_capacity,
+            "device-frame output has an unsupported size or nonzero reserved field"
+        );
+        return QWEN3_TTS_TALKER_STATUS_INVALID_ARGUMENT;
+    }
+    return protect([&] {
+        TalkerContext* context = session(handle);
+        *output = context->begin_frame(
+            context->current_semantic_token(),
+            trailing_text_token_id,
+            talker_sampling,
+            predictor_sampling,
+            false
+        );
+    }, QWEN3_TTS_TALKER_STATUS_STATE, error, error_capacity);
+}
+
+extern "C" QWEN3_TTS_API int32_t qwen3_tts_session_next_frame_finish_v2(
+    Qwen3TtsSessionHandle handle,
+    uint64_t lease_id,
+    Qwen3TtsCudaEventHandle consumer_done_event,
+    uint16_t* next_semantic_token,
+    Qwen3TtsCodecFrameInfo* frame_info,
+    char* error,
+    size_t error_capacity
+) {
+    if (next_semantic_token == nullptr || frame_info == nullptr) {
+        write_error(error, error_capacity, "device-frame finish outputs are null");
+        return QWEN3_TTS_TALKER_STATUS_INVALID_ARGUMENT;
+    }
+    return protect([&] {
+        const Qwen3TtsCodecFrameResult frame = session(handle)->finish_frame(
+            lease_id,
+            consumer_done_event
+        );
         *next_semantic_token = frame.next_semantic_token;
         frame_info->talker_position = frame.talker_position;
         frame_info->ended_by_eos = frame.ended_by_eos;
