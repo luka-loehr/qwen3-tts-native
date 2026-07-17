@@ -297,6 +297,7 @@ awk -F, \
   }
   NR == 1 { next }
   {
+    if (NF != 10) fail("GPU telemetry row does not contain exactly 10 CSV fields")
     timestamp = trim($1)
     power = trim($9)
     if (timestamp !~ /^[0-9]+$/ || power !~ /^[0-9]+([.][0-9]+)?$/) fail("power telemetry contains an unavailable or malformed sensor value")
@@ -331,6 +332,7 @@ awk -F, -v start="${phase_wall[2]}" -v end="${phase_wall[3]}" -v max_gap="$max_g
   function fail(message) { print message > "/dev/stderr"; failed = 1; exit 2 }
   NR == 1 { next }
   {
+    if (NF != 6) fail("process RSS summary row does not contain exactly 6 CSV fields")
     if ($1 !~ /^[0-9]+$/ || $3 !~ /^[0-9]+$/ || $4 !~ /^[0-9]+$/ ||
         $5 !~ /^[0-9]+$/ || $6 !~ /^[01]$/) fail("process RSS summary contains a malformed value")
     count++
@@ -360,6 +362,7 @@ awk -F, -v audit_start="$idle_start_ns" -v start="${phase_wall[2]}" \
   function fail(message) { print message > "/dev/stderr"; failed = 1; exit 2 }
   NR == 1 { next }
   {
+    if (NF != 7) fail("GPU process summary row does not contain exactly 7 CSV fields")
     if ($1 !~ /^[0-9]+$/ || $3 !~ /^[01]$/ || $4 !~ /^[0-9]+$/ ||
         $5 !~ /^[0-9]+$/ || $6 !~ /^[0-9]+$/) fail("GPU process summary contains a malformed value")
     count++
@@ -396,6 +399,7 @@ awk -F, -v start="${phase_wall[2]}" -v end="${phase_wall[3]}" -v max_gap="$max_g
   function fail(message) { print message > "/dev/stderr"; failed = 1; exit 2 }
   NR == 1 { next }
   {
+    if (NF != 9) fail("system telemetry row does not contain exactly 9 CSV fields")
     if ($1 !~ /^[0-9]+$/ || $4 !~ /^[0-9]+$/ || $8 !~ /^[0-9]+$/ || $9 !~ /^[0-9]+$/)
       fail("system telemetry contains a malformed value")
     count++
