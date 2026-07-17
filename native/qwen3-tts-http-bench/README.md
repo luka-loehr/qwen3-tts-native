@@ -59,21 +59,33 @@ The comparison profile follows the official SGLang-Omni `/v1/audio/speech` Voice
 | fixed | `task_type="VoiceDesign"` |
 | fixed | `voice="default"` |
 | fixed | `stream=true` |
+| fixed | `stream_format="audio"` |
 | fixed | `response_format="pcm"` |
+| `max_duration_seconds` | `max_new_tokens=ceil(seconds*12.5)` |
 | `seed`, when present | `seed` |
-| `sampling.strategy="sample"` | `do_sample=true` |
-| `sampling.strategy="greedy"` | `do_sample=false` |
+| `sampling.strategy="sample"` | stock `do_sample=true` |
 | `sampling.temperature` | `temperature` |
 | `sampling.top_p` | `top_p` |
 | `sampling.top_k` | `top_k` |
 | `sampling.repetition_penalty` | `repetition_penalty` |
-| `sampling.predictor.strategy="sample"` | `subtalker_dosample=true` |
-| `sampling.predictor.strategy="greedy"` | `subtalker_dosample=false` |
-| `sampling.predictor.temperature` | `subtalker_temperature` |
-| `sampling.predictor.top_p` | `subtalker_top_p` |
-| `sampling.predictor.top_k` | `subtalker_top_k` |
+| predictor sample/0.9/1.0/50 | pinned stock defaults |
 
-The field names above match SGLang-Omni's Qwen3-TTS request builder, including its exact `subtalker_dosample` spelling. The profile rejects `stream=false`, `max_duration_seconds`, unknown sampling fields, invalid ranges, and sample-only controls supplied with `strategy="greedy"`. No supplied sampling control is silently discarded. The official API describes `seed` and generation controls as model-specific; the comparison profile targets the Qwen3-TTS VoiceDesign adapter that implements these fields.
+The pinned public speech schema does not expose `do_sample` or the four
+predictor controls. Stock SGLang-Omni fixes them to sample/0.9/1.0/50, which is
+the only predictor configuration this comparison profile accepts. The client
+does not send undeclared fields that Pydantic would discard. Talker temperature,
+top-p, top-k, repetition penalty, seed, and `max_new_tokens` are public request
+fields and are sent explicitly. Greedy sampling and non-default predictor
+settings fail before a request is sent.
+
+Both implementations use 24 kHz audio with 1,920 samples per codec frame, or
+exactly 12.5 frames per second. The canonical production workload sets
+`max_duration_seconds=20.48`: Native maps that to 256 frames and the comparison
+profile sends SGLang `max_new_tokens=256`. Production evidence is rejected if a
+SGLang response reaches 255 frames (489,600 samples), keeping every accepted EOS
+well clear of SGLang's length-before-EOS boundary. At EOS, stock SGLang also
+runs one predictor step whose codes it discards, while Native stops before that
+unnecessary step; this implementation difference is retained and documented.
 
 SGLang raw streaming has no in-band start event, end event, usage object, finish reason, terminal sentinel, or final-packet flag. Consequently, successful transport completion is measurable, but natural EOS versus length termination is **unknown** and remains `null` in request records. The client never fabricates that distinction. Raw PCM is validated as non-empty PCM16 mono with an even total byte count and an explicitly declared sample rate.
 
@@ -82,7 +94,7 @@ SGLang raw streaming has no in-band start event, end event, usage object, finish
 The workload is deterministic UTF-8 JSONL. Blank lines are ignored; IDs must be unique.
 
 ```json
-{"id":"english-calm-001","text":"Good morning.","voice_description":"A calm adult male voice with measured pacing.","language":"English","seed":42,"sampling":{"strategy":"sample","temperature":0.9,"top_p":1.0,"top_k":50,"repetition_penalty":1.05,"predictor":{"strategy":"sample","temperature":0.9,"top_p":1.0,"top_k":50}},"stream":true}
+{"id":"english-calm-001","text":"Good morning.","voice_description":"A calm adult male voice with measured pacing.","language":"English","seed":42,"max_duration_seconds":20.48,"sampling":{"strategy":"sample","temperature":0.9,"top_p":1.0,"top_k":50,"repetition_penalty":1.05,"predictor":{"strategy":"sample","temperature":0.9,"top_p":1.0,"top_k":50}},"stream":true}
 ```
 
 Fields:
@@ -94,7 +106,7 @@ Fields:
 | `voice_description` | yes | VoiceDesign instruction |
 | `language` | no | Defaults to `auto` |
 | `seed` | no | JSON-safe request seed |
-| `max_duration_seconds` | no | Native-only positive duration limit |
+| `max_duration_seconds` | no | Positive duration limit; required by the SGLang comparison profile and mapped at 12.5 codec frames/s |
 | `sampling` | no | Strict common sampling object described below |
 | `stream` | no | Defaults to `true`; SGLang comparison requires `true` |
 
@@ -108,7 +120,11 @@ Every request record contains an endpoint-neutral `normalized_sampling` object, 
 - talker `strategy`, `temperature`, `top_p`, `top_k`, and `repetition_penalty`; and
 - predictor/subtalker `strategy`, `temperature`, `top_p`, and `top_k`.
 
-`strategy` defaults to `sample` inside an explicitly present stage object. With `sample`, all listed controls must be present for qualification. With `greedy`, `temperature`, `top_p`, and `top_k` must be absent because both engines ignore sampling-only controls; supplying them is a workload error, not a warning. Talker `repetition_penalty` remains portable for both strategies.
+`strategy` defaults to `sample` inside an explicitly present stage object. With
+`sample`, all listed controls must be present for qualification. Stock
+SGLang-Omni 0.1.0 cannot select greedy mode through this HTTP API, and its
+predictor controls are fixed to sample/0.9/1.0/50; any incompatible comparison
+workload fails before I/O. Talker `repetition_penalty` remains portable.
 
 Incomplete configurations may still be measured for diagnostics, but they are marked non-qualifying because server defaults can differ. Unknown fields fail during workload parsing. Comparison tooling should accept only records where `sampling_parity_qualifying=true` and should require matching `normalized_sampling_sha256` values across the two runs.
 
