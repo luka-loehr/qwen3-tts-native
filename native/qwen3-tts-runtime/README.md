@@ -111,6 +111,13 @@ The complete evidence is stored in
 Aggregate throughput is faster than real time at every tested level. B3/B6
 per-request RTF and the stricter B1 RTF target below 0.50 remain open.
 
+The `experiment/credit-overlap` branch adds a bounded, request-owned talker
+producer with explicit frame credits. It preserves byte-identical natural-EOS
+audio and improves some throughput measurements, but it does not improve
+concurrency TTFA consistently enough for promotion. Its controlled evidence and
+rejection decision are recorded in
+[`../../benchmarks/results/runtime-credit-overlap-experiment-2026-07-17.json`](../../benchmarks/results/runtime-credit-overlap-experiment-2026-07-17.json).
+
 ## Direct native smoke
 
 `native_e2e_smoke` bypasses the scheduler and connects one incremental talker
@@ -143,7 +150,9 @@ must treat a request that reaches the ceiling as truncated.
 - It is not connected to the Ephraim backend, frontend, or production TTS
   container.
 - There is no production runtime image yet.
-- Talker generation and codec decoding still execute sequentially within one
-  packet; overlapping those stages is the next performance milestone.
+- The experimental host producer overlaps limited Talker and Codec work, but
+  its measured gain is too small for promotion. The next candidate will hand
+  predictor-ready device codes to the codec stream through a CUDA event, before
+  the Talker finishes the following semantic-token step.
 - The checked functional WAV proves transport and PCM validity, not complete
   multilingual intelligibility or voice-quality qualification.

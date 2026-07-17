@@ -1,5 +1,7 @@
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::thread;
 use std::time::Instant;
 
@@ -24,6 +26,8 @@ use crate::{
 const CODEC_STATUS_INVALID_ARGUMENT: i32 = -1;
 const CODEC_STATUS_CUDA: i32 = -2;
 const CODEC_STATUS_ALLOCATION: i32 = -4;
+const TALKER_PREFETCH_FRAMES: usize = CODEC_MAX_PACKET_FRAMES;
+const TALKER_PREFETCH_COMMANDS: usize = 2;
 
 pub struct NativeBackend {
     talker: Arc<NativeTalkerModel>,
@@ -31,11 +35,107 @@ pub struct NativeBackend {
 }
 
 pub struct NativeBackendSession {
-    talker: NativeTalkerSession,
+    talker: TalkerProducer,
     codec: NativeCodecSession,
     first_packet: bool,
+    delivered_codec_frames: u64,
     peak_request_device_bytes: u64,
     peak_request_host_bytes: u64,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct GeneratedTalkerFrame {
+    codes: [u16; CODEBOOKS],
+    gpu_microseconds: f32,
+    is_final: bool,
+}
+
+#[derive(Debug)]
+enum TalkerProducerMessage {
+    Frame(GeneratedTalkerFrame),
+    Ended,
+    Failed(BackendError),
+}
+
+#[derive(Debug)]
+struct GeneratedTalkerPacket {
+    frames: [[u16; CODEBOOKS]; CODEC_MAX_PACKET_FRAMES],
+    frame_count: usize,
+    gpu_microseconds: f32,
+    is_final: bool,
+}
+
+struct TalkerProducer {
+    receiver: Option<Receiver<TalkerProducerMessage>>,
+    permits: Option<SyncSender<usize>>,
+    cancelled: Arc<AtomicBool>,
+    worker: Option<thread::JoinHandle<()>>,
+}
+
+impl TalkerProducer {
+    fn spawn(request_id: u64, talker: NativeTalkerSession) -> Result<Self, BackendError> {
+        let (sender, receiver) = sync_channel(TALKER_PREFETCH_FRAMES);
+        let (permits, permit_receiver) = sync_channel(TALKER_PREFETCH_COMMANDS);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let worker_cancelled = Arc::clone(&cancelled);
+        let worker = thread::Builder::new()
+            .name(format!("qwen3-tts-talker-{request_id}"))
+            .spawn(move || run_talker_producer(talker, sender, permit_receiver, &worker_cancelled))
+            .map_err(|error| {
+                BackendError::with_status(
+                    RuntimeStatus::Allocation,
+                    format!("failed to start talker producer thread: {error}"),
+                )
+            })?;
+        Ok(Self {
+            receiver: Some(receiver),
+            permits: Some(permits),
+            cancelled,
+            worker: Some(worker),
+        })
+    }
+
+    fn receive_packet(
+        &self,
+        requested_frames: usize,
+    ) -> Result<GeneratedTalkerPacket, BackendError> {
+        let receiver = self.receiver.as_ref().ok_or_else(|| {
+            BackendError::with_status(RuntimeStatus::State, "talker producer is already closed")
+        })?;
+        receive_talker_packet(receiver, &self.cancelled, requested_frames)
+    }
+
+    fn prefetch(&self, frames: usize) -> Result<(), BackendError> {
+        if frames == 0 || frames > CODEC_MAX_PACKET_FRAMES {
+            return Err(BackendError::with_status(
+                RuntimeStatus::InvalidArgument,
+                "talker prefetch count is outside the packet limit",
+            ));
+        }
+        let permits = self.permits.as_ref().ok_or_else(|| {
+            BackendError::with_status(RuntimeStatus::State, "talker producer is already closed")
+        })?;
+        let _ = permits.send(frames);
+        Ok(())
+    }
+
+    fn cancel_and_join(&mut self) -> Result<(), BackendError> {
+        self.cancelled.store(true, Ordering::Release);
+        self.receiver.take();
+        self.permits.take();
+        let Some(worker) = self.worker.take() else {
+            return Ok(());
+        };
+        worker.join().map_err(|_| {
+            BackendError::with_status(RuntimeStatus::Internal, "talker producer thread panicked")
+        })
+    }
+}
+
+impl Drop for TalkerProducer {
+    fn drop(&mut self) {
+        let _ = self.cancel_and_join();
+    }
 }
 
 impl NativeBackend {
@@ -81,6 +181,7 @@ impl NativeBackend {
         request: BackendRequest,
     ) -> Result<BackendStarted<NativeBackendSession>, BackendError> {
         let started_at = Instant::now();
+        let request_id = request.id;
         let voice_request = voice_request(&request);
         let talker_session = talker.start(voice_request).map_err(|error| {
             map_talker_error(
@@ -117,12 +218,14 @@ impl NativeBackend {
             ],
             "request device memory accounting overflowed",
         )?;
+        let talker_producer = TalkerProducer::spawn(request_id, talker_session)?;
 
         Ok(BackendStarted {
             session: NativeBackendSession {
-                talker: talker_session,
+                talker: talker_producer,
                 codec: codec_session,
                 first_packet: true,
+                delivered_codec_frames: 0,
                 peak_request_device_bytes,
                 peak_request_host_bytes: codec_memory.host_pinned_bytes,
             },
@@ -137,15 +240,16 @@ impl NativeBackend {
         packet_frames: u32,
         pcm: &mut [i16],
     ) -> Result<BackendPacket, BackendError> {
+        let configured_packet_frames = usize::try_from(packet_frames).map_err(|_| {
+            BackendError::with_status(
+                RuntimeStatus::InvalidArgument,
+                "packet frame count overflowed",
+            )
+        })?;
         let requested_frames = if session.first_packet {
             1
         } else {
-            usize::try_from(packet_frames).map_err(|_| {
-                BackendError::with_status(
-                    RuntimeStatus::InvalidArgument,
-                    "packet frame count overflowed",
-                )
-            })?
+            configured_packet_frames
         };
         if requested_frames == 0 || requested_frames > CODEC_MAX_PACKET_FRAMES {
             return Err(BackendError::with_status(
@@ -169,58 +273,53 @@ impl NativeBackend {
             ));
         }
 
-        let mut frames = [[0_u16; CODEBOOKS]; CODEC_MAX_PACKET_FRAMES];
-        let mut frame_count = 0_usize;
-        let mut talker_gpu_microseconds = 0.0_f32;
-        while frame_count < requested_frames {
-            let Some(frame) = session.talker.next_frame().map_err(|error| {
-                map_talker_error(
-                    "talker frame generation failed",
-                    error,
-                    RuntimeStatus::State,
-                )
-            })?
-            else {
-                break;
-            };
-            frames[frame_count] = frame.codes;
-            frame_count += 1;
-            talker_gpu_microseconds +=
-                (frame.talker_gpu_milliseconds + frame.predictor_gpu_milliseconds) * 1_000.0;
-            if session.talker.is_ended() {
-                break;
-            }
+        let talker_packet = session.talker.receive_packet(requested_frames)?;
+        let sample_count = talker_packet.frame_count * SAMPLES_PER_FRAME;
+        if !talker_packet.is_final {
+            session.talker.prefetch(1)?;
         }
-        if frame_count == 0 {
-            return Err(BackendError::with_status(
-                RuntimeStatus::State,
-                "talker ended without a decodable codec frame",
-            ));
-        }
-
-        let is_final = session.talker.is_ended();
-        let sample_count = frame_count * SAMPLES_PER_FRAME;
         let result = session
             .codec
-            .process_into(&frames[..frame_count], is_final, &mut pcm[..sample_count])
+            .process_into(
+                &talker_packet.frames[..talker_packet.frame_count],
+                talker_packet.is_final,
+                &mut pcm[..sample_count],
+            )
             .map_err(|(status, message)| {
                 map_codec_error("codec packet generation failed", status, message)
             })?;
-        if result.frame_count as usize != frame_count
+        if !talker_packet.is_final && configured_packet_frames > 1 {
+            session.talker.prefetch(configured_packet_frames - 1)?;
+        }
+        let expected_first_sample = session
+            .delivered_codec_frames
+            .checked_mul(SAMPLES_PER_FRAME as u64)
+            .ok_or_else(|| {
+                BackendError::with_status(RuntimeStatus::State, "codec sample position overflowed")
+            })?;
+        if result.first_frame_position != session.delivered_codec_frames
+            || result.first_sample_position != expected_first_sample
+            || result.frame_count as usize != talker_packet.frame_count
             || result.sample_count as usize != sample_count
-            || (result.is_final != 0) != is_final
+            || (result.is_final != 0) != talker_packet.is_final
         {
             return Err(BackendError::with_status(
                 RuntimeStatus::State,
                 "codec returned an inconsistent packet descriptor",
             ));
         }
+        session.delivered_codec_frames = session
+            .delivered_codec_frames
+            .checked_add(talker_packet.frame_count as u64)
+            .ok_or_else(|| {
+                BackendError::with_status(RuntimeStatus::State, "codec frame position overflowed")
+            })?;
         session.first_packet = false;
 
         Ok(BackendPacket {
-            codec_frames: frame_count as u32,
-            is_final,
-            talker_gpu_microseconds,
+            codec_frames: talker_packet.frame_count as u32,
+            is_final: talker_packet.is_final,
+            talker_gpu_microseconds: talker_packet.gpu_microseconds,
             codec_gpu_microseconds: result.gpu_microseconds,
             peak_request_device_bytes: session.peak_request_device_bytes,
             peak_request_host_bytes: session.peak_request_host_bytes,
@@ -305,14 +404,136 @@ impl StreamingBackend for NativeBackend {
     }
 
     fn cancel(&mut self, session: &mut Self::Session) -> Result<(), BackendError> {
-        session.talker.cancel();
-        session.codec.cancel().map_err(|message| {
+        let talker_result = session.talker.cancel_and_join();
+        let codec_result = session.codec.cancel().map_err(|message| {
             BackendError::with_status(
                 RuntimeStatus::State,
                 format!("failed to cancel codec session: {message}"),
             )
-        })
+        });
+        match (talker_result, codec_result) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+            (Err(talker_error), Err(codec_error)) => Err(BackendError::with_status(
+                talker_error.status(),
+                format!("{talker_error}; {codec_error}"),
+            )),
+        }
     }
+}
+
+fn run_talker_producer(
+    mut talker: NativeTalkerSession,
+    sender: SyncSender<TalkerProducerMessage>,
+    permits: Receiver<usize>,
+    cancelled: &AtomicBool,
+) {
+    let mut permitted_frames = 1_usize;
+    loop {
+        for _ in 0..permitted_frames {
+            if cancelled.load(Ordering::Acquire) {
+                talker.cancel();
+                return;
+            }
+            let frame = match talker.next_frame() {
+                Ok(Some(frame)) => frame,
+                Ok(None) => {
+                    let _ = sender.send(TalkerProducerMessage::Ended);
+                    return;
+                }
+                Err(error) => {
+                    let error = map_talker_error(
+                        "talker frame generation failed",
+                        error,
+                        RuntimeStatus::State,
+                    );
+                    let _ = sender.send(TalkerProducerMessage::Failed(error));
+                    return;
+                }
+            };
+            if cancelled.load(Ordering::Acquire) {
+                talker.cancel();
+                return;
+            }
+            let is_final = talker.is_ended();
+            let message = TalkerProducerMessage::Frame(GeneratedTalkerFrame {
+                codes: frame.codes,
+                gpu_microseconds: (frame.talker_gpu_milliseconds
+                    + frame.predictor_gpu_milliseconds)
+                    * 1_000.0,
+                is_final,
+            });
+            if sender.send(message).is_err() {
+                talker.cancel();
+                return;
+            }
+            if is_final {
+                return;
+            }
+        }
+        permitted_frames = match permits.recv() {
+            Ok(frames) => frames,
+            Err(_) => {
+                talker.cancel();
+                return;
+            }
+        };
+        if permitted_frames == 0 || permitted_frames > CODEC_MAX_PACKET_FRAMES {
+            let _ = sender.send(TalkerProducerMessage::Failed(BackendError::with_status(
+                RuntimeStatus::Internal,
+                "talker producer received an invalid prefetch count",
+            )));
+            return;
+        }
+    }
+}
+
+fn receive_talker_packet(
+    receiver: &Receiver<TalkerProducerMessage>,
+    cancelled: &AtomicBool,
+    requested_frames: usize,
+) -> Result<GeneratedTalkerPacket, BackendError> {
+    let mut packet = GeneratedTalkerPacket {
+        frames: [[0_u16; CODEBOOKS]; CODEC_MAX_PACKET_FRAMES],
+        frame_count: 0,
+        gpu_microseconds: 0.0,
+        is_final: false,
+    };
+    while packet.frame_count < requested_frames {
+        let message = receiver.recv().map_err(|_| {
+            if cancelled.load(Ordering::Acquire) {
+                BackendError::with_status(RuntimeStatus::Cancelled, "talker producer cancelled")
+            } else {
+                BackendError::with_status(
+                    RuntimeStatus::Internal,
+                    "talker producer disconnected before a final frame",
+                )
+            }
+        })?;
+        match message {
+            TalkerProducerMessage::Frame(frame) => {
+                packet.frames[packet.frame_count] = frame.codes;
+                packet.frame_count += 1;
+                packet.gpu_microseconds += frame.gpu_microseconds;
+                if frame.is_final {
+                    packet.is_final = true;
+                    break;
+                }
+            }
+            TalkerProducerMessage::Ended => {
+                packet.is_final = true;
+                break;
+            }
+            TalkerProducerMessage::Failed(error) => return Err(error),
+        }
+    }
+    if packet.frame_count == 0 {
+        return Err(BackendError::with_status(
+            RuntimeStatus::State,
+            "talker ended without a decodable codec frame",
+        ));
+    }
+    Ok(packet)
 }
 
 fn voice_request(request: &BackendRequest) -> VoiceDesignRequest {
@@ -460,5 +681,68 @@ mod tests {
             RuntimeStatus::Model,
         );
         assert_eq!(error.status(), RuntimeStatus::Model);
+    }
+
+    #[test]
+    fn producer_packet_preserves_frame_order_and_timing() {
+        let (sender, receiver) = sync_channel(4);
+        sender
+            .send(TalkerProducerMessage::Frame(test_frame(11, 2.5, false)))
+            .unwrap();
+        sender
+            .send(TalkerProducerMessage::Frame(test_frame(22, 3.5, true)))
+            .unwrap();
+        let cancelled = AtomicBool::new(false);
+        let packet = receive_talker_packet(&receiver, &cancelled, 4).unwrap();
+        assert_eq!(packet.frame_count, 2);
+        assert_eq!(packet.frames[0], [11; CODEBOOKS]);
+        assert_eq!(packet.frames[1], [22; CODEBOOKS]);
+        assert_eq!(packet.gpu_microseconds, 6.0);
+        assert!(packet.is_final);
+    }
+
+    #[test]
+    fn producer_end_marks_a_partial_packet_final() {
+        let (sender, receiver) = sync_channel(4);
+        sender
+            .send(TalkerProducerMessage::Frame(test_frame(7, 1.0, false)))
+            .unwrap();
+        sender.send(TalkerProducerMessage::Ended).unwrap();
+        let cancelled = AtomicBool::new(false);
+        let packet = receive_talker_packet(&receiver, &cancelled, 4).unwrap();
+        assert_eq!(packet.frame_count, 1);
+        assert!(packet.is_final);
+    }
+
+    #[test]
+    fn producer_failure_preserves_the_runtime_status() {
+        let (sender, receiver) = sync_channel(1);
+        sender
+            .send(TalkerProducerMessage::Failed(BackendError::with_status(
+                RuntimeStatus::Cuda,
+                "kernel failed",
+            )))
+            .unwrap();
+        let cancelled = AtomicBool::new(false);
+        let error = receive_talker_packet(&receiver, &cancelled, 1).unwrap_err();
+        assert_eq!(error.status(), RuntimeStatus::Cuda);
+        assert_eq!(error.message(), "kernel failed");
+    }
+
+    #[test]
+    fn cancelled_producer_disconnect_is_not_reported_as_internal() {
+        let (sender, receiver) = sync_channel(1);
+        drop(sender);
+        let cancelled = AtomicBool::new(true);
+        let error = receive_talker_packet(&receiver, &cancelled, 1).unwrap_err();
+        assert_eq!(error.status(), RuntimeStatus::Cancelled);
+    }
+
+    fn test_frame(code: u16, gpu_microseconds: f32, is_final: bool) -> GeneratedTalkerFrame {
+        GeneratedTalkerFrame {
+            codes: [code; CODEBOOKS],
+            gpu_microseconds,
+            is_final,
+        }
     }
 }

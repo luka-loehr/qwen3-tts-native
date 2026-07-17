@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "operation": "runtime-host-producer-overlap-experiment",
+  "date": "2026-07-17",
+  "device": "NVIDIA GB10",
+  "cuda": "13.0.88",
+  "baseline_commit": "2a532f395725d12b21ace6bf17ecf3b125232ec4",
+  "model": {
+    "id": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+    "revision": "5ecdb67327fd37bb2e042aab12ff7391903235d3"
+  },
+  "experiment": {
+    "design": "One bounded talker producer thread per request with explicit packet credits. One next-frame credit is issued before synchronous codec decode and the remaining packet credits are issued after decode.",
+    "maximum_buffered_frames": 4,
+    "detached_threads": 0,
+    "request_drop_cancels_and_joins": true,
+    "public_abi_changed": false
+  },
+  "public_c_abi_runs": {
+    "protocol": {
+      "warmup_requests": 24,
+      "measured_requests_per_level": 200,
+      "codec_frames_per_request": 4,
+      "audio_ms_per_request": 320.0
+    },
+    "baseline_control": [
+      {"concurrency": 1, "ttfa_p95_ms": 79.630, "request_rtf_p50": 0.765, "aggregate_rtf": 0.766},
+      {"concurrency": 3, "ttfa_p95_ms": 193.635, "request_rtf_p50": 1.788, "aggregate_rtf": 0.627},
+      {"concurrency": 6, "ttfa_p95_ms": 765.562, "request_rtf_p50": 3.604, "aggregate_rtf": 0.710}
+    ],
+    "credit_candidate": [
+      {"concurrency": 1, "ttfa_p95_ms": 84.828, "request_rtf_p50": 0.752, "aggregate_rtf": 0.755},
+      {"concurrency": 3, "ttfa_p95_ms": 215.119, "request_rtf_p50": 1.795, "aggregate_rtf": 0.600},
+      {"concurrency": 6, "ttfa_p95_ms": 468.354, "request_rtf_p50": 3.437, "aggregate_rtf": 0.576}
+    ],
+    "correctness": {
+      "baseline_completed": 600,
+      "credit_candidate_completed": 600,
+      "failures": 0,
+      "all_packet_and_metric_invariants_passed": true
+    },
+    "interpretation": "The control B6 tail varied materially from the earlier qualifying baseline, so B6 delta alone is not sufficient promotion evidence. B1 throughput improved slightly, but B3 request RTF and B1/B3/B6 TTFA did not improve consistently."
+  },
+  "natural_eos_run": {
+    "text": "Guten Morgen. Dies ist ein ruhiger Test der nativen, fortlaufenden Sprachausgabe.",
+    "instruction": "A calm, relaxed adult male voice. Natural pace, low energy, clear articulation.",
+    "language": "German",
+    "seed": 23,
+    "codec_frames": 74,
+    "audio_ms": 5920.0,
+    "wav_sha256": "f771609ee44f3d9e6bdd9ec316981cc59a351991af7180e75efba69bb9d82756",
+    "baseline": {"ttfa_ms": 300.335, "wall_ms": 4699.197, "rtf": 0.793783},
+    "eager_producer": {"ttfa_ms": 493.049, "wall_ms": 4601.240, "rtf": 0.777236},
+    "credit_candidate": {"ttfa_ms": 310.792, "wall_ms": 4651.700, "rtf": 0.785760},
+    "all_wavs_byte_identical": true,
+    "note": "TTFA includes the C smoke harness's deliberate 300 ms undersized-buffer preflight pause."
+  },
+  "decision": {
+    "promote_to_main": false,
+    "reason": "The host-thread pipeline preserved exact audio and recovered most eager-producer TTFA, but the throughput improvement is too small and the concurrency TTFA tail is not consistently better.",
+    "next_design": "Expose the predictor-ready CUDA event and device frame-code buffer to the codec stream, then use cudaStreamWaitEvent so decoder work can overlap the following semantic-token computation without host-side speculative producers."
+  }
+}
