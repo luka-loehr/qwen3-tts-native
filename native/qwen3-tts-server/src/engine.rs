@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use qwen3_tts_runtime::{
-    BackendError, EngineConfig, FinishReason, GenerationConfig, NativeBackend, PollError,
+    BackendError, EngineConfig, FinishReason, GenerationConfig, Language, NativeBackend, PollError,
     PollOutcome, RequestHandle, RequestInput, RequestMetrics, RuntimeStatus, Scheduler,
     SchedulerError,
 };
@@ -157,7 +157,7 @@ pub struct NativeRuntimeEngine {
 }
 
 impl NativeRuntimeEngine {
-    /// Loads the pinned native `VoiceDesign` talker and neural codec once.
+    /// Loads and warms the pinned native `VoiceDesign` talker and neural codec once.
     ///
     /// # Errors
     ///
@@ -172,10 +172,87 @@ impl NativeRuntimeEngine {
         )
         .map_err(map_backend_error)?;
         let scheduler = Scheduler::new(config.runtime, backend).map_err(map_scheduler_error)?;
-        Ok(Self {
+        let engine = Self {
             scheduler: Mutex::new(scheduler),
             healthy: Arc::new(AtomicBool::new(true)),
-        })
+        };
+        engine.warm_up()?;
+        Ok(engine)
+    }
+
+    fn warm_up(&self) -> Result<(), EngineError> {
+        let request = self.start(EngineSynthesisRequest {
+            input: RequestInput {
+                text: "Ready.".to_owned(),
+                instruct: "A calm, neutral adult voice.".to_owned(),
+                language: Language::English,
+            },
+            generation: GenerationConfig {
+                max_codec_frames: 1,
+                seed: 0,
+                ..GenerationConfig::default()
+            },
+        })?;
+
+        let packet = match request.poll(Duration::from_secs(30))? {
+            EnginePoll::Packet(packet) => packet,
+            EnginePoll::WouldBlock => {
+                return Err(EngineError::new(
+                    EngineErrorKind::BackendUnavailable,
+                    "native startup warm-up timed out before first audio",
+                ));
+            }
+            EnginePoll::EndOfStream(_) => {
+                return Err(EngineError::new(
+                    EngineErrorKind::Internal,
+                    "native startup warm-up ended without audio",
+                ));
+            }
+        };
+        if !packet.is_final
+            || packet.codec_frames != 1
+            || packet.sample_count != qwen3_tts_runtime::SAMPLES_PER_CODEC_FRAME
+            || packet.pcm_s16le.len()
+                != qwen3_tts_runtime::SAMPLES_PER_CODEC_FRAME as usize * size_of::<i16>()
+        {
+            return Err(EngineError::new(
+                EngineErrorKind::Internal,
+                "native startup warm-up produced an invalid final audio packet",
+            ));
+        }
+
+        match request.poll(Duration::from_secs(30))? {
+            EnginePoll::EndOfStream(EngineFinishReason::Length) => {}
+            EnginePoll::EndOfStream(EngineFinishReason::Stop) => {
+                return Err(EngineError::new(
+                    EngineErrorKind::Internal,
+                    "native startup warm-up unexpectedly reached model EOS",
+                ));
+            }
+            EnginePoll::Packet(_) | EnginePoll::WouldBlock => {
+                return Err(EngineError::new(
+                    EngineErrorKind::Internal,
+                    "native startup warm-up did not reach its one-frame boundary",
+                ));
+            }
+        }
+        if !request.wait_retired(Duration::from_secs(5)) {
+            return Err(EngineError::new(
+                EngineErrorKind::BackendUnavailable,
+                "native startup warm-up did not retire within five seconds",
+            ));
+        }
+        let metrics = request.metrics();
+        if metrics.generated_codec_frames != 1
+            || metrics.emitted_packets != 1
+            || metrics.emitted_samples != u64::from(qwen3_tts_runtime::SAMPLES_PER_CODEC_FRAME)
+        {
+            return Err(EngineError::new(
+                EngineErrorKind::Internal,
+                "native startup warm-up metrics did not match delivered audio",
+            ));
+        }
+        Ok(())
     }
 }
 

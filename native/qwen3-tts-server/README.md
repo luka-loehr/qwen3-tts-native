@@ -15,6 +15,14 @@ enrolment, the Base model, or the retired 0.6B model.
 - `DELETE /v1/requests/{request_id}`
 - `POST /v1/audio/speech` as a deliberately narrow buffered-WAV compatibility alias
 
+## Startup readiness
+
+The process constructs exactly one native engine before binding the listener.
+Startup then runs one bounded, deterministic codec frame through the real
+VoiceDesign talker, code predictor, device-to-device handoff, and neural codec.
+The listener is not bound and readiness cannot become true until that warm-up
+packet, end reason, retirement, and delivery metrics have all been validated.
+
 The native endpoint defaults to progressive PCM streaming. `stream: false`
 defaults to a fully buffered WAV response. Explicitly contradictory pairs such
 as `stream: true` with `output_format: "wav"` are rejected.
