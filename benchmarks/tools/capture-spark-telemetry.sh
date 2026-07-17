@@ -113,7 +113,7 @@ page_size=$(getconf PAGESIZE)
   echo "cannot determine the host page size" >&2
   exit 70
 }
-sample_interval_seconds=$(awk -v milliseconds="$sample_interval_ms" 'BEGIN { printf "%.3f", milliseconds / 1000 }')
+sample_interval_nanoseconds=$((sample_interval_ms * 1000000))
 
 wall_time_unix_ns() {
   local value
@@ -127,6 +127,16 @@ wall_time_unix_ns() {
 
 timestamp_utc() {
   LC_ALL=C date --utc '+%Y-%m-%dT%H:%M:%S.%NZ'
+}
+
+sleep_until_next_sample() {
+  local sample_started_ns=$1
+  local now_ns remaining_ns remaining_seconds
+  now_ns=$(wall_time_unix_ns) || return $?
+  remaining_ns=$((sample_started_ns + sample_interval_nanoseconds - now_ns))
+  ((remaining_ns > 0)) || return 0
+  remaining_seconds=$(awk -v nanoseconds="$remaining_ns" 'BEGIN { printf "%.9f", nanoseconds / 1000000000 }')
+  sleep "$remaining_seconds"
 }
 
 csv_quote() {
@@ -193,7 +203,7 @@ sampler_pids=()
     else
       printf '%s,%s,NA,NA,NA,NA,NA,NA,NA,NA\n' "$sample_ns" "$sample_utc"
     fi
-    sleep "$sample_interval_seconds"
+    sleep_until_next_sample "$sample_ns"
   done
 ) >>"$output_dir/gpu.csv" &
 sampler_pids+=("$!")
@@ -216,7 +226,7 @@ sampler_pids+=("$!")
     printf '%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
       "$sample_ns" "$sample_utc" "$uptime_s" "$memory_bytes" "$memory_peak_bytes" \
       "$pids" "$cpu_usec" "$host_mem_kib" "$host_swap_kib"
-    sleep "$sample_interval_seconds"
+    sleep_until_next_sample "$sample_ns"
   done
 ) >>"$output_dir/system.csv" &
 sampler_pids+=("$!")
@@ -281,7 +291,7 @@ sampler_pids+=("$!")
     printf '%s,%s,%s,%s,%s,%s\n' \
       "$sample_ns" "$sample_utc" "$listed" "$sampled" "$rss_sum" "$sample_complete" \
       >>"$output_dir/process-rss-total.csv"
-    sleep "$sample_interval_seconds"
+    sleep_until_next_sample "$sample_ns"
   done
 ) >>"$output_dir/process-rss.csv" &
 sampler_pids+=("$!")
@@ -333,7 +343,7 @@ sampler_pids+=("$!")
     printf '%s,%s,%s,%s,%s,%s,%s\n' \
       "$sample_ns" "$sample_utc" "$query_ok" "$process_count" "$target_count" \
       "$competing_count" "$target_memory_mib"
-    sleep "$sample_interval_seconds"
+    sleep_until_next_sample "$sample_ns"
   done
 ) >>"$output_dir/gpu-process-summary.csv" &
 sampler_pids+=("$!")
