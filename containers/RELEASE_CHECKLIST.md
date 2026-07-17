@@ -3,6 +3,14 @@
 Every item applies to the exact candidate digest. A mutable tag must never be
 published as a shortcut around an incomplete gate.
 
+This checked-in file is the reusable, fail-closed execution template, not a
+mutable release ledger. Its boxes intentionally remain unchecked in Git.
+Checking them after an image build would change the source revision embedded
+in that image and invalidate the source-to-digest binding. For each published
+version, the completed machine-readable receipts, scan outputs, signature,
+checksums, and human release summary are attached to the corresponding GitHub
+release and identify the exact immutable digest.
+
 ## Source and licensing
 
 - [ ] The build uses a reviewed, clean Git commit on the release branch.
