@@ -45,6 +45,11 @@ The library distinguishes successful delivery, would-block, end-of-stream,
 invalid input, invalid UTF-8, unsupported language, model, allocation, CUDA,
 state, cancellation, and internal failures.
 
+`qwen3_tts_request_start_v1` returns `QWEN3_TTS_RUNTIME_WOULD_BLOCK` and leaves
+the output handle null when all configured request slots are occupied. After a
+cancelled request has been destroyed successfully, its slot is retired and may
+be reused immediately.
+
 ## Library layout
 
 The runtime loads these native components:

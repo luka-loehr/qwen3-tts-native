@@ -157,6 +157,7 @@ QWEN3_TTS_RUNTIME_API int32_t qwen3_tts_engine_destroy_v1(
     size_t error_capacity
 );
 
+/* Returns WOULD_BLOCK with a null output when configured capacity is full. */
 QWEN3_TTS_RUNTIME_API int32_t qwen3_tts_request_start_v1(
     Qwen3TtsEngineV1* engine,
     const Qwen3TtsRequestInputV1* input,
