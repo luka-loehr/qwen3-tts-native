@@ -1,0 +1,84 @@
+\section{Artifact, API, and Release Acceptance}
+\label{app:acceptance}
+
+This appendix summarizes the normative acceptance boundary for the software
+artifact and its public API. It introduces no additional measurement and does
+not replace the digest-bound evidence described in
+Section~\ref{sec:evaluation}.
+
+\subsection{Artifact boundary}
+
+An accepted release is built from one reviewed, clean \code{main} commit and
+identifies the deployed image by its complete immutable GHCR digest. A branch,
+local image ID, candidate tag, semantic-version tag, or \code{latest} alias is
+not a deployment identity by itself. Aliases may be published only when they
+resolve to the already accepted digest without rebuilding the image.
+
+The runtime artifact is limited to the pinned \modelname{} checkpoint
+and the decoder-only speech-tokenizer material required for inference. The
+image embeds those weights and must run without a host model mount. Voice
+cloning, reference-audio conditioning, speaker enrollment, the speech-tokenizer
+encoder, Base and CustomVoice checkpoints, and the 0.6B model remain outside
+the artifact contract.
+
+\subsection{API acceptance surface}
+
+Table~\ref{tab:appendix-api} lists the complete public endpoint surface used by
+release acceptance. The canonical synthesis endpoint accepts text and a
+natural-language VoiceDesign description. Progressive output uses
+\code{multipart/mixed} with 24~kHz mono signed 16-bit PCM; buffered output uses
+a bounded RIFF/WAVE response.
+
+\begin{table}[h]
+  \centering
+  \caption{Public endpoints covered by the release acceptance boundary.}
+  \label{tab:appendix-api}
+  \small
+  \begin{tabularx}{\textwidth}{>{\raggedright\arraybackslash}p{0.34\textwidth}X}
+    \toprule
+    Endpoint & Acceptance purpose \\
+    \midrule
+    \code{GET /health/live} & Process and HTTP-loop liveness. \\
+    \code{GET /health/ready} & Shared-engine readiness after the complete native warm-up. \\
+    \code{GET /v1/capabilities} & Effective VoiceDesign-only languages, formats, and limits. \\
+    \code{POST /v1/voice-design/speech} & Canonical progressive PCM or buffered WAV synthesis. \\
+    \code{POST /v1/audio/speech} & Narrow buffered-WAV compatibility behavior. \\
+    \code{DELETE /v1/requests/\{request-id\}} & Bounded cancellation of an admitted request. \\
+    \code{GET /metrics} & Prompt-free request and engine-health metrics. \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+API acceptance requires readiness, progressive delivery before synthesis
+completion, a valid buffered WAV response, cancellation, bounded shutdown and
+restart behavior, and payload-free operational metrics. The compatibility
+endpoint is not treated as a complete implementation of a third-party audio
+API. Public deployment additionally requires an authenticated, rate-limited
+TLS-terminating proxy because the native service does not provide those edge
+controls.
+
+\subsection{Evidence and reproducibility gates}
+
+Publication requires the complete schema-v1.2 comparison: Native and stock
+SGLang at B1, B3, and B6 in two rounds, with the shared workload and client,
+checksum-inventoried raw evidence, the declared warm-up minimum, and at least
+200 successful measured requests in every cell. Native successes require
+explicit natural end-of-sequence. Stock SGLang termination remains unknown and
+must pass the documented exclusive length-boundary gate without being relabeled
+as natural EOS. Telemetry must retain the documented cadence, measured-phase
+boundaries, and zero-competing-CUDA-process requirement.
+
+The production manifest, benchmark report, paper data, figures, and tables must
+all derive from that same validated evidence root. Release acceptance then
+binds the clean source commit, embedded model identity, immutable OCI digest,
+SBOM, provenance, vulnerability and secret scans, keyless signature, anonymous
+empty-store pull, and digest-specific GPU checks. The semantic-version and
+\code{latest} aliases are promoted only after those gates pass and must continue
+to resolve to the accepted digest.
+
+A reproducer should record the source tag and commit, immutable image digest,
+model revision, evidence-manifest SHA-256, workload SHA-256, hardware, driver,
+and CUDA versions. The manifest must be validated before regenerating the
+report or paper data. Any change to hardware, workload, comparator, sampling,
+duration, or termination semantics must be disclosed as a different experiment
+rather than presented as a reproduction of the release result.
