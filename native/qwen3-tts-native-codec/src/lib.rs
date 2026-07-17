@@ -35,10 +35,11 @@ pub mod ffi;
 pub mod model;
 
 pub use ffi::{
-    Api as NativeCodecLibrary, BatchOutput, CODEBOOKS, Codec as NativeCodec, MAX_BATCH_STREAMS,
-    MAX_PACKET_FRAMES, MAX_PACKET_SAMPLES, ModelInfo, ModelMemoryInfo, NativeCodecModel,
-    NativeCodecSession, PacketResult, SAMPLES_PER_FRAME, STATUS_MODEL, STATUS_STATE,
-    SessionMemoryInfo, StateInfo,
+    Api as NativeCodecLibrary, BatchOutput, CODEBOOKS, Codec as NativeCodec,
+    DEVICE_PACKET_ABI_VERSION, MAX_BATCH_STREAMS, MAX_PACKET_FRAMES, MAX_PACKET_SAMPLES, ModelInfo,
+    ModelMemoryInfo, NativeCodecModel, NativeCodecSession, PacketResult, PendingDevicePacket,
+    SAMPLES_PER_FRAME, STATUS_INVALID_ARGUMENT, STATUS_MODEL, STATUS_STATE, SessionMemoryInfo,
+    StateInfo,
 };
 pub use model::{
     DecoderWeightProvider, DecoderWeightTensor, SafetensorsFile as DecoderWeights,
