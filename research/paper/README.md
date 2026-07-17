@@ -14,9 +14,10 @@ document.
 
 This is a buildable scaffold. It is **not publication-ready** while
 `PENDING_EVIDENCE` appears anywhere in the source. Quantitative claims, run
-statistics, container digests, artifact hashes, and evidence-bundle identity
-must come from the accepted production manifest. They must never be copied from
-an exploratory run, rounded dashboard, or hand-edited spreadsheet.
+statistics, optional registry digests, artifact hashes, workload identity, and
+evidence-manifest identity must come from the accepted production bundle. They
+must never be copied from an exploratory run, rounded dashboard, or hand-edited
+spreadsheet.
 
 `make release-check` is designed to fail until the evidence placeholders have
 been replaced and the two run-data files exist. A successful PDF build alone
@@ -35,14 +36,16 @@ research/paper/
   figures/system_architecture.tex  Vector architecture figure
   figures/performance_summary.tex  Vector benchmark-plot template
   figures/generated/               Reserved for reviewed vector supplements
+  tools/finalize_evidence.py        Deterministic production-manifest finalizer
+  tests/                            Finalizer contract tests
   Makefile                         Build, release gate, and source archive
 ```
 
-The evidence assembler should replace
-`data/evidence_placeholders.tex` atomically and create `data/native-runs.dat`
-and `data/sglang-runs.dat` from the validated 12-run manifest. Presentation
-files under `tables/` and `figures/` must not be rewritten with hand-entered
-measurements.
+The finalizer revalidates the complete schema-v1.2 production evidence bundle
+through the report pipeline, atomically replaces
+`data/evidence_placeholders.tex`, and creates `data/native-runs.dat` and
+`data/sglang-runs.dat`. Presentation files under `tables/` and `figures/` must
+not be rewritten with hand-entered measurements.
 
 ## Build
 
@@ -56,6 +59,24 @@ make pdf
 The PDF is written to `build/main.pdf`. The command uses
 `-interaction=nonstopmode`, `-halt-on-error`, and `-file-line-error`; a warning
 must not be resolved by deleting content or suppressing evidence checks.
+
+Once the production manifest and all referenced evidence are available:
+
+```bash
+cd research/paper
+make test
+make finalize-evidence \
+  MANIFEST=/absolute/path/to/validated-evidence-root/manifest.json
+make release-check
+make pdf
+```
+
+`finalize-evidence` refuses test fixtures, incomplete or extra run cells,
+protocol mismatches, short Git commits, invalid digests, unsafe TeX identity
+tokens, and evidence that fails the complete report validator. It writes no
+measured value from a CLI option. A missing registry image or missing
+digest-bound compressed size is rendered as `N/A`; local unpacked size is
+never used as a substitute.
 
 Before publication:
 
@@ -120,12 +141,14 @@ The finalizer must perform all of the following in one reviewed change:
    must not be relabeled as natural EOS.
 4. Write unrounded source values to both `.dat` files. Rounding belongs only to
    the TeX presentation layer.
-5. Populate the exact Git commit, local image IDs, OCI digests, model-artifact
-   hashes, evidence-manifest SHA-256, and public artifact URI.
+5. Populate both exact Git commits, local image IDs, optional OCI digests,
+   model-artifact evidence hashes, workload SHA-256, model revision, and
+   evidence-manifest SHA-256.
 6. Change `\FinalEvidenceAvailablefalse` to
    `\FinalEvidenceAvailabletrue` only after all preceding steps succeed.
-7. Replace the pending abstract/results/conclusion text with claims derived
-   from the same manifest, then review every claim against raw evidence.
+7. Generate the abstract, results, and conclusion summaries from fixed English
+   templates and the same validated bundle; no translation, paraphrasing, or
+   language-model step is permitted.
 8. Build, render every PDF page to an image, inspect every page, and run the
    clean archive rebuild before publication.
 

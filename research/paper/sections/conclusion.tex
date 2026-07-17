@@ -9,7 +9,10 @@ progressive PCM delivery in one process and one production image.
 The accompanying evaluation design makes implementation comparisons auditable:
 one external client, one ordered workload, two rounds, three concurrency
 levels, explicit termination semantics, measured-phase telemetry, and
-digest-bound raw evidence. Final performance, memory, energy, reliability, and
-container-footprint conclusions will be stated only after the production
-manifest validates and the evidence placeholders in this source have been
-replaced.
+digest-bound raw evidence.
+
+\ifFinalEvidenceAvailable
+  \VerifiedConclusionResult
+\else
+  \VerifiedConclusionResult
+\fi

@@ -1,11 +1,13 @@
 \begin{table}[t]
   \centering
-  \caption{Container-level footprint. Registry compressed size is reported only when digest-bound registry evidence exists.}
+  \caption{Container and model footprint. Registry compressed size is
+  reported only when digest-bound registry evidence exists; otherwise it is
+  shown as N/A. Local unpacked size is never substituted for registry size.}
   \label{tab:container-results}
   \small
   \begin{tabular}{lcccc}
     \toprule
-    Engine & Unpacked size (GiB) & Compressed size (GiB) & Startup to ready (s) & Server processes \\
+    Engine & Local unpacked (GiB) & Registry compressed (GiB) & Model parameters & Model weights (GiB) \\
     \midrule
     \ContainerResultRows
     \bottomrule
