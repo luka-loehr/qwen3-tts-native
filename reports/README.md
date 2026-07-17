@@ -53,6 +53,12 @@ normalized-sampling SHA-256 values rather than trusting the summaries. It also
 rejects an implementation whose repository, model revision, precision, or
 model-manifest digest differs from the shared model declaration.
 
+Every production workload entry must set `stream=true` and
+`max_duration_seconds=20.48` exactly. At 24 kHz with 1,920 samples per codec
+frame, 20.48 seconds is the shared 256-frame request ceiling. Missing values,
+nearby floating-point values, and per-entry duration differences are rejected;
+the production report never compares an uncapped request with a capped one.
+
 Production evidence must include the B1, B3, and B6 profiles at concurrency 1,
 3, and 6. It must contain at least two contiguous rounds per engine and profile,
 at least 24 warmups per run, and at least 200 successful measured requests in
@@ -110,6 +116,27 @@ Native request must declare `finish_reason="stop"`, `natural_eos=true`, and
 every successful SGLang request must retain `natural_eos=null`,
 `length_limited=null`, and `finish_reason=null`. The generator never imputes
 natural EOS from transport completion.
+
+Stock SGLang has an additional conservative boundary gate. For every successful
+response, the validator sums the already validated raw-PCM packet payload bytes,
+divides that byte count by two for signed 16-bit mono samples, and requires the
+result to match both the request `samples` field and `audio_seconds * 24,000`.
+It deliberately does not use `response_bytes`, which includes HTTP headers and
+chunked-transfer framing rather than audio alone.
+The result must be strictly below 489,600 samples and the recorded duration must
+be strictly below 20.40 seconds. This is strictly shorter than 255 codec frames;
+a frame-aligned response can therefore contain at most 254 frames.
+
+The exclusive 255-frame boundary is one 80 ms frame below the nominal 256-frame
+request ceiling. With `max_new_tokens=256`, the stock adapter's
+token-to-decodable-frame accounting can be off by one: a 255-frame waveform can
+be the observable result of reaching the 256-token generation limit. The
+255-frame result is therefore rejected rather than misclassified as natural
+completion. Because the boundary is exclusive, the largest frame-aligned value
+that passes is 254 frames, or 20.32 seconds, two frames below the nominal
+20.48-second ceiling. Passing this shorter-audio gate only excludes the known
+length-boundary case; it does not prove natural EOS, so all accepted stock
+SGLang EOS fields remain unknown.
 
 ## Generate a production report
 

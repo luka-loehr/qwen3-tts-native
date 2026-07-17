@@ -65,6 +65,14 @@ FORBIDDEN_DASHES = str.maketrans(
     }
 )
 TEST_FIXTURE_BANNER = "TEST FIXTURE - NOT BENCHMARK EVIDENCE"
+PRODUCTION_SAMPLE_RATE_HZ = 24_000
+PRODUCTION_MAX_DURATION_SECONDS = 20.48
+SGLANG_BOUNDARY_CODEC_FRAMES = 255
+SAMPLES_PER_CODEC_FRAME = 1_920
+SGLANG_EXCLUSIVE_SAMPLE_LIMIT = SGLANG_BOUNDARY_CODEC_FRAMES * SAMPLES_PER_CODEC_FRAME
+SGLANG_EXCLUSIVE_DURATION_LIMIT_SECONDS = (
+    SGLANG_EXCLUSIVE_SAMPLE_LIMIT / PRODUCTION_SAMPLE_RATE_HZ
+)
 
 
 class EvidenceError(ValueError):
@@ -1292,6 +1300,73 @@ def _validate_client_workload(records: Any) -> tuple[dict[str, Any], ...]:
     return tuple(validated)
 
 
+def _validate_production_workload_durations(
+    records: tuple[dict[str, Any], ...],
+    workload_path: str,
+) -> None:
+    for index, item in enumerate(records):
+        path = f"{workload_path}:{index + 1}.max_duration_seconds"
+        duration = item.get("max_duration_seconds")
+        if duration is None:
+            _fail(
+                path,
+                f"production comparison requires exactly {PRODUCTION_MAX_DURATION_SECONDS} seconds",
+            )
+        if _number(duration, path) != PRODUCTION_MAX_DURATION_SECONDS:
+            _fail(
+                path,
+                f"production comparison requires exactly {PRODUCTION_MAX_DURATION_SECONDS} seconds",
+            )
+
+
+def _validate_production_sglang_audio_limit(
+    request: dict[str, Any],
+    packets: Sequence[dict[str, Any]],
+    sample_rate_hz: int,
+    path: str,
+) -> None:
+    if sample_rate_hz != PRODUCTION_SAMPLE_RATE_HZ:
+        _fail(
+            "workload.sample_rate_hz",
+            f"production comparison requires exactly {PRODUCTION_SAMPLE_RATE_HZ} Hz",
+        )
+
+    audio_bytes = sum(packet["payload_bytes"] for packet in packets)
+    if audio_bytes % 2 != 0:
+        _fail(path, "SGLang PCM16 audio payload has an odd byte count")
+    samples_from_audio_bytes = audio_bytes // 2
+    if samples_from_audio_bytes != request["samples"]:
+        _fail(
+            path,
+            "SGLang audio payload bytes do not match the validated request sample count",
+        )
+
+    samples_from_duration = request["audio_seconds"] * sample_rate_hz
+    if not math.isclose(
+        samples_from_duration,
+        float(samples_from_audio_bytes),
+        rel_tol=1e-9,
+        abs_tol=1e-6,
+    ):
+        _fail(
+            path,
+            "SGLang request audio duration does not match the decoded PCM sample count",
+        )
+
+    if (
+        samples_from_audio_bytes >= SGLANG_EXCLUSIVE_SAMPLE_LIMIT
+        or request["audio_seconds"] >= SGLANG_EXCLUSIVE_DURATION_LIMIT_SECONDS
+    ):
+        _fail(
+            path,
+            "successful stock SGLang audio must be strictly shorter than "
+            f"{SGLANG_BOUNDARY_CODEC_FRAMES} codec frames "
+            f"({SGLANG_EXCLUSIVE_SAMPLE_LIMIT} samples / "
+            f"{SGLANG_EXCLUSIVE_DURATION_LIMIT_SECONDS:.2f} seconds at "
+            f"{PRODUCTION_SAMPLE_RATE_HZ} Hz) to exclude the max_new_tokens boundary",
+        )
+
+
 def _normalized_sampling_from_workload(item: dict[str, Any]) -> dict[str, Any]:
     sampling = item.get("sampling")
     talker = None
@@ -2042,16 +2117,12 @@ def _validate_client_runs(
     if manifest["evidence_kind"] == "production":
         if manifest["workload"]["response_mode"] != "streaming":
             _fail("workload.response_mode", "production comparison requires streaming")
+        _validate_production_workload_durations(workload_records, workload_path)
         for index, item in enumerate(workload_records):
             if item.get("stream", True) is not True:
                 _fail(
                     f"{workload_path}:{index + 1}.stream",
                     "production comparison requires streaming",
-                )
-            if item.get("max_duration_seconds") is not None:
-                _fail(
-                    f"{workload_path}:{index + 1}.max_duration_seconds",
-                    "portable production comparison forbids a Native-only duration limit",
                 )
     lookup = _client_descriptor_map(descriptors)
     run_keys = {key[:3] for key in lookup}
@@ -2139,6 +2210,14 @@ def _validate_client_runs(
                 )
             if summary["sglang_model"] != manifest["model"]["repository"]:
                 _fail(f"{summary_path}.sglang_model", "must equal model.repository")
+            if manifest["evidence_kind"] == "production":
+                for item in successes:
+                    _validate_production_sglang_audio_limit(
+                        item,
+                        packet_groups[item["request_index"]],
+                        manifest["workload"]["sample_rate_hz"],
+                        f"{request_path}:{item['request_index'] + 1}",
+                    )
         resource = resources[(engine, profile_id, round_number)]
         per_row_energy = resource["energy_j"] / len(requests)
         for item in requests:
@@ -3476,6 +3555,16 @@ def _build_story(bundle: Bundle, doc_width: float) -> list[Any]:
             _paragraph(
                 "EOS policy is asymmetric by design: the Native protocol exposes a finish reason; "
                 "stock SGLang raw PCM does not. Unknown is preserved rather than imputed.",
+                styles["body"],
+            ),
+            _paragraph(
+                "Boundary policy: every production workload entry uses an exact 20.48-second "
+                "ceiling. Successful stock SGLang audio must remain strictly below 489,600 "
+                "PCM samples and 20.40 seconds at 24 kHz. The exclusive 255-frame boundary "
+                "rejects the off-by-one case in which max_new_tokens=256 can yield 255 "
+                "decodable frames; a frame-aligned accepted response therefore contains at "
+                "most 254 frames (20.32 seconds). This excludes the known length boundary but "
+                "does not establish natural EOS, which remains unknown.",
                 styles["body"],
             ),
             _table(
