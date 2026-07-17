@@ -58,8 +58,7 @@ mkdir -p "$PUBLISH_DIR" "$MIRROR_ROOT/native"
 # identities immutable; every generator below runs offline afterwards.
 cargo fetch \
     --locked \
-    --manifest-path "$MANIFEST" \
-    --target "$RELEASE_TARGET"
+    --manifest-path "$MANIFEST"
 
 [ "$(sha256_file "$LOCKFILE")" = "$LOCK_HASH_BEFORE" ] || \
     die 'cargo fetch changed the release lockfile'
