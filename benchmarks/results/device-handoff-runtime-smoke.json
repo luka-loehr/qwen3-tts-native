@@ -1,0 +1,1 @@
+{"status":"pass","model_load_ms":9037.671,"ttfa_ms":300.571,"wall_ms":5042.615,"audio_ms":5920.000,"rtf":0.851793,"packets":20,"codec_frames":74,"samples":142080,"nonzero_samples":137077,"pcm_min":-9847,"pcm_max":20319,"metric_first_audio_us":300567,"peak_request_device_bytes":89937044,"peak_request_host_bytes":46080}

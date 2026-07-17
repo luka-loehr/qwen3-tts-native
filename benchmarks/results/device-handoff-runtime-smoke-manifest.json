@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "operation": "public-runtime-device-handoff-smoke",
+  "qualifying_run": true,
+  "git_commit": "583ee86",
+  "platform": {
+    "machine": "DGX Spark",
+    "architecture": "linux/arm64",
+    "cuda": "13",
+    "compute_capability": "12.1"
+  },
+  "model": {
+    "id": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+    "revision": "5ecdb67327fd37bb2e042aab12ff7391903235d3",
+    "language": "German",
+    "seed": 23,
+    "max_codec_frames": 256,
+    "text": "Guten Morgen. Dies ist ein ruhiger Test der nativen, fortlaufenden Sprachausgabe.",
+    "voice_description": "A calm, relaxed adult male voice. Natural pace, low energy, clear articulation."
+  },
+  "binaries": {
+    "libqwen3_tts_runtime.so": "59ab9a450d17bcc8161931b8c96207d936e563cadd3079dfd6d34a1e71a512a1",
+    "libqwen3_tts_cuda.so": "c91d6306402d00520a5f5688a8e0bfce1779011fc205a0ba1a5399304f6b9d84",
+    "libqwen3_tts_codec_cuda.so": "2262aea07134842b73cf7df66f5f321736341183b05f4a573bca3a8808670594",
+    "c_abi_smoke": "2d3403e867ce636d41546803336cd8e197c24d93359a6108fc552c6c28aef381"
+  },
+  "device_handoff": {
+    "talker_abi": 2,
+    "codec_abi": 2,
+    "host_codec_code_copies": 0,
+    "packet_stager_device_bytes": 128,
+    "first_packet_frames": 1,
+    "followup_packet_frames": 4
+  },
+  "audio": {
+    "sample_rate": 24000,
+    "channels": 1,
+    "format": "pcm_s16le",
+    "codec_frames": 74,
+    "samples": 142080,
+    "milliseconds": 5920,
+    "wav_sha256": "f771609ee44f3d9e6bdd9ec316981cc59a351991af7180e75efba69bb9d82756",
+    "baseline_wav_sha256": "f771609ee44f3d9e6bdd9ec316981cc59a351991af7180e75efba69bb9d82756",
+    "byte_identical_to_v1_baseline": true,
+    "repeat_byte_identical": true
+  },
+  "runs": [
+    {
+      "rtf": 0.789830,
+      "wall_ms": 4675.794,
+      "model_load_ms": 9096.637
+    },
+    {
+      "rtf": 0.851793,
+      "wall_ms": 5042.615,
+      "model_load_ms": 9037.671
+    }
+  ],
+  "ttfa_measurement_note": "The C ABI contract intentionally sleeps for 300 ms before its first poll to test backpressure. Its reported 300 ms TTFA is therefore not a model-latency measurement. Dedicated latency qualification must poll immediately."
+}
