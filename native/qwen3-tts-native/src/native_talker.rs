@@ -1,7 +1,9 @@
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::fmt;
+use std::marker::PhantomData;
 use std::path::Path;
 use std::ptr;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -86,6 +88,32 @@ struct NativeFrameInfo {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, Debug)]
+struct NativeDeviceFrameViewV2 {
+    struct_size: u32,
+    code_count: u32,
+    device_codes: *const u16,
+    ready_event: *mut c_void,
+    lease_id: u64,
+    device_index: c_int,
+    reserved: u32,
+}
+
+impl Default for NativeDeviceFrameViewV2 {
+    fn default() -> Self {
+        Self {
+            struct_size: std::mem::size_of::<Self>() as u32,
+            code_count: 0,
+            device_codes: ptr::null(),
+            ready_event: ptr::null_mut(),
+            lease_id: 0,
+            device_index: -1,
+            reserved: 0,
+        }
+    }
+}
+
+#[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 struct NativeModelMemory {
     shared_weight_bytes: u64,
@@ -165,6 +193,31 @@ type SessionNextFrame = unsafe extern "C" fn(
 ) -> c_int;
 type SessionStateInfo =
     unsafe extern "C" fn(SessionHandle, *mut NativeStateInfo, *mut c_char, usize) -> c_int;
+type TalkerAbiVersion = unsafe extern "C" fn() -> u32;
+type SessionNextFrameBeginV2 = unsafe extern "C" fn(
+    SessionHandle,
+    c_int,
+    NativeSamplingConfig,
+    NativeSamplingConfig,
+    *mut NativeDeviceFrameViewV2,
+    *mut c_char,
+    usize,
+) -> c_int;
+type SessionNextFrameFinishV2 = unsafe extern "C" fn(
+    SessionHandle,
+    u64,
+    *mut c_void,
+    *mut u16,
+    *mut NativeFrameInfo,
+    *mut c_char,
+    usize,
+) -> c_int;
+
+#[derive(Clone, Copy)]
+struct DeviceFrameApiV2 {
+    begin: SessionNextFrameBeginV2,
+    finish: SessionNextFrameFinishV2,
+}
 
 #[derive(Clone, Copy, Debug, Serialize)]
 pub struct SamplingConfig {
@@ -299,6 +352,98 @@ pub struct StreamingCodecFrame {
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
+pub struct FinishedDeviceFrame {
+    pub frame_index: usize,
+    pub next_semantic_token: u16,
+    pub talker_position: u32,
+    pub predictor_gpu_milliseconds: f32,
+    pub talker_gpu_milliseconds: f32,
+    pub ended_by_eos: bool,
+}
+
+/// One in-flight Talker frame whose codec codes remain owned by the native
+/// session. The frame must be finished before the session can be used again.
+#[must_use = "an in-flight device frame must be handed to the codec and finished"]
+pub struct PendingTalkerFrame<'a> {
+    session: &'a mut NativeTalkerSession,
+    view: NativeDeviceFrameViewV2,
+    finished: bool,
+    not_send_or_sync: PhantomData<Rc<()>>,
+}
+
+impl PendingTalkerFrame<'_> {
+    pub fn code_count(&self) -> usize {
+        self.view.code_count as usize
+    }
+
+    pub fn device_index(&self) -> i32 {
+        self.view.device_index
+    }
+
+    pub fn lease_id(&self) -> u64 {
+        self.view.lease_id
+    }
+
+    /// Returns borrowed CUDA values for a consumer that guarantees the
+    /// producer-ready wait and records a completion event after its final read.
+    ///
+    /// # Safety
+    ///
+    /// The caller must not dereference, free, overwrite, record, or destroy
+    /// either value. Both values are valid only while this pending frame lives.
+    pub unsafe fn raw_device_parts(&self) -> (*const u16, *mut c_void) {
+        (self.view.device_codes, self.view.ready_event)
+    }
+
+    pub fn finish_without_consumer(mut self) -> Result<FinishedDeviceFrame> {
+        self.complete(ptr::null_mut())
+    }
+
+    /// Completes the frame after a CUDA consumer has recorded its final read.
+    ///
+    /// # Safety
+    ///
+    /// `consumer_done_event` must be a valid, already-recorded CUDA event on
+    /// `device_index()`, and its producer stream must encompass every access to
+    /// the borrowed frame-code pointer.
+    pub unsafe fn finish_with_consumer_event(
+        mut self,
+        consumer_done_event: *mut c_void,
+    ) -> Result<FinishedDeviceFrame> {
+        ensure!(
+            !consumer_done_event.is_null(),
+            "consumer completion event must not be null"
+        );
+        self.complete(consumer_done_event)
+    }
+
+    fn complete(&mut self, consumer_done_event: *mut c_void) -> Result<FinishedDeviceFrame> {
+        let (next_semantic_token, native) = self
+            .session
+            .finish_device_native_raw(self.view.lease_id, consumer_done_event)?;
+        self.finished = true;
+        let output = self
+            .session
+            .commit_finished_device_frame(next_semantic_token, native)?;
+        Ok(output)
+    }
+}
+
+impl Drop for PendingTalkerFrame<'_> {
+    fn drop(&mut self) {
+        if self.finished {
+            return;
+        }
+        let _ = self
+            .session
+            .finish_device_native_raw(self.view.lease_id, ptr::null_mut());
+        self.session.recyclable = false;
+        self.session.end_reason = Some(SessionEndReason::Cancelled);
+        self.finished = true;
+    }
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
 pub struct SessionPrefillInfo {
     pub first_semantic_token: u16,
     pub prompt_tokens: u32,
@@ -379,6 +524,9 @@ pub struct GenerationOutput {
 pub struct NativeTalkerModel {
     library: Library,
     handle: ModelHandle,
+    talker_abi_version: u32,
+    session_next_frame: SessionNextFrame,
+    device_frame_api: Option<DeviceFrameApiV2>,
     config: ModelConfig,
     tokenizer: Qwen2Tokenizer,
     memory: SharedModelMemory,
@@ -443,6 +591,37 @@ impl NativeTalkerModel {
         let library = unsafe { Library::new(library_path) }
             .with_context(|| format!("failed to load {}", library_path.display()))?;
 
+        let talker_abi_version = {
+            let version: Symbol<'_, TalkerAbiVersion> =
+                unsafe { library.get(b"qwen3_tts_talker_abi_version\0") }
+                    .context("missing qwen3_tts_talker_abi_version symbol")?;
+            unsafe { version() }
+        };
+        ensure!(
+            talker_abi_version >= 1,
+            "unsupported talker ABI version {talker_abi_version}"
+        );
+        let session_next_frame = {
+            let next: Symbol<'_, SessionNextFrame> =
+                unsafe { library.get(b"qwen3_tts_session_next_frame\0") }
+                    .context("missing qwen3_tts_session_next_frame symbol")?;
+            *next
+        };
+        let device_frame_api = if talker_abi_version >= 2 {
+            let begin: Symbol<'_, SessionNextFrameBeginV2> =
+                unsafe { library.get(b"qwen3_tts_session_next_frame_begin_v2\0") }
+                    .context("talker ABI v2 is missing qwen3_tts_session_next_frame_begin_v2")?;
+            let finish: Symbol<'_, SessionNextFrameFinishV2> =
+                unsafe { library.get(b"qwen3_tts_session_next_frame_finish_v2\0") }
+                    .context("talker ABI v2 is missing qwen3_tts_session_next_frame_finish_v2")?;
+            Some(DeviceFrameApiV2 {
+                begin: *begin,
+                finish: *finish,
+            })
+        } else {
+            None
+        };
+
         let mut error = [0 as c_char; ERROR_CAPACITY];
         let mut handle = ptr::null_mut();
         let create: Symbol<'_, ModelCreate> = unsafe { library.get(b"qwen3_tts_model_create\0") }
@@ -452,6 +631,9 @@ impl NativeTalkerModel {
         let mut model = Self {
             library,
             handle,
+            talker_abi_version,
+            session_next_frame,
+            device_frame_api,
             config,
             tokenizer,
             memory: SharedModelMemory {
@@ -468,6 +650,14 @@ impl NativeTalkerModel {
 
     pub fn shared_memory(&self) -> SharedModelMemory {
         self.memory
+    }
+
+    pub fn talker_abi_version(&self) -> u32 {
+        self.talker_abi_version
+    }
+
+    pub fn supports_device_frames(&self) -> bool {
+        self.device_frame_api.is_some()
     }
 
     pub fn generate(self: &Arc<Self>, request: VoiceDesignRequest) -> Result<GenerationOutput> {
@@ -932,6 +1122,147 @@ impl NativeTalkerSession {
         }))
     }
 
+    pub fn supports_device_frames(&self) -> bool {
+        self.model.supports_device_frames()
+    }
+
+    pub fn begin_device_frame(&mut self) -> Result<Option<PendingTalkerFrame<'_>>> {
+        if self.end_reason.is_some() {
+            return Ok(None);
+        }
+        if self.frames_emitted >= self.max_frames {
+            self.end_reason = Some(SessionEndReason::MaxFrames);
+            return Ok(None);
+        }
+        if self.current_semantic == self.codec_eos_token {
+            self.end_reason = Some(SessionEndReason::CodecEos);
+            return Ok(None);
+        }
+
+        let api = self
+            .model
+            .device_frame_api
+            .context("native talker does not support device-frame leases")?;
+        let text = self
+            .trailing_text
+            .get(self.frames_emitted)
+            .copied()
+            .unwrap_or(TextSource::TtsPad);
+        let text_id = self.model.text_source_id(text)?;
+        let mut view = NativeDeviceFrameViewV2::default();
+        let mut error = [0 as c_char; ERROR_CAPACITY];
+        let status = unsafe {
+            (api.begin)(
+                self.handle,
+                text_id,
+                self.talker_sampling,
+                self.predictor_sampling,
+                &mut view,
+                error.as_mut_ptr(),
+                error.len(),
+            )
+        };
+        if let Err(error) = ensure_native_success(status, &error) {
+            self.recyclable = false;
+            return Err(error).context("failed to begin a native device frame");
+        }
+        let validation = (|| -> Result<()> {
+            ensure!(
+                view.struct_size as usize == std::mem::size_of::<NativeDeviceFrameViewV2>(),
+                "native device-frame view has an invalid size"
+            );
+            ensure!(
+                view.code_count as usize == CODEBOOKS,
+                "native device-frame view has an invalid code count"
+            );
+            ensure!(
+                !view.device_codes.is_null() && !view.ready_event.is_null(),
+                "native device-frame view returned a null CUDA value"
+            );
+            ensure!(
+                view.lease_id != 0,
+                "native device-frame view returned lease zero"
+            );
+            ensure!(
+                view.device_index == self.model.memory.device_index,
+                "native device-frame view returned the wrong CUDA device"
+            );
+            ensure!(
+                view.reserved == 0,
+                "native device-frame view returned a nonzero reserved field"
+            );
+            Ok(())
+        })();
+        if let Err(error) = validation {
+            self.recyclable = false;
+            return Err(error);
+        }
+        Ok(Some(PendingTalkerFrame {
+            session: self,
+            view,
+            finished: false,
+            not_send_or_sync: PhantomData,
+        }))
+    }
+
+    fn finish_device_native_raw(
+        &mut self,
+        lease_id: u64,
+        consumer_done_event: *mut c_void,
+    ) -> Result<(u16, NativeFrameInfo)> {
+        let api = self
+            .model
+            .device_frame_api
+            .context("native talker does not support device-frame leases")?;
+        let mut next_semantic_token = 0_u16;
+        let mut frame_info = NativeFrameInfo::default();
+        let mut error = [0 as c_char; ERROR_CAPACITY];
+        let status = unsafe {
+            (api.finish)(
+                self.handle,
+                lease_id,
+                consumer_done_event,
+                &mut next_semantic_token,
+                &mut frame_info,
+                error.as_mut_ptr(),
+                error.len(),
+            )
+        };
+        if let Err(error) = ensure_native_success(status, &error) {
+            self.recyclable = false;
+            return Err(error).context("failed to finish a native device frame");
+        }
+        Ok((next_semantic_token, frame_info))
+    }
+
+    fn commit_finished_device_frame(
+        &mut self,
+        next_semantic_token: u16,
+        native: NativeFrameInfo,
+    ) -> Result<FinishedDeviceFrame> {
+        let ended_by_eos = next_semantic_token == self.codec_eos_token;
+        if ended_by_eos != (native.ended_by_eos != 0) {
+            self.recyclable = false;
+            bail!("native EOS flag disagrees with the semantic token");
+        }
+        let frame_index = self.frames_emitted;
+        self.frames_emitted += 1;
+        self.current_semantic = next_semantic_token;
+        if ended_by_eos {
+            self.end_reason = Some(SessionEndReason::CodecEos);
+        } else if self.frames_emitted >= self.max_frames {
+            self.end_reason = Some(SessionEndReason::MaxFrames);
+        }
+        Ok(FinishedDeviceFrame {
+            frame_index,
+            next_semantic_token,
+            talker_position: native.talker_position,
+            predictor_gpu_milliseconds: native.predictor_gpu_milliseconds,
+            talker_gpu_milliseconds: native.talker_gpu_milliseconds,
+            ended_by_eos,
+        })
+    }
+
     fn prefill_native(
         &mut self,
         text_ids: &[i32],
@@ -966,15 +1297,12 @@ impl NativeTalkerSession {
         talker_sampling: NativeSamplingConfig,
         predictor_sampling: NativeSamplingConfig,
     ) -> Result<([u16; CODEBOOKS], u16, NativeFrameInfo)> {
-        let next: Symbol<'_, SessionNextFrame> =
-            unsafe { self.model.library.get(b"qwen3_tts_session_next_frame\0") }
-                .context("missing qwen3_tts_session_next_frame symbol")?;
         let mut codes = [0_u16; CODEBOOKS];
         let mut next_semantic_token = 0_u16;
         let mut frame_info = NativeFrameInfo::default();
         let mut error = [0 as c_char; ERROR_CAPACITY];
         let status = unsafe {
-            next(
+            (self.model.session_next_frame)(
                 self.handle,
                 semantic_token,
                 text_token,
@@ -1081,6 +1409,8 @@ mod tests {
         assert_eq!(std::mem::size_of::<NativeModelMemory>(), 16);
         assert_eq!(std::mem::size_of::<NativeSessionMemory>(), 32);
         assert_eq!(std::mem::size_of::<NativeStateInfo>(), 40);
+        assert_eq!(std::mem::size_of::<NativeDeviceFrameViewV2>(), 40);
+        assert_eq!(std::mem::align_of::<NativeDeviceFrameViewV2>(), 8);
     }
 
     #[test]
