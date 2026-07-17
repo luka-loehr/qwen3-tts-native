@@ -237,7 +237,7 @@ sampler_pids+=("$!")
       fi
       status_path="/proc/$process_id/status"
       stat_path="/proc/$process_id/stat"
-      if ! IFS= read -r stat_line_before <"$stat_path" 2>/dev/null; then
+      if ! IFS= read -r stat_line_before 2>/dev/null <"$stat_path"; then
         if [[ -d "/proc/$process_id" ]]; then
           read_failures=$((read_failures + 1))
         else
@@ -248,7 +248,7 @@ sampler_pids+=("$!")
       if ! process_name=$(awk '$1 == "Name:" { sub(/^[^:]+:[[:space:]]*/, ""); print; exit }' \
         "$status_path" 2>/dev/null) ||
         ! rss_kib=$(awk '$1 == "VmRSS:" { print $2; exit }' "$status_path" 2>/dev/null) ||
-        ! IFS= read -r stat_line_after <"$stat_path" 2>/dev/null; then
+        ! IFS= read -r stat_line_after 2>/dev/null <"$stat_path"; then
         if [[ -d "/proc/$process_id" ]]; then
           read_failures=$((read_failures + 1))
         else
