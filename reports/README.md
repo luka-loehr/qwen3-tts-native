@@ -4,9 +4,11 @@ This directory contains the deterministic, fail-closed report pipeline for the
 Qwen3 TTS Native versus SGLang benchmark. It is reporting tooling only. Python
 and ReportLab are not part of the production inference runtime or container.
 
-The pipeline deliberately does not ship a benchmark PDF. A final PDF is only
-valid after real evidence has been collected, validated, rendered, and visually
-inspected page by page.
+The pipeline does not treat an arbitrary render as a benchmark result. The
+repository may ship one release-committed PDF under `reports/output/` only
+after real evidence has been collected, validated, rendered, and visually
+inspected page by page. Draft, fixture, partial, and failed-run PDFs remain
+excluded.
 
 ## Directory layout
 
@@ -160,11 +162,11 @@ SGLang EOS fields remain unknown.
 
 ## Generate a production report
 
-Use the Codex bundled PDF runtime when available:
+Use Python 3 with the dependencies pinned in
+[`requirements-report.txt`](requirements-report.txt):
 
 ```bash
-/Users/luka/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3.12 \
-  reports/generate_report.py /absolute/path/to/evidence/manifest.json
+python3 reports/generate_report.py /absolute/path/to/evidence/manifest.json
 ```
 
 The default output is
