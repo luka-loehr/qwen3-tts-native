@@ -104,6 +104,7 @@ def create_client_bundle(base: Path) -> Path:
             "voice_description": "A calm adult voice.",
             "language": "English",
             "seed": 42,
+            "max_duration_seconds": 20.48,
             "sampling": {
                 "strategy": "sample",
                 "temperature": 0.8,
@@ -125,6 +126,7 @@ def create_client_bundle(base: Path) -> Path:
             "voice_description": "Eine ruhige erwachsene Stimme.",
             "language": "German",
             "seed": 43,
+            "max_duration_seconds": 20.48,
             "sampling": {
                 "strategy": "sample",
                 "temperature": 0.8,
@@ -347,6 +349,97 @@ def create_client_bundle(base: Path) -> Path:
 
 
 class ReportPipelineTests(unittest.TestCase):
+    def test_production_workload_accepts_exact_duration_contract(self) -> None:
+        records = generate_report._validate_client_workload(
+            [
+                {
+                    "id": "duration-contract",
+                    "text": "A duration contract fixture.",
+                    "voice_description": "A calm adult voice.",
+                    "max_duration_seconds": 20.48,
+                }
+            ]
+        )
+        generate_report._validate_production_workload_durations(
+            records, "workload.jsonl"
+        )
+
+    def test_production_workload_rejects_missing_or_different_duration(self) -> None:
+        for duration in (None, 20.4, 20.480_001):
+            record = {
+                "id": "duration-contract",
+                "text": "A duration contract fixture.",
+                "voice_description": "A calm adult voice.",
+            }
+            if duration is not None:
+                record["max_duration_seconds"] = duration
+            records = generate_report._validate_client_workload([record])
+            with (
+                self.subTest(duration=duration),
+                self.assertRaisesRegex(
+                    generate_report.EvidenceError,
+                    r"max_duration_seconds.*requires exactly 20\.48 seconds",
+                ),
+            ):
+                generate_report._validate_production_workload_durations(
+                    records, "workload.jsonl"
+                )
+
+    def test_production_sglang_accepts_audio_strictly_below_boundary(self) -> None:
+        samples = generate_report.SGLANG_EXCLUSIVE_SAMPLE_LIMIT - 1
+        generate_report._validate_production_sglang_audio_limit(
+            {
+                "samples": samples,
+                "audio_seconds": samples / generate_report.PRODUCTION_SAMPLE_RATE_HZ,
+            },
+            [{"payload_bytes": samples * 2}],
+            generate_report.PRODUCTION_SAMPLE_RATE_HZ,
+            "requests.jsonl:1",
+        )
+
+    def test_production_sglang_rejects_255_frame_boundary(self) -> None:
+        samples = generate_report.SGLANG_EXCLUSIVE_SAMPLE_LIMIT
+        with self.assertRaisesRegex(
+            generate_report.EvidenceError,
+            r"strictly shorter than 255 codec frames.*489600 samples.*20\.40 seconds",
+        ):
+            generate_report._validate_production_sglang_audio_limit(
+                {
+                    "samples": samples,
+                    "audio_seconds": samples
+                    / generate_report.PRODUCTION_SAMPLE_RATE_HZ,
+                },
+                [{"payload_bytes": samples * 2}],
+                generate_report.PRODUCTION_SAMPLE_RATE_HZ,
+                "requests.jsonl:1",
+            )
+
+    def test_production_sglang_rejects_inconsistent_audio_bytes(self) -> None:
+        samples = 24_000
+        with self.assertRaisesRegex(
+            generate_report.EvidenceError,
+            "audio payload bytes do not match the validated request sample count",
+        ):
+            generate_report._validate_production_sglang_audio_limit(
+                {"samples": samples, "audio_seconds": 1.0},
+                [{"payload_bytes": (samples - 1) * 2}],
+                generate_report.PRODUCTION_SAMPLE_RATE_HZ,
+                "requests.jsonl:1",
+            )
+
+    def test_production_sglang_rejects_inconsistent_audio_duration(self) -> None:
+        samples = 24_000
+        with self.assertRaisesRegex(
+            generate_report.EvidenceError,
+            "audio duration does not match the decoded PCM sample count",
+        ):
+            generate_report._validate_production_sglang_audio_limit(
+                {"samples": samples, "audio_seconds": 0.999},
+                [{"payload_bytes": samples * 2}],
+                generate_report.PRODUCTION_SAMPLE_RATE_HZ,
+                "requests.jsonl:1",
+            )
+
     def test_direct_client_bundle_validates_and_uses_scenario_rtf(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             manifest_path = create_client_bundle(Path(temporary))
