@@ -19,7 +19,7 @@ create_fixture() {
   local directory=$1
   local competing=$2
   local mode=$3
-  local nanoseconds power process_count sample_competing timestamp_utc
+  local nanoseconds power process_count rss_complete rss_sampled sample_competing timestamp_utc
   mkdir -p "$directory/raw" "$directory/client"
 
   printf '%s\n' \
@@ -66,7 +66,15 @@ create_fixture() {
       >>"$directory/raw/process-rss.csv"
     printf '%s,%s,102,2,"server-worker",600\n' "$nanoseconds" "$timestamp_utc" \
       >>"$directory/raw/process-rss.csv"
-    printf '%s,%s,2,2,1000,1\n' "$nanoseconds" "$timestamp_utc" \
+    rss_sampled=2
+    rss_complete=1
+    if [[ "$mode" == incomplete-rss && \
+      "$nanoseconds" == $((measured_start_ns + 500000000)) ]]; then
+      rss_sampled=1
+      rss_complete=0
+    fi
+    printf '%s,%s,2,%s,1000,%s\n' \
+      "$nanoseconds" "$timestamp_utc" "$rss_sampled" "$rss_complete" \
       >>"$directory/raw/process-rss-total.csv"
     printf '%s,%s,101,1,"server-main",4096\n' "$nanoseconds" "$timestamp_utc" \
       >>"$directory/raw/gpu-processes.csv"
@@ -179,6 +187,14 @@ create_fixture "$gap_dir" 0 gap
 if bash "$reducer" --run-dir "$gap_dir" --engine native --profile B1 --round 1 \
   --evidence-prefix runs/round-01/native/B1 >/dev/null 2>&1; then
   echo "expected telemetry-gap fixture to fail" >&2
+  exit 1
+fi
+
+incomplete_rss_dir="$temporary_dir/incomplete-rss"
+create_fixture "$incomplete_rss_dir" 0 incomplete-rss
+if bash "$reducer" --run-dir "$incomplete_rss_dir" --engine native --profile B1 --round 1 \
+  --evidence-prefix runs/round-01/native/B1 >/dev/null 2>&1; then
+  echo "expected incomplete process-RSS fixture to fail" >&2
   exit 1
 fi
 
