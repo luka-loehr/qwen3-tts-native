@@ -30,6 +30,7 @@ CLIENT_SCHEMA_VERSION = "qwen3-tts-http-bench/v1"
 AUDIT_SCHEMA_VERSION = "qwen3-tts-spark-resource-audit/v1"
 MODEL_ARTIFACT_SCHEMA_VERSION = "qwen3-tts-model-artifact/v1"
 REGISTRY_METADATA_SCHEMA_VERSION = "qwen3-tts-registry-image/v1"
+SERVER_LOG_WINDOW_SCHEMA_VERSION = "qwen3-tts-server-log-window/v1"
 ENGINES = ("native", "sglang")
 PROFILES = {"B1": 1, "B3": 3, "B6": 6}
 ROUNDS = (1, 2)
@@ -1039,6 +1040,8 @@ def _validate_run(
         "provenance/reduce-spark-run.sh",
         "provenance/image-inspect.json",
         "provenance/container-inspect.sanitized.json",
+        "provenance/server-log-window.json",
+        "provenance/server.log",
         "provenance/client-version.txt",
         "provenance/uname.txt",
         "provenance/nvidia-smi-list.txt",
@@ -1069,9 +1072,44 @@ def _validate_run(
         f"{run_dir}/run-resource.json",
     )
     audit = _load_json_file(run_dir / "resource-audit.json", run_dir, "resource-audit")
+    server_log_window = _strict_object(
+        _load_json_file(
+            run_dir / "provenance/server-log-window.json",
+            run_dir,
+            "server-log-window",
+        ),
+        f"{run_dir}/provenance/server-log-window.json",
+        {
+            "schema_version",
+            "container",
+            "since_unix_seconds",
+            "until_unix_seconds",
+        },
+    )
+    _strict_object(
+        server_log_window["container"],
+        f"{run_dir}/provenance/server-log-window.json.container",
+        {"name", "id"},
+    )
 
     if invocation["schema_version"] != RUN_SCHEMA_VERSION:
         _fail(f"{run_dir}: unexpected qualifying-run schema")
+    if server_log_window["schema_version"] != SERVER_LOG_WINDOW_SCHEMA_VERSION:
+        _fail(f"{run_dir}: unexpected server-log-window schema")
+    if server_log_window["container"] != invocation["container"]:
+        _fail(f"{run_dir}: server-log-window container differs from invocation")
+    server_log_since = _integer(
+        server_log_window["since_unix_seconds"],
+        f"{run_dir}.server-log-window.since_unix_seconds",
+        0,
+    )
+    server_log_until = _integer(
+        server_log_window["until_unix_seconds"],
+        f"{run_dir}.server-log-window.until_unix_seconds",
+        1,
+    )
+    if server_log_until <= server_log_since:
+        _fail(f"{run_dir}: server-log-window must be strictly increasing")
     engine = invocation["engine"]
     profile = invocation["profile"]
     round_number = invocation["round"]

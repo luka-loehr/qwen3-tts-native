@@ -248,3 +248,7 @@ Every accepted qualifying-run inventory must include the exact captured
 process-RSS sampler dependency at
 `provenance/lib/process-rss-sampler.sh`; a missing, mutated, non-regular, or
 symlinked dependency invalidates the bundle.
+It must also include `provenance/server.log` and
+`provenance/server-log-window.json`. The log may be empty, but it must remain a
+regular checksum-inventoried file. The window must bind it to the same container
+ID as the qualifying invocation and must be strictly increasing.

@@ -212,7 +212,8 @@ Each final comparison bundle contains:
 - the exact workload JSONL and its SHA-256;
 - raw per-request JSONL and raw packet-arrival JSONL for both subjects;
 - timestamped resource and power samples;
-- server logs, client summary JSON, container inspection, and image provenance;
+- bounded timestamped container stdout/stderr logs, their exact capture-window
+  metadata, client summary JSON, container inspection, and image provenance;
 - the generated tables, monochrome chart sources, and final rendered PDF;
 - SHA-256 values for every evidence file.
 

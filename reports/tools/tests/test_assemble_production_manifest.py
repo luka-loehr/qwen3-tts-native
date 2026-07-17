@@ -332,6 +332,17 @@ class EvidenceFixture:
             )
             + "\n",
             "container-inspect.sanitized.json": "[]\n",
+            "server-log-window.json": json.dumps(
+                {
+                    "schema_version": "qwen3-tts-server-log-window/v1",
+                    "container": {"name": f"fixture-{engine}", "id": "5" * 64},
+                    "since_unix_seconds": 1_752_710_400,
+                    "until_unix_seconds": 1_752_710_401,
+                },
+                indent=2,
+            )
+            + "\n",
+            "server.log": "",
             "client-version.txt": "fixture-client 1.0\n",
             "uname.txt": "Linux spark fixture\n",
             "nvidia-smi-list.txt": "GPU 0: fixture\n",
@@ -592,6 +603,29 @@ class AssembleProductionManifestTests(unittest.TestCase):
         with self.assertRaisesRegex(
             assembler.AssemblyError,
             "missing qualifying-run files.*process-rss-sampler[.]sh",
+        ):
+            self.fixture.assemble()
+
+    def test_rejects_missing_server_log_provenance(self) -> None:
+        run_dir = self.fixture.run_dir("native", "B1", 1)
+        (run_dir / "provenance/server.log").unlink()
+        refresh_checksums(run_dir)
+        with self.assertRaisesRegex(
+            assembler.AssemblyError,
+            "missing qualifying-run files.*provenance/server.log",
+        ):
+            self.fixture.assemble()
+
+    def test_rejects_server_log_window_for_another_container(self) -> None:
+        run_dir = self.fixture.run_dir("sglang", "B1", 1)
+        window_path = run_dir / "provenance/server-log-window.json"
+        window = json.loads(window_path.read_text(encoding="utf-8"))
+        window["container"]["id"] = "6" * 64
+        write_json(window_path, window)
+        refresh_checksums(run_dir)
+        with self.assertRaisesRegex(
+            assembler.AssemblyError,
+            "server-log-window container differs from invocation",
         ):
             self.fixture.assemble()
 

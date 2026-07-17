@@ -131,6 +131,42 @@ case "${1:-}:${2:-}" in
       }]'
     fi
     ;;
+  logs:*)
+    shift
+    timestamps=false
+    since=
+    until=
+    container=
+    while (($#)); do
+      case "$1" in
+        --timestamps)
+          timestamps=true
+          shift
+          ;;
+        --since)
+          since=$2
+          shift 2
+          ;;
+        --until)
+          until=$2
+          shift 2
+          ;;
+        *)
+          [[ -z "$container" ]] || exit 2
+          container=$1
+          shift
+          ;;
+      esac
+    done
+    [[ "$timestamps" == true && "$since" =~ ^[0-9]+$ && "$until" =~ ^[0-9]+$ ]]
+    ((until > since))
+    [[ "$container" == fixture-native ]]
+    if [[ "${FIXTURE_DOCKER_LOG_FAIL:-false}" == true ]]; then
+      printf 'fixture Docker log failure\n' >&2
+      exit 42
+    fi
+    printf '2026-07-17T00:00:00.000000000Z fixture server log\n'
+    ;;
   version:*)
     printf 'fixture Docker version\n'
     ;;
@@ -217,6 +253,59 @@ grep -Fqx \
   cd "$output_dir"
   sha256sum --check --strict SHA256SUMS >/dev/null
 )
+
+server_log="$output_dir/provenance/server.log"
+server_log_window="$output_dir/provenance/server-log-window.json"
+[[ -f "$server_log" && ! -L "$server_log" ]] || {
+  echo "published server log is not a regular non-symlink file" >&2
+  exit 1
+}
+grep -Fqx \
+  '2026-07-17T00:00:00.000000000Z fixture server log' \
+  "$server_log"
+jq -e \
+  --arg container_id "$(printf '%064d' 5)" '
+  .schema_version == "qwen3-tts-server-log-window/v1" and
+  .container == {name: "fixture-native", id: $container_id} and
+  (.since_unix_seconds | type == "number") and
+  (.until_unix_seconds > .since_unix_seconds)
+' "$server_log_window" >/dev/null
+server_log_sha256=$(sha256sum "$server_log" | awk '{ print $1 }')
+server_log_window_sha256=$(sha256sum "$server_log_window" | awk '{ print $1 }')
+grep -Fqx "$server_log_sha256  provenance/server.log" "$output_dir/SHA256SUMS"
+grep -Fqx \
+  "$server_log_window_sha256  provenance/server-log-window.json" \
+  "$output_dir/SHA256SUMS"
+
+if FIXTURE_DOCKER_LOG_FAIL=true PATH="$test_path" \
+  bash "$fixture_tools/run-qualifying-benchmark.sh" \
+  --output-dir "$temporary_dir/rejected-log-run" \
+  --engine native \
+  --profile B1 \
+  --round 1 \
+  --container fixture-native \
+  --image "$FIXTURE_IMAGE_REFERENCE" \
+  --client "$client" \
+  --workload "$workload" \
+  --endpoint http://127.0.0.1:8080/v1/voice-design/speech \
+  --requests 200 \
+  --warmups 24 \
+  --idle-baseline-seconds 15 \
+  --evidence-prefix runs/round-01/native/B1 \
+  >"$temporary_dir/rejected-log.stdout" \
+  2>"$temporary_dir/rejected-log.stderr"; then
+  echo "controller accepted a failed Docker log capture" >&2
+  exit 1
+fi
+grep -Fq 'failed to capture bounded container logs' "$temporary_dir/rejected-log.stderr"
+[[ ! -e "$temporary_dir/rejected-log-run" ]] || {
+  echo "controller published a run with failed Docker log capture" >&2
+  exit 1
+}
+[[ $(find "$temporary_dir" -maxdepth 1 -type d -name 'rejected-log-run.failed.*' | wc -l) -eq 1 ]] || {
+  echo "controller did not preserve exactly one failed Docker log capture" >&2
+  exit 1
+}
 
 mv "$fixture_tools/lib/process-rss-sampler.sh" "$fixture_tools/lib/process-rss-sampler.real.sh"
 ln -s process-rss-sampler.real.sh "$fixture_tools/lib/process-rss-sampler.sh"

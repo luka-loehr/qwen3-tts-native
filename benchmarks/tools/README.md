@@ -21,6 +21,13 @@ checksum-verified staging run is renamed atomically to the final path. A failed
 run is retained under a unique `.failed.<timestamp>.<pid>` path for audit instead
 of being deleted.
 
+The controller also records timestamped container stdout/stderr in
+`provenance/server.log`. `provenance/server-log-window.json` binds that log to
+the tested container ID and to a strictly increasing `--since`/`--until` Unix
+time window. Only the run window is requested from Docker; historical container
+logs are not copied. An empty log is valid evidence, but a failed Docker log
+capture rejects the run.
+
 ```bash
 benchmarks/tools/run-qualifying-benchmark.sh \
   --output-dir /evidence/runs/round-01/native/B1 \
