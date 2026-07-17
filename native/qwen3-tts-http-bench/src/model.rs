@@ -104,6 +104,7 @@ pub struct BenchmarkConfig {
     pub sglang_model: Option<String>,
     pub workload_path: PathBuf,
     pub output_dir: PathBuf,
+    pub phase_events_path: Option<PathBuf>,
     pub requests: usize,
     pub warmups: usize,
     pub concurrency: Concurrency,

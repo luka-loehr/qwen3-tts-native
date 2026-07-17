@@ -22,6 +22,8 @@ pub enum BenchError {
     Validation(String),
     #[error("request timed out after {0} seconds")]
     Timeout(u64),
+    #[error("timing evidence error: {0}")]
+    Timing(String),
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
     #[error("task failed: {0}")]

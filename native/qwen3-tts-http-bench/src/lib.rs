@@ -4,6 +4,7 @@ mod error;
 mod http;
 mod model;
 mod multipart;
+mod phase_events;
 mod report;
 mod runner;
 mod url;
