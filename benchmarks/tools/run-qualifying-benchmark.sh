@@ -367,6 +367,20 @@ for path in \
   [[ -f "$path" && ! -L "$path" && -s "$path" ]] || die "client did not produce complete canonical evidence: $path"
 done
 
+if [[ "$engine" == sglang ]] && ! jq -e -s '
+  all(.[];
+    (.success != true) or
+    (
+      (.samples | type) == "number" and
+      (.audio_seconds | type) == "number" and
+      .samples < 489600 and
+      .audio_seconds < 20.40
+    )
+  )
+' "$staging_dir/client/requests.jsonl" >/dev/null; then
+  die "stock SGLang successful audio reached the exclusive 255-frame / 489600-sample / 20.40-second boundary"
+fi
+
 "$copied_reducer" \
   --run-dir "$staging_dir" \
   --engine "$engine" \
