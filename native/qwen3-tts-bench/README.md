@@ -3,6 +3,9 @@
 This crate drives the versioned native runtime ABI. It does not contain a mock
 model, a synthetic decoder, Python, Node.js, or an HTTP proxy. A run cannot
 start unless the shared library exports every real engine/request symbol.
+This includes the additive finish-reason query: every completed qualification
+request must report `CODEC_EOS`. Reaching `max_codec_frames` is truncation and
+fails the run rather than being counted as a completion.
 
 Before warm-up, it fills the configured request capacity, requires the next
 start to return `WOULD_BLOCK`, cancels and destroys every live request, and
@@ -12,7 +15,9 @@ The qualifying suite completes at least 200 requests at each configured
 concurrency, defaults to `1,3,6`, polls audio progressively, poisons the unused
 tail of every caller buffer, and fails if the runtime writes beyond the exact
 packet sample count. It also verifies contiguous request, packet, codec-frame,
-and sample positions and compares observed totals with runtime metrics.
+and sample positions and compares observed totals with runtime metrics. Report
+schema version 2 records `finish_reason` for every request and natural-EOS
+counts for every scenario.
 
 ```bash
 cargo run --release -- suite \
@@ -26,6 +31,7 @@ cargo run --release -- suite \
 The suite gate requires all of the following:
 
 - 200 completed requests for every concurrency with zero failures;
+- natural codec EOS for every completed request, with zero length truncations;
 - progressive multi-packet output for at least 95 percent of requests;
 - exact caller-buffer copy bounds and contiguous packet positions;
 - bounded backpressure, cancellation, destruction, and capacity recovery;

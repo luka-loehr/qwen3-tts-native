@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use ffi::{
-    Api, Engine, EngineConfig, GenerationConfig, PollResult, Request, SAMPLE_RATE,
+    Api, Engine, EngineConfig, FinishReason, GenerationConfig, PollResult, Request, SAMPLE_RATE,
     SAMPLES_PER_FRAME, StartResult,
 };
 use report::{
@@ -94,7 +94,7 @@ fn run() -> Result<()> {
         &scenarios,
     );
     let report = QualificationReport {
-        schema_version: 1,
+        schema_version: 2,
         qualifying_run: config.qualifying_run,
         runtime_abi_version: api.abi_version(),
         model_root: config.model_root.display().to_string(),
@@ -501,6 +501,14 @@ fn execute_scenario<'api>(
                     let caller_ttfa = finished
                         .caller_ttfa
                         .context("request reached EOS without emitting audio")?;
+                    let finish_reason = finished.request.finish_reason()?;
+                    if finish_reason != FinishReason::CodecEos {
+                        bail!(
+                            "request {} reached EOS with non-natural finish reason {:?}",
+                            finished.ordinal,
+                            finish_reason
+                        );
+                    }
                     let runtime_metrics = finished.request.metrics()?;
                     if runtime_metrics.emitted_packets != finished.next_sequence
                         || runtime_metrics.generated_codec_frames != finished.next_frame
@@ -531,6 +539,7 @@ fn execute_scenario<'api>(
                         ordinal: finished.ordinal,
                         corpus_id: finished.corpus.id,
                         language: finished.corpus.language,
+                        finish_reason: finish_reason.as_str().to_owned(),
                         packets: finished.next_sequence,
                         codec_frames: finished.next_frame,
                         samples: finished.next_sample,
@@ -596,6 +605,10 @@ fn execute_scenario<'api>(
         .iter()
         .filter(|request| request.progressive_streaming)
         .count();
+    let natural_codec_eos_requests = completed
+        .iter()
+        .filter(|request| request.finish_reason == "codec_eos")
+        .count();
     let exact_copy_bound_requests = completed
         .iter()
         .filter(|request| request.exact_copy_bounds)
@@ -613,6 +626,7 @@ fn execute_scenario<'api>(
         aggregate_rtf: wall_seconds / synthesized_audio_seconds,
         requests_per_second: completed.len() as f64 / wall_seconds,
         progressive_streaming_requests,
+        natural_codec_eos_requests,
         exact_copy_bound_requests,
         host_rss_start_bytes: rss_start,
         host_rss_peak_bytes: rss_peak,
@@ -705,6 +719,9 @@ fn evaluate_gates(
     let all_requests_completed = scenarios
         .iter()
         .all(|scenario| scenario.completed == scenario.requested && scenario.failed == 0);
+    let natural_codec_eos_all_requests = scenarios
+        .iter()
+        .all(|scenario| scenario.natural_codec_eos_requests == scenario.completed);
     let at_least_200_requests_per_scenario = requests_per_concurrency >= 200
         && scenarios.iter().all(|scenario| scenario.completed >= 200);
     let progressive_streaming_observed = scenarios
@@ -723,6 +740,7 @@ fn evaluate_gates(
         .all(|scenario| scenario.caller_ttfa_ms.p95 < 200.0);
     let passed = qualifying_run
         && all_requests_completed
+        && natural_codec_eos_all_requests
         && at_least_200_requests_per_scenario
         && progressive_streaming_observed
         && packet_positions_contiguous
@@ -732,6 +750,7 @@ fn evaluate_gates(
         && first_audio_p95_below_200_ms_all_scenarios;
     QualificationGates {
         all_requests_completed,
+        natural_codec_eos_all_requests,
         at_least_200_requests_per_scenario,
         progressive_streaming_observed,
         packet_positions_contiguous,
