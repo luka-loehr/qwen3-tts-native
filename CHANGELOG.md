@@ -8,11 +8,9 @@ for published releases.
 
 ## [Unreleased]
 
-This section is the staged content for `v0.1.0`. At the release commit, move
-it under a `0.1.0` heading dated with the current ISO 8601 UTC calendar date,
-replace this note with an empty `[Unreleased]` section, and add the
-corresponding comparison link at the bottom. The release must not be tagged
-while any of those steps or any digest-specific gate remains incomplete.
+No changes yet.
+
+## [0.1.0] - 2026-07-17
 
 ### Added
 
@@ -70,18 +68,19 @@ while any of those steps or any digest-specific gate remains incomplete.
 - The repository is licensed under Apache License 2.0 with explicit model and
   third-party attribution boundaries.
 
-### Release status
+### Release evidence
 
-- A registry image, semantic tag, and `latest` alias are accepted only when
-  they all resolve to the same immutable digest recorded in the GitHub release.
-- The release is blocked until every gate in
-  [`containers/RELEASE_CHECKLIST.md`](containers/RELEASE_CHECKLIST.md) for the
-  exact pushed candidate digest has passed.
-- The controlled Native-versus-SGLang result is publishable only from an
-  accepted schema-1.2 production manifest containing exactly two engines,
-  B1/B3/B6, two rounds, and at least 200 successful measured requests per run.
-  The generated PDF and raw evidence identity must be linked from the final
-  `v0.1.0` entry; partial runs and historical coexistence measurements are not
-  release evidence.
+- The immutable container digest, semantic tag, `latest` alias, SBOM,
+  provenance, signature, scan receipts, clean-pull proof, and GPU acceptance
+  are recorded in the
+  [`v0.1.0` GitHub release](https://github.com/luka-loehr/qwen3-tts-native/releases/tag/v0.1.0).
+- The controlled two-engine, B1/B3/B6, two-round comparison is published in
+  the [final benchmark report](reports/output/qwen3-tts-native-vs-sglang-stock-dgx-spark-2026-07-17-428307c-report.pdf).
+- The complete English system description and evaluation are published as the
+  [Qwen3-TTS Native research paper](research/paper/qwen3-tts-native-paper.pdf).
+- The checked-in [release checklist](containers/RELEASE_CHECKLIST.md) remains
+  the reusable fail-closed template; completed digest-specific receipts are
+  release assets so the source revision embedded in the image stays immutable.
 
-[Unreleased]: https://github.com/luka-loehr/qwen3-tts-native/commits/main
+[Unreleased]: https://github.com/luka-loehr/qwen3-tts-native/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/luka-loehr/qwen3-tts-native/releases/tag/v0.1.0

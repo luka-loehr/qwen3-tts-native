@@ -11,12 +11,12 @@ handoff, the neural speech decoder, scheduling, and HTTP delivery—runs in
 native Rust and CUDA. Python, Node.js, PyTorch, SGLang, and vLLM are not part of
 the runtime or production image.
 
-> **Release-candidate status:** the native service and hardened image
-> definition are implemented. A container becomes a release only when its
-> immutable GHCR digest is recorded in the `v0.1.0` GitHub release and every
-> item in the [release checklist](containers/RELEASE_CHECKLIST.md) has passed
-> for that same digest. Until then, use the repository as source and do not
-> infer a deployable image from a branch, local tag, or candidate tag.
+> **Release `v0.1.0`:** source, the native service, the hardened image,
+> benchmark report, and research paper are published together in the
+> [`v0.1.0` GitHub release](https://github.com/luka-loehr/qwen3-tts-native/releases/tag/v0.1.0).
+> Deploy only the complete immutable GHCR reference recorded there. A branch,
+> local image, candidate tag, semantic tag, or `latest` alone is not a
+> digest-pinned deployment identity.
 
 ## What this project provides
 
@@ -36,7 +36,7 @@ the runtime or production image.
   a read-only root filesystem and no Linux capabilities.
 
 The project intentionally supports **VoiceDesign only**. It does not include
-voice cloning, reference audio, speaker enrolment, the Base or CustomVoice
+voice cloning, reference audio, speaker enrollment, the Base or CustomVoice
 checkpoints, the speech-tokenizer encoder, or the retired 0.6B model.
 
 ## Supported languages and audio
@@ -107,7 +107,7 @@ fi
 docker pull "$QWEN3_TTS_IMAGE"
 
 docker run --rm \
-  --gpus '"device=0"' \
+  --gpus device=0 \
   --read-only \
   --cap-drop=ALL \
   --security-opt=no-new-privileges \
@@ -226,9 +226,10 @@ have not verified.
 ## Verified performance
 
 All results in this section are checked JSON evidence from direct native runs
-on NVIDIA DGX Spark. They are **not final-container measurements**. The final
-image must be measured again by exact registry digest, and container results
-must remain distinct from these baselines.
+on NVIDIA DGX Spark. They are historical **pre-release baselines**, not the
+controlled final-container comparison. The digest-specific release acceptance
+and the controlled Native-versus-stock comparison are documented separately
+in the published evidence bundle and benchmark report.
 
 ### Full natural-end-of-sequence endurance
 
@@ -317,6 +318,8 @@ requires the audited model artifact and generated release-metadata contexts.
 
 Start with these documents:
 
+- [Validated Native-versus-stock-SGLang benchmark report](reports/output/qwen3-tts-native-vs-sglang-stock-dgx-spark-2026-07-17-428307c-report.pdf)
+- [English research paper and LaTeX source](research/paper/README.md)
 - [Production image, immutable inputs, and build command](containers/README.md)
 - [Exact release gates](containers/RELEASE_CHECKLIST.md)
 - [HTTP server contract](native/qwen3-tts-server/README.md)
@@ -351,6 +354,20 @@ post-build release gates.
 | `notes` | Architecture, model-contract, artifact, codec, and toolchain decisions. |
 | Root community files | Contribution, security, conduct, changelog, and Apache-2.0 license policies. |
 
+## Research and citation
+
+The [English research paper](research/paper/qwen3-tts-native-paper.pdf)
+describes the system design, native implementation, streaming contract,
+controlled evaluation, limitations, reproducibility, and licensing boundary.
+Its complete LaTeX source is versioned under [`research/paper/`](research/paper/).
+The independent [benchmark report](reports/output/qwen3-tts-native-vs-sglang-stock-dgx-spark-2026-07-17-428307c-report.pdf)
+contains the detailed per-round measurements and evidence identity.
+
+Use [`CITATION.cff`](CITATION.cff) when citing the software. When citing a
+performance result, also record the release tag, immutable image digest,
+hardware, model revision, and evidence-manifest SHA-256 from the report rather
+than citing an unqualified branch or mutable container tag.
+
 ## Contributing and security
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a change. Documentation
@@ -366,7 +383,7 @@ Community participation is governed by the
 
 The application source is licensed under the
 [Apache License 2.0](LICENSE). The pinned Qwen3-TTS model is separately
-attributed and licensed by its upstream publisher under Apache-2.0. NVIDIA,
-Ubuntu, Rust dependency, and other third-party material remains subject to its
-respective terms. See the [license inventory](licenses/README.md) and
+attributed and licensed by its upstream publisher under Apache-2.0. NVIDIA and
+Ubuntu components, Rust dependencies, and other third-party material remain
+subject to their respective terms. See the [license inventory](licenses/README.md) and
 [third-party notices](licenses/THIRD_PARTY_NOTICES.md).

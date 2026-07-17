@@ -27,7 +27,9 @@ Node.js, PyTorch, SGLang, or vLLM at runtime.
 | [Architecture](ARCHITECTURE.md) | Implemented Rust/CUDA components, request lifecycle, scheduling, and data flow. |
 | [Container guide](../containers/README.md) | Immutable inputs, reproducible image build, runtime contents, and hardening. |
 | [Benchmark protocol](../benchmarks/README.md) | Qualification rules, metric definitions, telemetry, and evidence policy. |
-| [Benchmark report](../reports/README.md) | Fail-closed evidence validation and deterministic PDF generation. |
+| [Final benchmark report](../reports/output/qwen3-tts-native-vs-sglang-stock-dgx-spark-2026-07-17-428307c-report.pdf) | Validated Native-versus-stock-SGLang measurements on DGX Spark. |
+| [Report pipeline](../reports/README.md) | Fail-closed evidence validation and deterministic PDF generation. |
+| [Research paper](../research/paper/qwen3-tts-native-paper.pdf) | English arXiv-style system description, evaluation, and limitations. |
 | [Contributing](../CONTRIBUTING.md) | Development workflow, required checks, evidence rules, and review expectations. |
 | [Security](../SECURITY.md) | Vulnerability reporting and the deployment security model. |
 | [Changelog](../CHANGELOG.md) | Versioned project changes and release evidence links. |

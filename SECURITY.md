@@ -7,18 +7,17 @@ request privacy, or supply-chain integrity.
 
 ## Supported versions
 
-Security fixes are developed against the latest `main` commit and, after the
-first release, the latest published release line.
+Security fixes are developed against the latest `main` commit and the latest
+published release line.
 
 | Version | Security support |
 | --- | --- |
 | `main` | Supported for current development and coordinated fixes. |
-| Latest published release | Supported after the first release is published. |
+| `0.1.x` | Supported. Deploy only an accepted immutable digest from the corresponding GitHub release. |
 | Older commits, branches, and unqualified image candidates | Not supported. |
 
-At present, the first registry image is still in qualification. A local image,
-development tag, branch build, or placeholder digest is not a supported
-release.
+A local image, development tag, branch build, mutable tag without a matching
+release record, or placeholder digest is not a supported release.
 
 ## Report a vulnerability privately
 

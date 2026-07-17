@@ -246,8 +246,8 @@ def create_client_bundle(base: Path) -> Path:
                             ),
                             "byte_offset": sequence * payload_bytes,
                             "first_codec_frame": sequence * 6 if native else None,
-                            "first_sample": sequence * 12000 if native else None,
-                            "sample_count": 12000 if native else None,
+                            "first_sample": sequence * 12000 if native else 0,
+                            "sample_count": 12000 if native else payload_bytes // 2,
                             "codec_frames": 6 if native else None,
                             "is_first": sequence == 0,
                             "is_final": sequence == packet_count - 1
@@ -441,6 +441,26 @@ def create_client_bundle(base: Path) -> Path:
 
 
 class ReportPipelineTests(unittest.TestCase):
+    def test_sentence_normalizes_terminal_punctuation(self) -> None:
+        self.assertEqual(generate_report._sentence("Progressive"), "Progressive.")
+        self.assertEqual(generate_report._sentence("Progressive."), "Progressive.")
+        self.assertEqual(generate_report._sentence("Why?"), "Why?")
+
+    def test_pdf_font_embedding_validation_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            artifact = Path(temporary) / "report.pdf"
+            artifact.write_bytes(b"%PDF-1.4\n")
+            with self.assertRaisesRegex(
+                generate_report.EvidenceError, "contains no embedded TrueType font"
+            ):
+                generate_report._validate_pdf_font_embedding(artifact)
+
+            artifact.write_bytes(b"%PDF-1.4\n/FontFile2 1 0 R\n/BaseFont /Helvetica\n")
+            with self.assertRaisesRegex(
+                generate_report.EvidenceError, "forbidden Base14 fallback"
+            ):
+                generate_report._validate_pdf_font_embedding(artifact)
+
     def test_production_workload_accepts_exact_duration_contract(self) -> None:
         records = generate_report._validate_client_workload(
             [
@@ -530,6 +550,67 @@ class ReportPipelineTests(unittest.TestCase):
                 [{"payload_bytes": samples * 2}],
                 generate_report.PRODUCTION_SAMPLE_RATE_HZ,
                 "requests.jsonl:1",
+            )
+
+    @staticmethod
+    def _sglang_transport_packet(
+        *,
+        payload_bytes: int,
+        byte_offset: int,
+        first_sample: int | None,
+        sample_count: int | None,
+    ) -> dict[str, object]:
+        return {
+            "schema_version": "qwen3-tts-http-bench/v1",
+            "request_index": 0,
+            "workload_id": "transport-fragment",
+            "backend": "sglang-omni",
+            "kind": "raw_pcm_transport_arrival",
+            "sequence": 0,
+            "arrival_ms": 100.0,
+            "inter_arrival_ms": None,
+            "payload_bytes": payload_bytes,
+            "payload_sha256": "0" * 64,
+            "byte_offset": byte_offset,
+            "first_codec_frame": None,
+            "first_sample": first_sample,
+            "sample_count": sample_count,
+            "codec_frames": None,
+            "is_first": True,
+            "is_final": None,
+        }
+
+    def test_sglang_transport_accepts_aligned_and_unaligned_fragments(self) -> None:
+        aligned = self._sglang_transport_packet(
+            payload_bytes=4, byte_offset=2, first_sample=1, sample_count=2
+        )
+        unaligned = self._sglang_transport_packet(
+            payload_bytes=3, byte_offset=0, first_sample=None, sample_count=None
+        )
+        generate_report._validate_client_packet(aligned, "packet", "sglang")
+        generate_report._validate_client_packet(unaligned, "packet", "sglang")
+
+    def test_sglang_transport_rejects_incorrect_alignment_metadata(self) -> None:
+        aligned_without_metadata = self._sglang_transport_packet(
+            payload_bytes=4, byte_offset=0, first_sample=None, sample_count=None
+        )
+        with self.assertRaisesRegex(
+            generate_report.EvidenceError,
+            "aligned SGLang transport arrival must report its PCM sample offset",
+        ):
+            generate_report._validate_client_packet(
+                aligned_without_metadata, "packet", "sglang"
+            )
+
+        unaligned_with_metadata = self._sglang_transport_packet(
+            payload_bytes=3, byte_offset=0, first_sample=0, sample_count=1
+        )
+        with self.assertRaisesRegex(
+            generate_report.EvidenceError,
+            "unaligned SGLang transport arrival must keep sample metadata null",
+        ):
+            generate_report._validate_client_packet(
+                unaligned_with_metadata, "packet", "sglang"
             )
 
     def test_direct_client_bundle_validates_and_uses_scenario_rtf(self) -> None:
@@ -637,10 +718,15 @@ class ReportPipelineTests(unittest.TestCase):
             second = base / "second.pdf"
             generate_report.build_pdf(bundle, first)
             generate_report.build_pdf(bundle, second)
-            self.assertTrue(first.read_bytes().startswith(b"%PDF-"))
+            first_bytes = first.read_bytes()
+            second_bytes = second.read_bytes()
+            self.assertTrue(first_bytes.startswith(b"%PDF-"))
+            self.assertIn(b"/FontFile2", first_bytes)
+            self.assertNotIn(b"/BaseFont /Helvetica", first_bytes)
+            self.assertNotIn(b"/BaseFont /Courier", first_bytes)
             self.assertEqual(
-                hashlib.sha256(first.read_bytes()).digest(),
-                hashlib.sha256(second.read_bytes()).digest(),
+                hashlib.sha256(first_bytes).digest(),
+                hashlib.sha256(second_bytes).digest(),
             )
 
     def test_fixture_is_rejected_without_explicit_flag(self) -> None:
@@ -775,6 +861,9 @@ class ReportPipelineTests(unittest.TestCase):
             second_bytes = second.read_bytes()
             self.assertTrue(first_bytes.startswith(b"%PDF-"))
             self.assertGreater(len(first_bytes), 10_000)
+            self.assertIn(b"/FontFile2", first_bytes)
+            self.assertNotIn(b"/BaseFont /Helvetica", first_bytes)
+            self.assertNotIn(b"/BaseFont /Courier", first_bytes)
             self.assertEqual(
                 hashlib.sha256(first_bytes).digest(),
                 hashlib.sha256(second_bytes).digest(),

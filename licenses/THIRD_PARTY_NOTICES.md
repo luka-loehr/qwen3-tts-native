@@ -32,6 +32,15 @@ Official image:
 
 https://hub.docker.com/r/nvidia/cuda
 
+## Bitstream Vera report fonts
+
+The release benchmark report embeds subsetted Bitstream Vera Sans Roman, Bold,
+and Oblique fonts supplied by the pinned ReportLab 4.4.9 reporting toolchain.
+These fonts are part of the publication artifact only; they are not included in
+the production inference image. The complete required copyright, trademark,
+permission, restriction, and warranty notice is preserved in
+[`Bitstream-Vera-LICENSE.txt`](Bitstream-Vera-LICENSE.txt).
+
 ## Rust dependencies
 
 The checked Cargo.lock files are the dependency authority for the native Rust

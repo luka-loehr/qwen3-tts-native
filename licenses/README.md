@@ -1,7 +1,7 @@
-# Runtime License Inventory
+# License Inventory
 
 This directory contains source-controlled license and provenance material for
-the native runtime image.
+the native runtime image and release publications.
 
 ## Source-controlled material
 
@@ -12,6 +12,9 @@ the native runtime image.
 - model/SOURCE.json: machine-readable pinned source and artifact hashes.
 - THIRD_PARTY_NOTICES.md: model, NVIDIA base-image, and Rust dependency
   boundaries.
+- Bitstream-Vera-LICENSE.txt: copyright, permission, restriction, and warranty
+  notice for the font subsets embedded in the benchmark report only; these
+  fonts are not part of the inference image.
 - application/README.md: record of the repository-wide Apache-2.0 application
   license and its relationship to the separately attributed model grant.
 
