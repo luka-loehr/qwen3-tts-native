@@ -44,7 +44,12 @@ The canonical summary is
 `results/native-artifact-loader-summary.json`. Files with `indexed` in their
 name are the final tensor-index implementation. Temporary F32 and repeat
 artifacts are deleted after validation; their small JSON and `time -v` reports
-remain as provenance.
+remain as provenance. Host-specific command paths in those text reports are
+normalized to `/workspace` and `/models` for publication; every measured
+GNU-time field remains unchanged. Hash-bound historical JSON evidence retains
+its original generic `/home/administrator` capture paths so that its
+provenance is not silently rewritten; those paths contain neither a personal
+name nor a credential and are not runtime configuration.
 
 Weight loading is not neural inference. Artifact pack, mmap-open, file-hash, and
 host-to-device copy timings must never be described as TTFA, RTF, streaming, or

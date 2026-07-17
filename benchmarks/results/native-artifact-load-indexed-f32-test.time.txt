@@ -1,4 +1,4 @@
-	Command being timed: "/home/administrator/codex-playground-worktrees/native-artifact-loader/native/qwen3-tts-native/target/release/load_artifact /home/administrator/codex-playground-artifacts/qwen3-tts-1.7b-voice-design-f32-indexed-test --verification contracts --staging-mib 8 --report /home/administrator/codex-playground-worktrees/native-artifact-loader/benchmarks/results/native-artifact-load-indexed-f32-test.json"
+	Command being timed: "/workspace/qwen3-tts-native/native/qwen3-tts-native/target/release/load_artifact /models/qwen3-tts-1.7b-voice-design-f32-indexed-test --verification contracts --staging-mib 8 --report /workspace/qwen3-tts-native/benchmarks/results/native-artifact-load-indexed-f32-test.json"
 	User time (seconds): 0.00
 	System time (seconds): 0.00
 	Percent of CPU this job got: 71%

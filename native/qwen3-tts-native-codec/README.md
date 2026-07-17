@@ -116,8 +116,8 @@ Set these paths for the isolated Spark checkout:
 
 ```bash
 LIB=build/native/libqwen3_tts_codec_cuda.so
-MODEL=/home/administrator/codex-playground-artifacts/\
-qwen3-tts-1.7b-voice-design-bf16-indexed/speech_tokenizer/model.safetensors
+MODEL=/models/qwen3-tts-1.7b-voice-design-bf16-indexed/\
+speech_tokenizer/model.safetensors
 FIXTURE=../../benchmarks/fixtures/decoder-reference-bf16
 BIN=target/release/qwen3-tts-native-codec
 

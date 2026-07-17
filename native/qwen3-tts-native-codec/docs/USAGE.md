@@ -157,8 +157,8 @@ From `native/qwen3-tts-native-codec`:
 ```bash
 LIB=build/native/libqwen3_tts_codec_cuda.so
 BIN=target/release/qwen3-tts-native-codec
-MODEL=/home/administrator/codex-playground-artifacts/\
-qwen3-tts-1.7b-voice-design-bf16-indexed/speech_tokenizer/model.safetensors
+MODEL=/models/qwen3-tts-1.7b-voice-design-bf16-indexed/\
+speech_tokenizer/model.safetensors
 FIXTURE=../../benchmarks/fixtures/decoder-reference-bf16
 
 # Full real neural PCM, lifecycle, short-final, and stale-tail parity.

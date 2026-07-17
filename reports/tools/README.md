@@ -119,7 +119,7 @@ digest. The minimal Stock file is:
     "kind": "read_only_bind_mount",
     "container_path": "/models/hf-repository",
     "read_only": true,
-    "host_path": "/home/administrator/qwen3-tts-sglang/cache/huggingface/hub/models--Qwen--Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+    "host_path": "/srv/qwen3-tts/model-cache/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
     "snapshot_path": "snapshots/5ecdb67327fd37bb2e042aab12ff7391903235d3",
     "revision_ref_path": "refs/main"
   }
