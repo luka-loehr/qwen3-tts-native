@@ -163,7 +163,11 @@ cosign verify \
 
 - [ ] Cold-load peak host RSS is no more than 4.2 GiB.
 - [ ] Post-load steady host RSS is measured and reviewed against 768 MiB.
-- [ ] B6 CUDA device allocation is no more than 4.65 GB.
+- [ ] B6 observed GPU unified-memory peak is no more than 6,000,000,000
+      bytes.
+- [ ] The maximum native `peak_request_device_bytes` value is reported
+      separately as internal per-request accounting and is never substituted
+      for the observed B6 GPU unified-memory peak.
 - [ ] Warm B1 streaming TTFA p95 is below 200 ms.
 - [ ] B1 request RTF remains below 1.0.
 - [ ] Container TTFA and RTF regress no more than 3 percent against the same
