@@ -316,7 +316,8 @@ fn map_scheduler_error(error: SchedulerError) -> CallError {
         SchedulerError::InvalidConfiguration(_)
         | SchedulerError::InvalidGeneration(_)
         | SchedulerError::InvalidInput(_) => RuntimeStatus::InvalidArgument,
-        SchedulerError::Full | SchedulerError::Closed => RuntimeStatus::State,
+        SchedulerError::Full => RuntimeStatus::WouldBlock,
+        SchedulerError::Closed => RuntimeStatus::State,
         SchedulerError::Worker(_) => RuntimeStatus::Internal,
     };
     CallError::new(status, error.to_string())
@@ -397,7 +398,7 @@ mod tests {
                 SchedulerError::InvalidInput(RequestInputError::EmptyText),
                 RuntimeStatus::InvalidArgument,
             ),
-            (SchedulerError::Full, RuntimeStatus::State),
+            (SchedulerError::Full, RuntimeStatus::WouldBlock),
             (SchedulerError::Closed, RuntimeStatus::State),
             (
                 SchedulerError::Worker("failed".to_owned()),
