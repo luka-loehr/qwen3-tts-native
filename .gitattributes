@@ -1,0 +1,2 @@
+# Preserve byte-for-byte benchmark provenance captured from external tools.
+benchmarks/evidence/**/provenance/* -text whitespace=-blank-at-eof,-trailing-space

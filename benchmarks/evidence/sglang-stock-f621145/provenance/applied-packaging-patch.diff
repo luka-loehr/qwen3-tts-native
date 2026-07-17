@@ -1,0 +1,12 @@
+diff --git a/pyproject.toml b/pyproject.toml
+index 03f35bd..5e7fbc0 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -66,7 +66,6 @@ dependencies = [
+     "descript-audiotools",
+     "descript-audio-codec",
+     "torchaudio==2.11.0",
+-    "torchcodec==0.11.1",     # Matches sglang==0.5.12.post1 dependency
+     # Gradio playground
+     "gradio>=4.0.0",
+     # Ming-Omni

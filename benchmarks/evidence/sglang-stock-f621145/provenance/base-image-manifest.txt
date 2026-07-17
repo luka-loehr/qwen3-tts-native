@@ -1,0 +1,26 @@
+Name:      docker.io/lmsysorg/sglang:v0.5.12.post1-cu130-runtime@sha256:8df56b542526f4fffd5372f7f65a583c7852e50442c1f43c9c3feddfd93944a4
+MediaType: application/vnd.oci.image.index.v1+json
+Digest:    sha256:8df56b542526f4fffd5372f7f65a583c7852e50442c1f43c9c3feddfd93944a4
+           
+Manifests: 
+  Name:        docker.io/lmsysorg/sglang:v0.5.12.post1-cu130-runtime@sha256:9db009f597814fa2f89b3924459330cb29449823396569f4a599ff4cc9e4f1ea
+  MediaType:   application/vnd.oci.image.manifest.v1+json
+  Platform:    linux/amd64
+               
+  Name:        docker.io/lmsysorg/sglang:v0.5.12.post1-cu130-runtime@sha256:ddd3edffe8cce09ff8cb9ae7c3743bc5806dc998a9a34e999eb657d573ff5615
+  MediaType:   application/vnd.oci.image.manifest.v1+json
+  Platform:    unknown/unknown
+  Annotations: 
+    vnd.docker.reference.digest: sha256:9db009f597814fa2f89b3924459330cb29449823396569f4a599ff4cc9e4f1ea
+    vnd.docker.reference.type:   attestation-manifest
+               
+  Name:        docker.io/lmsysorg/sglang:v0.5.12.post1-cu130-runtime@sha256:f9860e7a07845585ccf082ec97bba712086bf10ef9ddaa317085a4a0316a4b8e
+  MediaType:   application/vnd.oci.image.manifest.v1+json
+  Platform:    linux/arm64
+               
+  Name:        docker.io/lmsysorg/sglang:v0.5.12.post1-cu130-runtime@sha256:d62c0854ce910279950f6ef61c9003bfd131b8ec5f01f7fb93ad61bf5e4bdb93
+  MediaType:   application/vnd.oci.image.manifest.v1+json
+  Platform:    unknown/unknown
+  Annotations: 
+    vnd.docker.reference.digest: sha256:f9860e7a07845585ccf082ec97bba712086bf10ef9ddaa317085a4a0316a4b8e
+    vnd.docker.reference.type:   attestation-manifest

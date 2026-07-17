@@ -1,0 +1,2 @@
+libsox-fmt-all	14.4.2+git20190427-4build4
+sox	14.4.2+git20190427-4build4
