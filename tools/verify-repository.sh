@@ -50,6 +50,9 @@ while IFS= read -r -d '' script; do
   bash -n "$script"
 done < <(git ls-files -z -- '*.sh')
 
+printf '==> release-image policy tests\n'
+./tools/release-image/test-release-tools.sh
+
 printf '==> OpenAPI 3.1 lint with Redocly CLI %s\n' "$REDOCLY_VERSION"
 REDOCLY_TELEMETRY=off \
 REDOCLY_SUPPRESS_UPDATE_NOTICE=true \
