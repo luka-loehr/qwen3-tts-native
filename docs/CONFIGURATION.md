@@ -139,6 +139,12 @@ The most common supported overrides are listener publication, device index,
 concurrency, request byte limits, duration ceiling, and log filtering:
 
 ```bash
+: "${QWEN3_TTS_IMAGE:?Set QWEN3_TTS_IMAGE from the v0.1.0 release notes}"
+if [[ ! "$QWEN3_TTS_IMAGE" =~ ^ghcr.io/luka-loehr/qwen3-tts-native@sha256:[0-9a-f]{64}$ ]]; then
+  printf 'Invalid immutable image reference: %s\n' "$QWEN3_TTS_IMAGE" >&2
+  exit 1
+fi
+
 docker run --rm \
   --gpus device=0 \
   --read-only \
@@ -152,11 +158,13 @@ docker run --rm \
   --env QWEN3_TTS_MAX_VOICE_DESCRIPTION_BYTES=2048 \
   --env QWEN3_TTS_MAX_DURATION_SECONDS=60 \
   --env RUST_LOG=qwen3_tts_server=info \
-  'ghcr.io/luka-loehr/qwen3-tts-native@sha256:<PUBLISHED_DIGEST>'
+  "$QWEN3_TTS_IMAGE"
 ```
 
-Registry publication is pending; replace the explicit placeholder with the
-accepted release digest.
+Set `QWEN3_TTS_IMAGE` to the complete digest-pinned GHCR reference from the
+`v0.1.0` GitHub release. The validation matches the
+[Quickstart](QUICKSTART.md#1-select-the-immutable-image); a mutable tag is not
+an accepted production input.
 
 ## Network and security configuration
 

@@ -5,9 +5,10 @@ pinned Qwen3-TTS 1.7B VoiceDesign runtime. It is a native ARM64 Rust/CUDA
 service: Python, Node.js, PyTorch, SGLang, vLLM, TensorRT, and cuDNN are not
 part of the image or inference path.
 
-The image is release-ready by construction but is not considered published
-until every gate in [`RELEASE_CHECKLIST.md`](RELEASE_CHECKLIST.md) has passed
-for the exact registry digest.
+The image definition is release-oriented, but an image is not considered
+published until every gate in [`RELEASE_CHECKLIST.md`](RELEASE_CHECKLIST.md)
+has passed for the exact registry digest and that digest is recorded in the
+`v0.1.0` GitHub release.
 
 ## Runtime contents
 
@@ -201,7 +202,11 @@ then run:
 
 ```bash
 IMAGE=ghcr.io/luka-loehr/qwen3-tts-native
-DIGEST=sha256:<accepted-digest>
+: "${DIGEST:?Set DIGEST from the accepted build metadata}"
+if [[ ! "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+  printf 'Invalid immutable digest: %s\n' "$DIGEST" >&2
+  exit 1
+fi
 REFERENCE="$IMAGE@$DIGEST"
 
 test -n "${GHCR_TOKEN:-}"
@@ -245,8 +250,12 @@ docker run --rm \
   --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001 \
   --pids-limit=256 \
   -p 127.0.0.1:8080:8080 \
-  ghcr.io/luka-loehr/qwen3-tts-native@sha256:<accepted-digest>
+  "$REFERENCE"
 ```
+
+`REFERENCE` must be the exact value accepted by the clean-pull gate above;
+revalidate `DIGEST` and reconstruct it if this section is executed in a new
+shell.
 
 Do not mount different weights over `/opt/qwen3-tts/model`. Such a mount would
 invalidate the model identity recorded in the immutable OCI labels.
@@ -322,7 +331,11 @@ Promote only the accepted digest, never rebuild a mutable alias:
 
 ```bash
 IMAGE=ghcr.io/luka-loehr/qwen3-tts-native
-DIGEST=sha256:<accepted-digest>
+: "${DIGEST:?Set DIGEST from the accepted build metadata}"
+if [[ ! "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+  printf 'Invalid immutable digest: %s\n' "$DIGEST" >&2
+  exit 1
+fi
 
 docker buildx imagetools create --tag "$IMAGE:v0.1.0" "$IMAGE@$DIGEST"
 docker buildx imagetools create --tag "$IMAGE:latest" "$IMAGE@$DIGEST"

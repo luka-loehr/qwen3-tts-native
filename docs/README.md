@@ -9,10 +9,10 @@ contract.
 The inference path is implemented in Rust and CUDA. It does not use Python,
 Node.js, PyTorch, SGLang, or vLLM at runtime.
 
-> **Publication status:** the production image is still being qualified. Any
-> `sha256:<PUBLISHED_DIGEST>` value in these documents is an explicit
-> placeholder, not a published artifact. Release automation must replace it
-> with the accepted registry digest before announcing a release.
+> **Publication boundary:** deployment examples consume the complete
+> digest-pinned `QWEN3_TTS_IMAGE` reference recorded in the `v0.1.0` GitHub
+> release. They deliberately reject missing values and mutable tags. A local
+> or candidate image is not a published release, even if it starts correctly.
 
 ## Documentation map
 

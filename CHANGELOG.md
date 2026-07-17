@@ -8,6 +8,12 @@ for published releases.
 
 ## [Unreleased]
 
+This section is the staged content for `v0.1.0`. At the release commit, move
+it under a `0.1.0` heading dated with the current ISO 8601 UTC calendar date,
+replace this note with an empty `[Unreleased]` section, and add the
+corresponding comparison link at the bottom. The release must not be tagged
+while any of those steps or any digest-specific gate remains incomplete.
+
 ### Added
 
 - Native Rust and CUDA inference for the pinned
@@ -66,11 +72,16 @@ for published releases.
 
 ### Release status
 
-- No registry image digest, semantic release tag, or `latest` alias has been
-  published as an accepted release yet.
-- The first release remains blocked on completing every gate in
+- A registry image, semantic tag, and `latest` alias are accepted only when
+  they all resolve to the same immutable digest recorded in the GitHub release.
+- The release is blocked until every gate in
   [`containers/RELEASE_CHECKLIST.md`](containers/RELEASE_CHECKLIST.md) for the
-  exact pushed candidate digest.
-- No controlled SGLang comparison has been completed or claimed.
+  exact pushed candidate digest has passed.
+- The controlled Native-versus-SGLang result is publishable only from an
+  accepted schema-1.2 production manifest containing exactly two engines,
+  B1/B3/B6, two rounds, and at least 200 successful measured requests per run.
+  The generated PDF and raw evidence identity must be linked from the final
+  `v0.1.0` entry; partial runs and historical coexistence measurements are not
+  release evidence.
 
 [Unreleased]: https://github.com/luka-loehr/qwen3-tts-native/commits/main
