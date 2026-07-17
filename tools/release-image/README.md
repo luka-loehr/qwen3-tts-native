@@ -46,12 +46,15 @@ rejects tag drift, a non-ARM64 runtime, absent BuildKit SPDX/SLSA evidence,
 credential-like provenance, private absolute provenance paths, Git-history
 secrets, high/critical vulnerabilities, or a compressed image above 6.0 GB.
 
-Make the repository and package public, then sign the accepted digest from the
-Mac (replace the digest with the value in the record):
+After the private supply-chain scan passes, make only the container package
+public so the anonymous pull can be proved. Keep the repository private until
+the signed digest, GPU acceptance, promoted tags, Git tag, and GitHub release
+are complete. Then sign the accepted digest from the Mac (replace the digest
+with the value in the record):
 
 ```bash
-gh repo edit luka-loehr/qwen3-tts-native \
-  --visibility public --accept-visibility-change-consequences
+test "$(gh repo view luka-loehr/qwen3-tts-native \
+  --json visibility --jq .visibility)" = PRIVATE
 gh api --method PATCH /user/packages/container/qwen3-tts-native \
   -f visibility=public
 REPO=luka-loehr/qwen3-tts-native
@@ -115,4 +118,7 @@ docker logout ghcr.io
 ```
 
 `promote.sh` moves `v0.1.0` first and `latest` last, verifies both resolve to
-the original digest, and never rebuilds the image.
+the original digest, and never rebuilds the image. Create the annotated Git
+tag and complete GitHub release while the repository is still private. Make
+the repository public only after those records exist, then verify an anonymous
+clone, release-asset access, and digest pull from clean contexts.
