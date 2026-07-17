@@ -1,0 +1,11 @@
+# Platform: CPython 3.12 on Linux ARM64, inherited from the pinned OCI base.
+# Every downloaded artifact is hash-checked. qwen-tts is intentionally
+# installed without dependencies, as required by the SGLang-Omni 0.1.0 docs.
+einops==0.8.1 \
+    --hash=sha256:919387eb55330f5757c6bea9165c5ff5cfe63a642682ea788a6d472576d81737
+onnxruntime==1.26.0 \
+    --hash=sha256:91f2bb870a4b9224eba0a6728c1fa7a9e552b8e59e1083c51fbbc3d013f2b5c0
+qwen-tts==0.1.1 \
+    --hash=sha256:11a290d8dabc7ef91a90c54478c8ab19b3edb1d85c0882313721892bdc4af15d
+sox==1.5.0 \
+    --hash=sha256:12c7be5bb1f548d891fe11e82c08cf5f1a1d74e225298f60082e5aeb2469ada0

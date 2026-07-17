@@ -1,0 +1,24 @@
+From: qwen3-tts-native maintainers
+Subject: [PATCH] build(arm64): drop unavailable torchcodec dependency
+
+SGLang-Omni 0.1.0 declares torchcodec 0.11.1 unconditionally. That release has
+no Linux ARM64 wheel. Qwen3-TTS uses PyAV on this platform, and the pinned
+SGLang CUDA 13 runtime already provides the compatible media stack.
+
+This is a packaging-only change. It does not modify Qwen3-TTS model execution,
+scheduling, codec decoding, HTTP transport, or streaming behavior.
+---
+ pyproject.toml | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/pyproject.toml b/pyproject.toml
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -65,7 +65,6 @@ dependencies = [
+     "descript-audiotools",
+     "descript-audio-codec",
+     "torchaudio==2.11.0",
+-    "torchcodec==0.11.1",     # Matches sglang==0.5.12.post1 dependency
+     # Gradio playground
+     "gradio>=4.0.0",
+     # Ming-Omni

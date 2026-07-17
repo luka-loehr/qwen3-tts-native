@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "profile": "stock-official",
+  "upstream": {
+    "repository": "https://github.com/sgl-project/sglang-omni.git",
+    "tag": "0.1.0",
+    "commit": "8e272bcb8832ef1a3865ec48255d36f4871ec885",
+    "license": "Apache-2.0"
+  },
+  "base_image": {
+    "reference": "lmsysorg/sglang:v0.5.12.post1-cu130-runtime",
+    "index_digest": "sha256:8df56b542526f4fffd5372f7f65a583c7852e50442c1f43c9c3feddfd93944a4",
+    "linux_arm64_manifest_digest": "sha256:f9860e7a07845585ccf082ec97bba712086bf10ef9ddaa317085a4a0316a4b8e",
+    "sglang_build_commit": "5a15cde858ea09b77116212a39356f2fc51b8584"
+  },
+  "patches": [
+    {
+      "file": "0001-arm64-drop-torchcodec-packaging-dependency.patch",
+      "sha256": "37858eaa740cf2c223831a05e681cdd4256a433358145066d20d4126cab693d6",
+      "classification": "packaging-only",
+      "reason": "torchcodec 0.11.1 has no Linux ARM64 wheel",
+      "changed_paths": [
+        "pyproject.toml"
+      ],
+      "runtime_behavior_changed": false
+    }
+  ],
+  "behavioral_patches": [],
+  "stock_voice_design_streaming": {
+    "http_streaming_transports_available": true,
+    "progressive_codec_frames_to_vocoder": false,
+    "progressive_pcm_during_autoregressive_generation": false,
+    "classification": "completion-buffered",
+    "source_evidence": [
+      "sglang_omni/models/qwen3_tts/config.py",
+      "sglang_omni/models/qwen3_tts/model_runner.py",
+      "sglang_omni/models/qwen3_tts/request_builders.py",
+      "sglang_omni/models/qwen3_tts/stages.py"
+    ]
+  },
+  "custom_progressive_pcm_patch": {
+    "status": "not_implemented",
+    "included_in_stock_comparator": false,
+    "reason": "A patched streaming implementation would be a separate experimental comparator and must never be reported as stock SGLang-Omni."
+  }
+}
