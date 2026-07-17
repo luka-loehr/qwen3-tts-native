@@ -124,7 +124,10 @@ script_path=$(readlink -f "${BASH_SOURCE[0]}")
 script_dir=$(dirname "$script_path")
 capture_path="$script_dir/capture-spark-telemetry.sh"
 reducer_path="$script_dir/reduce-spark-run.sh"
+process_rss_sampler_path="$script_dir/lib/process-rss-sampler.sh"
 [[ -x "$capture_path" && -x "$reducer_path" ]] || die "benchmark collector or reducer is not executable"
+[[ -f "$process_rss_sampler_path" && ! -L "$process_rss_sampler_path" ]] || \
+  die "process-RSS sampler library must be a regular file, not a symlink"
 [[ -f "$client_path" && ! -L "$client_path" && -x "$client_path" ]] || die "client must be an executable regular file, not a symlink"
 [[ -f "$workload_path" && ! -L "$workload_path" && -s "$workload_path" ]] || die "workload must be a non-empty regular file, not a symlink"
 
@@ -155,9 +158,11 @@ preserve_failed_run() {
 }
 trap preserve_failed_run EXIT
 
-mkdir -p "$staging_dir/provenance" "$staging_dir/input"
+mkdir -p "$staging_dir/provenance/lib" "$staging_dir/input"
 copied_client="$staging_dir/input/qwen3-tts-http-bench"
 copied_workload="$staging_dir/input/workload.jsonl"
+copied_process_rss_sampler="$staging_dir/provenance/lib/process-rss-sampler.sh"
+original_process_rss_sampler_sha256=$(sha256sum "$process_rss_sampler_path" | awk '{ print $1 }')
 install -m 0555 "$client_path" "$copied_client"
 install -m 0444 "$workload_path" "$copied_workload"
 install -m 0444 "$script_path" "$staging_dir/provenance/run-qualifying-benchmark.sh"
@@ -165,13 +170,17 @@ copied_capture="$staging_dir/provenance/capture-spark-telemetry.sh"
 copied_reducer="$staging_dir/provenance/reduce-spark-run.sh"
 install -m 0555 "$capture_path" "$copied_capture"
 install -m 0555 "$reducer_path" "$copied_reducer"
+install -m 0444 "$process_rss_sampler_path" "$copied_process_rss_sampler"
 
 original_client_sha256=$(sha256sum "$client_path" | awk '{ print $1 }')
 copied_client_sha256=$(sha256sum "$copied_client" | awk '{ print $1 }')
 original_workload_sha256=$(sha256sum "$workload_path" | awk '{ print $1 }')
 copied_workload_sha256=$(sha256sum "$copied_workload" | awk '{ print $1 }')
+copied_process_rss_sampler_sha256=$(sha256sum "$copied_process_rss_sampler" | awk '{ print $1 }')
 [[ "$original_client_sha256" == "$copied_client_sha256" ]] || die "client changed while it was copied"
 [[ "$original_workload_sha256" == "$copied_workload_sha256" ]] || die "workload changed while it was copied"
+[[ "$original_process_rss_sampler_sha256" == "$copied_process_rss_sampler_sha256" ]] || \
+  die "process-RSS sampler library changed while it was copied"
 
 image_id=$(docker image inspect --format '{{.Id}}' "$image_reference")
 container_image_id=$(docker container inspect --format '{{.Image}}' "$container_name")

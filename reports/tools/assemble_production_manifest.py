@@ -1035,6 +1035,7 @@ def _validate_run(
         "provenance/invocation.json",
         "provenance/run-qualifying-benchmark.sh",
         "provenance/capture-spark-telemetry.sh",
+        "provenance/lib/process-rss-sampler.sh",
         "provenance/reduce-spark-run.sh",
         "provenance/image-inspect.json",
         "provenance/container-inspect.sanitized.json",

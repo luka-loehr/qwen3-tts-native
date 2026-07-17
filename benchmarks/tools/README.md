@@ -11,12 +11,15 @@ external client, workload, endpoint, output directory, and manifest-relative
 evidence prefix explicitly. It resolves the image reference to its local
 content-addressed image ID and rejects a container backed by any other image.
 
-The controller copies and hashes the exact client and workload used, captures
-sanitized container and image inspection data, host and NVIDIA identity, Docker
-version, and the benchmark command's stdout and stderr. It stages the run next
-to the requested output path. Only a successfully reduced and checksum-verified
-run is renamed atomically to the final path. A failed run is retained under a
-unique `.failed.<timestamp>.<pid>` path for audit instead of being deleted.
+The controller copies and hashes the exact client and workload used. It also
+packages the collector's process-RSS dependency as the read-only regular file
+`provenance/lib/process-rss-sampler.sh`, verifies the copied bytes, and includes
+it in the run's checksum inventory. Sanitized container and image inspection
+data, host and NVIDIA identity, Docker version, and the benchmark command's
+stdout and stderr are retained as well. Only a successfully reduced and
+checksum-verified staging run is renamed atomically to the final path. A failed
+run is retained under a unique `.failed.<timestamp>.<pid>` path for audit instead
+of being deleted.
 
 ```bash
 benchmarks/tools/run-qualifying-benchmark.sh \
@@ -136,10 +139,12 @@ The reducer fixtures require no Docker or GPU:
 
 ```bash
 bash benchmarks/tools/tests/test-process-rss-sampler.sh
+bash benchmarks/tools/tests/test-qualifying-packaging.sh
 bash benchmarks/tools/tests/test-reduce-spark-run.sh
 ```
 
 They cover coherent retry after a short-lived PID, bounded persistent failure,
-cycle-deadline enforcement, the known idle-adjusted energy calculation, and
-rejection of an incomplete process-RSS sample, a fifth phase event, a gap above
-200 ms, and a competing CUDA process.
+cycle-deadline enforcement, exact provenance dependency packaging and inventory,
+the known idle-adjusted energy calculation, and rejection of a symlinked sampler,
+an incomplete process-RSS sample, a fifth phase event, a gap above 200 ms, and a
+competing CUDA process.

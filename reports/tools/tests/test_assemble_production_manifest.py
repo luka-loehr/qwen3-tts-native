@@ -317,6 +317,7 @@ class EvidenceFixture:
         provenance = {
             "run-qualifying-benchmark.sh": "#!/bin/sh\n",
             "capture-spark-telemetry.sh": "#!/bin/sh\n",
+            "lib/process-rss-sampler.sh": "#!/usr/bin/env bash\n",
             "reduce-spark-run.sh": "#!/bin/sh\n",
             "image-inspect.json": json.dumps(
                 [
@@ -582,6 +583,16 @@ class AssembleProductionManifestTests(unittest.TestCase):
         summary = self.fixture.run_dir("native", "B1", 1) / "client/summary.json"
         summary.write_text(summary.read_text() + " ", encoding="utf-8")
         with self.assertRaisesRegex(assembler.AssemblyError, "digest mismatch"):
+            self.fixture.assemble()
+
+    def test_rejects_missing_process_rss_sampler_provenance(self) -> None:
+        run_dir = self.fixture.run_dir("sglang", "B1", 1)
+        (run_dir / "provenance/lib/process-rss-sampler.sh").unlink()
+        refresh_checksums(run_dir)
+        with self.assertRaisesRegex(
+            assembler.AssemblyError,
+            "missing qualifying-run files.*process-rss-sampler[.]sh",
+        ):
             self.fixture.assemble()
 
     def test_rejects_internally_stale_resource_audit_digest(self) -> None:
