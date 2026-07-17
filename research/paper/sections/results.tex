@@ -23,10 +23,9 @@
 \input{tables/resource_results}
 \input{tables/container_results}
 
-The final analysis must discuss both rounds, tails as well as central
-tendencies, reliability counts, progressive versus completion-buffered
-delivery, and any metric that fails to support a simple ranking. Aggregate RTF
-under concurrency must not be replaced by mean per-request RTF. Memory claims
-must preserve the distinction between host RSS and GPU-visible unified memory.
-Image-size claims require registry evidence and must not substitute a local
-unpacked Docker size for compressed transfer size.
+The interpretation preserves both rounds, tail latency, reliability counts,
+and the distinction between progressive and completion-buffered delivery.
+Aggregate RTF under concurrency is not replaced by mean per-request RTF.
+Process RSS and GPU-visible unified memory remain separate measures. Registry
+compressed-size comparisons are permitted only when both values are backed by
+registry evidence; local unpacked Docker size is never substituted.

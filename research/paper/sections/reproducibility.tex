@@ -19,16 +19,17 @@ repository revision.
     \midrule
     Evidence state & \PaperEvidenceState \\
     Native Git commit & \NativeCommit \\
+    Stock Git commit & \StockCommit \\
     Native local image ID & \NativeLocalImageId \\
     Native OCI digest & \NativeImageDigest \\
     Stock local image ID & \StockLocalImageId \\
     Stock OCI digest & \StockImageDigest \\
-    Shared model revision & \code{5ecdb67327fd37bb2e042aab12ff7391903235d3} \\
-    Native model-artifact SHA-256 & \NativeModelArtifactSha \\
-    Stock model-artifact SHA-256 & \StockModelArtifactSha \\
+    Shared model revision & \ModelRevision \\
+    Native model-artifact evidence SHA-256 & \NativeModelArtifactEvidenceSha \\
+    Stock model-artifact evidence SHA-256 & \StockModelArtifactEvidenceSha \\
+    Workload SHA-256 & \WorkloadSha \\
     Evidence-manifest SHA-256 & \EvidenceManifestSha \\
     Evidence timestamp & \EvidenceTimestamp \\
-    Evidence bundle & \EvidenceBundleUri \\
     \bottomrule
   \end{tabularx}
 \end{table}
@@ -39,8 +40,9 @@ paper must point to an immutable release tag and OCI digest, not only to a
 mutable branch. The release archive must contain the English LaTeX source,
 bibliography, vector figures, generated plot data, final paper PDF, benchmark
 report PDF, evidence manifest, and checksums. Large raw evidence may be hosted
-separately when the repository cannot carry it, but the public URI and manifest
-digest must remain stable.
+separately when the repository cannot carry it. Any publication record for
+that bundle is external to schema v1.2 and must not be inferred from a local
+path or mutable URL.
 
 Reproduction requires a clean pull by immutable image digest, an idle supported
 GPU, the documented hardened run command, a successful full-pipeline readiness
