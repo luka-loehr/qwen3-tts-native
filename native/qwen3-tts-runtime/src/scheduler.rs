@@ -8,7 +8,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use crate::{
-    AudioPacketDescriptor, EngineConfig, GenerationConfig, MAX_CODEC_FRAMES,
+    AudioPacketDescriptor, EngineConfig, FinishReason, GenerationConfig, MAX_CODEC_FRAMES,
     MAX_CONCURRENT_REQUESTS, MAX_INSTRUCT_BYTES, MAX_PACKET_FRAMES, MAX_PCM_RING_SLOTS,
     MAX_TEXT_BYTES, RequestInput, RequestInputError, RequestMetrics, RequestPhase, RequestRecord,
     RuntimeStatus, SAMPLE_RATE, SAMPLES_PER_CODEC_FRAME,
@@ -84,6 +84,7 @@ pub struct BackendStarted<Session> {
 pub struct BackendPacket {
     pub codec_frames: u32,
     pub is_final: bool,
+    pub finish_reason: FinishReason,
     pub talker_gpu_microseconds: f32,
     pub codec_gpu_microseconds: f32,
     pub peak_request_device_bytes: u64,
@@ -139,6 +140,7 @@ pub trait StreamingBackend: Send + 'static {
 
 pub struct OwnedAudioPacket {
     pub descriptor: AudioPacketDescriptor,
+    finish_reason: FinishReason,
     pcm: Option<Vec<i16>>,
     recycler: Weak<RequestShared>,
 }
@@ -162,7 +164,9 @@ impl fmt::Debug for OwnedAudioPacket {
 
 impl PartialEq for OwnedAudioPacket {
     fn eq(&self, other: &Self) -> bool {
-        self.descriptor == other.descriptor && self.pcm() == other.pcm()
+        self.descriptor == other.descriptor
+            && self.finish_reason == other.finish_reason
+            && self.pcm() == other.pcm()
     }
 }
 
@@ -198,7 +202,7 @@ impl std::error::Error for PollError {}
 pub enum PollOutcome {
     Packet(OwnedAudioPacket),
     WouldBlock,
-    EndOfStream,
+    EndOfStream(FinishReason),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -275,6 +279,7 @@ struct RequestState {
     packets: VecDeque<OwnedAudioPacket>,
     packet_capacity: usize,
     producer_finished: bool,
+    finish_reason: FinishReason,
     retired: bool,
     cancel_requested: bool,
     failure: Option<BackendError>,
@@ -309,6 +314,7 @@ impl RequestShared {
                 packets: VecDeque::with_capacity(packet_capacity),
                 packet_capacity,
                 producer_finished: false,
+                finish_reason: FinishReason::None,
                 retired: false,
                 cancel_requested: false,
                 failure: None,
@@ -378,6 +384,7 @@ impl RequestShared {
         if packet.descriptor.is_final != 0 {
             state.phase = RequestPhase::Draining;
             state.producer_finished = true;
+            state.finish_reason = packet.finish_reason;
         }
         state.packets.push_back(packet);
         self.changed.notify_all();
@@ -388,6 +395,7 @@ impl RequestShared {
         let mut state = lock_unpoisoned(&self.state);
         state.cancel_requested = true;
         state.phase = RequestPhase::Cancelled;
+        state.finish_reason = FinishReason::None;
         state.packets.clear();
         state.producer_finished = true;
         self.changed.notify_all();
@@ -396,6 +404,7 @@ impl RequestShared {
     fn mark_failed(&self, error: impl Into<BackendError>) {
         let mut state = lock_unpoisoned(&self.state);
         state.phase = RequestPhase::Failed;
+        state.finish_reason = FinishReason::None;
         state.packets.clear();
         state.producer_finished = true;
         state.failure = Some(error.into());
@@ -499,6 +508,10 @@ impl RequestHandle {
         lock_unpoisoned(&self.shared.state).metrics
     }
 
+    pub fn finish_reason(&self) -> FinishReason {
+        lock_unpoisoned(&self.shared.state).finish_reason
+    }
+
     pub fn poll(&self, timeout: Duration) -> Result<PollOutcome, PollError> {
         let deadline = Instant::now().checked_add(timeout);
         let mut state = lock_unpoisoned(&self.shared.state);
@@ -530,7 +543,7 @@ impl RequestHandle {
             }
             if state.producer_finished {
                 state.phase = RequestPhase::Completed;
-                return Ok(PollOutcome::EndOfStream);
+                return Ok(PollOutcome::EndOfStream(state.finish_reason));
             }
             if timeout.is_zero() {
                 return Ok(PollOutcome::WouldBlock);
@@ -565,6 +578,7 @@ impl RequestHandle {
                 return Ok(());
             }
             state.cancel_requested = true;
+            state.finish_reason = FinishReason::None;
             state.packets.clear();
             self.shared.changed.notify_all();
         }
@@ -1207,6 +1221,7 @@ fn step_eligible<B: StreamingBackend>(
                 }
                 let owned = OwnedAudioPacket {
                     descriptor,
+                    finish_reason: packet.finish_reason,
                     pcm: Some(pcm),
                     recycler: Arc::downgrade(&request.shared),
                 };
@@ -1263,6 +1278,9 @@ fn validate_backend_packet(
     if packet.codec_frames == 0 || packet.codec_frames > packet_frames {
         return Err("backend emitted an invalid codec frame count");
     }
+    if packet.is_final != packet.finish_reason.is_terminal() {
+        return Err("backend final flag and finish reason disagree");
+    }
     let expected = packet.codec_frames as usize * SAMPLES_PER_CODEC_FRAME as usize;
     if expected > pcm.len() {
         return Err("backend PCM output exceeds its caller-owned buffer");
@@ -1293,6 +1311,7 @@ mod tests {
 
     struct ScriptedBackend {
         steps: usize,
+        finish_reason: FinishReason,
         maximum_start_batch: Arc<AtomicUsize>,
         maximum_batch: Arc<AtomicUsize>,
     }
@@ -1332,6 +1351,11 @@ mod tests {
             Ok(BackendPacket {
                 codec_frames: frames,
                 is_final: session.step == self.steps,
+                finish_reason: if session.step == self.steps {
+                    self.finish_reason
+                } else {
+                    FinishReason::None
+                },
                 talker_gpu_microseconds: 10.0,
                 codec_gpu_microseconds: 5.0,
                 peak_request_device_bytes: 2_048,
@@ -1376,6 +1400,7 @@ mod tests {
             config,
             ScriptedBackend {
                 steps,
+                finish_reason: FinishReason::CodecEos,
                 maximum_start_batch: Arc::new(AtomicUsize::new(0)),
                 maximum_batch: Arc::new(AtomicUsize::new(0)),
             },
@@ -1397,6 +1422,7 @@ mod tests {
         let request = scheduler
             .start(input(), GenerationConfig::default())
             .unwrap();
+        assert_eq!(request.finish_reason(), FinishReason::None);
         let mut packets = Vec::new();
         loop {
             match request.poll(Duration::from_secs(1)).unwrap() {
@@ -1404,7 +1430,10 @@ mod tests {
                     assert_eq!(packet.pcm().len(), SAMPLES_PER_CODEC_FRAME as usize);
                     packets.push(packet.descriptor);
                 }
-                PollOutcome::EndOfStream => break,
+                PollOutcome::EndOfStream(reason) => {
+                    assert_eq!(reason, FinishReason::CodecEos);
+                    break;
+                }
                 PollOutcome::WouldBlock => panic!("worker did not make progress"),
             }
         }
@@ -1417,6 +1446,7 @@ mod tests {
         );
         assert_eq!(packets[2].is_final, 1);
         assert_eq!(request.phase(), RequestPhase::Completed);
+        assert_eq!(request.finish_reason(), FinishReason::CodecEos);
         let metrics = request.metrics();
         assert_eq!(metrics.emitted_packets, 3);
         assert_eq!(
@@ -1426,6 +1456,36 @@ mod tests {
         assert_eq!(metrics.peak_request_device_bytes, 2_048);
         assert!(metrics.first_audio_microseconds >= metrics.first_codec_frame_microseconds);
         assert!(request.wait_retired(Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn max_codec_frames_finish_reason_survives_scheduler_delivery() {
+        let scheduler = Scheduler::new(
+            EngineConfig {
+                max_concurrent_requests: 1,
+                pcm_ring_slots: 1,
+                ..EngineConfig::default()
+            },
+            ScriptedBackend {
+                steps: 1,
+                finish_reason: FinishReason::MaxCodecFrames,
+                maximum_start_batch: Arc::new(AtomicUsize::new(0)),
+                maximum_batch: Arc::new(AtomicUsize::new(0)),
+            },
+        )
+        .unwrap();
+        let request = scheduler
+            .start(input(), GenerationConfig::default())
+            .unwrap();
+        assert!(matches!(
+            request.poll(Duration::from_secs(1)).unwrap(),
+            PollOutcome::Packet(_)
+        ));
+        assert_eq!(
+            request.poll(Duration::from_secs(1)).unwrap(),
+            PollOutcome::EndOfStream(FinishReason::MaxCodecFrames)
+        );
+        assert_eq!(request.finish_reason(), FinishReason::MaxCodecFrames);
     }
 
     #[test]
@@ -1458,6 +1518,7 @@ mod tests {
             },
             ScriptedBackend {
                 steps: 1,
+                finish_reason: FinishReason::CodecEos,
                 maximum_start_batch: Arc::clone(&maximum_start_batch),
                 maximum_batch,
             },
@@ -1497,6 +1558,7 @@ mod tests {
             .expect("retired request must release capacity synchronously");
         replacement.cancel().unwrap();
         assert_eq!(request.poll(Duration::ZERO), Err(PollError::Cancelled));
+        assert_eq!(request.finish_reason(), FinishReason::None);
     }
 
     #[test]
@@ -1527,6 +1589,7 @@ mod tests {
                 Ok(BackendPacket {
                     codec_frames: 1,
                     is_final: true,
+                    finish_reason: FinishReason::CodecEos,
                     talker_gpu_microseconds: 0.0,
                     codec_gpu_microseconds: 0.0,
                     peak_request_device_bytes: 0,
@@ -1632,6 +1695,11 @@ mod tests {
             Ok(BackendPacket {
                 codec_frames: 1,
                 is_final: self.point != PanicPoint::Cancel,
+                finish_reason: if self.point == PanicPoint::Cancel {
+                    FinishReason::None
+                } else {
+                    FinishReason::CodecEos
+                },
                 talker_gpu_microseconds: 1.0,
                 codec_gpu_microseconds: 1.0,
                 peak_request_device_bytes: 0,
@@ -1751,6 +1819,7 @@ mod tests {
     fn unbounded_or_abi_incompatible_engine_configs_are_rejected() {
         let backend = || ScriptedBackend {
             steps: 1,
+            finish_reason: FinishReason::CodecEos,
             maximum_start_batch: Arc::new(AtomicUsize::new(0)),
             maximum_batch: Arc::new(AtomicUsize::new(0)),
         };

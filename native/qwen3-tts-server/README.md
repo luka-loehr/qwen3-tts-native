@@ -62,6 +62,9 @@ than HTTP DATA-frame boundaries, define audio packets. Every audio part carries
 `X-Sequence`, `X-First-Codec-Frame`, `X-First-Sample`, `X-Sample-Count`,
 `X-Codec-Frames`, and `X-Final`. The server rejects gaps, overlaps, packets
 after a final packet, and end-of-stream without explicit final audio.
+The JSON end event reports `finish_reason: "stop"` for codec EOS and
+`finish_reason: "length"` when `max_duration_seconds` is reached. Buffered WAV
+responses expose the same value in `x-finish-reason`.
 
 ## Native integration
 
@@ -86,12 +89,6 @@ requests, and start graceful HTTP shutdown. Cleanup budgets are validated to
 fit inside the global deadline. An independent operating-system watchdog forces
 exit code 124 if a blocking native or CUDA worker still prevents exit after the
 deadline; failure to create that watchdog forces exit code 125 immediately.
-
-The current public runtime reports a final packet but does not expose whether
-the Talker ended through codec EOS or `max_codec_frames`. Consequently the
-server reports `finish_reason: "completed"`; it does not invent a truncation
-reason. A future runtime terminal-reason field can be mapped in `engine.rs`
-without changing the HTTP pump.
 
 ## Audio and limits
 

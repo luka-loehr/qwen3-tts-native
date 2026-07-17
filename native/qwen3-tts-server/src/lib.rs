@@ -18,7 +18,7 @@ pub use config::{
     INTRINSIC_MAX_DURATION_SECONDS, ServerConfig,
 };
 pub use engine::{
-    EngineError, EngineErrorKind, EngineMetrics, EnginePacket, EnginePoll, EngineSynthesisRequest,
-    NativeEngineConfig, NativeRuntimeEngine, SpeechEngine, SpeechRequest,
+    EngineError, EngineErrorKind, EngineFinishReason, EngineMetrics, EnginePacket, EnginePoll,
+    EngineSynthesisRequest, NativeEngineConfig, NativeRuntimeEngine, SpeechEngine, SpeechRequest,
 };
 pub use server::{ShutdownController, build_router, build_router_with_shutdown};

@@ -19,7 +19,7 @@ pub use scheduler::{
     StreamingBackend,
 };
 pub use types::{
-    AudioPacketDescriptor, EngineConfig, GenerationConfig, Language, RequestInput,
+    AudioPacketDescriptor, EngineConfig, FinishReason, GenerationConfig, Language, RequestInput,
     RequestInputError, RequestMetrics, RequestPhase, RuntimeStatus,
 };
 

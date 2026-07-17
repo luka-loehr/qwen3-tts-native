@@ -183,7 +183,7 @@ pub unsafe extern "C" fn qwen3_tts_request_poll_v1(
                 Ok(RuntimeStatus::Ok)
             }
             Ok(PollOutcome::WouldBlock) => Ok(RuntimeStatus::WouldBlock),
-            Ok(PollOutcome::EndOfStream) => Ok(RuntimeStatus::EndOfStream),
+            Ok(PollOutcome::EndOfStream(_)) => Ok(RuntimeStatus::EndOfStream),
             Err(PollError::Cancelled) => Err(CallError::new(
                 RuntimeStatus::Cancelled,
                 "request was cancelled",
@@ -218,6 +218,24 @@ pub unsafe extern "C" fn qwen3_tts_request_metrics_v1(
             unsafe { borrow_const_handle(request, "request pointer is null or misaligned")? };
         unsafe { prepare_value_output(output, "metrics output pointer is null or misaligned")? };
         unsafe { output.write(request.request.metrics()) };
+        Ok(RuntimeStatus::Ok)
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn qwen3_tts_request_finish_reason_v1(
+    request: *const Qwen3TtsRequestV1,
+    output: *mut u32,
+    error: *mut c_char,
+    error_capacity: usize,
+) -> i32 {
+    ffi_call(error, error_capacity, || {
+        let request =
+            unsafe { borrow_const_handle(request, "request pointer is null or misaligned")? };
+        unsafe {
+            prepare_value_output(output, "finish reason output pointer is null or misaligned")?
+        };
+        unsafe { output.write(request.request.finish_reason() as u32) };
         Ok(RuntimeStatus::Ok)
     })
 }

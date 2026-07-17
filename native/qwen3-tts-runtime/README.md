@@ -34,6 +34,7 @@ surface contains exactly:
 - `qwen3_tts_request_poll_v1`;
 - `qwen3_tts_request_cancel_v1`;
 - `qwen3_tts_request_metrics_v1`;
+- `qwen3_tts_request_finish_reason_v1`;
 - `qwen3_tts_request_destroy_v1`.
 
 Callers provide versioned structures, PCM storage, and error buffers. A poll
@@ -86,7 +87,10 @@ For every delivered packet:
 - `first_sample` equals `first_codec_frame * 1920`;
 - `sample_count` equals `codec_frames * 1920`;
 - caller storage after `sample_count` remains untouched;
-- the final packet is followed by end-of-stream.
+- the final packet is followed by end-of-stream;
+- `qwen3_tts_request_finish_reason_v1` returns `CODEC_EOS` for a natural model
+  stop and `MAX_CODEC_FRAMES` when the configured safety ceiling truncates
+  generation. It returns `NONE` before a terminal packet is produced.
 
 ## Verification
 

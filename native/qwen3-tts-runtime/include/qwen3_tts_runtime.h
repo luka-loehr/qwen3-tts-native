@@ -42,6 +42,12 @@ typedef enum Qwen3TtsRuntimeStatusV1 {
     QWEN3_TTS_RUNTIME_INTERNAL = -9,
 } Qwen3TtsRuntimeStatusV1;
 
+typedef enum Qwen3TtsFinishReasonV1 {
+    QWEN3_TTS_FINISH_REASON_NONE = 0,
+    QWEN3_TTS_FINISH_REASON_CODEC_EOS = 1,
+    QWEN3_TTS_FINISH_REASON_MAX_CODEC_FRAMES = 2,
+} Qwen3TtsFinishReasonV1;
+
 typedef enum Qwen3TtsLanguageV1 {
     QWEN3_TTS_LANGUAGE_AUTO = 0,
     QWEN3_TTS_LANGUAGE_CHINESE = 1,
@@ -178,6 +184,13 @@ QWEN3_TTS_RUNTIME_API int32_t qwen3_tts_request_cancel_v1(
 QWEN3_TTS_RUNTIME_API int32_t qwen3_tts_request_metrics_v1(
     const Qwen3TtsRequestV1* request,
     Qwen3TtsRequestMetricsV1* output,
+    char* error,
+    size_t error_capacity
+);
+
+QWEN3_TTS_RUNTIME_API int32_t qwen3_tts_request_finish_reason_v1(
+    const Qwen3TtsRequestV1* request,
+    uint32_t* output,
     char* error,
     size_t error_capacity
 );
