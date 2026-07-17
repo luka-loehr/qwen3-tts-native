@@ -8,7 +8,7 @@ authors:
     given-names: Luka
 license: Apache-2.0
 repository-code: https://github.com/luka-loehr/qwen3-tts-native
-url: https://github.com/luka-loehr/qwen3-tts-native
+url: https://github.com/luka-loehr/qwen3-tts-native/releases/tag/v0.1.0
 version: 0.1.0
 date-released: 2026-07-17
 abstract: >-
