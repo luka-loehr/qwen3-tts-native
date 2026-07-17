@@ -16,17 +16,52 @@ use ffi::{
     SAMPLES_PER_FRAME, StartResult,
 };
 use report::{
-    Distribution, PreflightReport, QualificationGates, QualificationReport, RequestReport,
-    RuntimeMetricsReport, ScenarioReport,
+    Distribution, MultilingualCoverageReport, PreflightReport, QualificationGates,
+    QualificationReport, RequestReport, RuntimeMetricsReport, ScenarioReport,
 };
 use serde::Deserialize;
 
 const DEFAULT_REQUESTS_PER_CONCURRENCY: usize = 200;
 const DEFAULT_CONCURRENCIES: &[usize] = &[1, 3, 6];
+const DEFAULT_MULTILINGUAL_REQUESTS: usize = 24;
 const DEFAULT_PACKET_FRAMES: u32 = 4;
 const DEFAULT_RING_SLOTS: u32 = 3;
 const DEFAULT_MAX_CODEC_FRAMES: u32 = 4_096;
 const DEFAULT_REQUEST_TIMEOUT_SECONDS: u64 = 180;
+const REQUIRED_LANGUAGES: &[&str] = &[
+    "Auto",
+    "Chinese",
+    "English",
+    "French",
+    "German",
+    "Italian",
+    "Japanese",
+    "Korean",
+    "Portuguese",
+    "Russian",
+    "Spanish",
+];
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RunKind {
+    Suite,
+    Smoke,
+    Multilingual,
+}
+
+impl RunKind {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Suite => "suite",
+            Self::Smoke => "smoke",
+            Self::Multilingual => "multilingual",
+        }
+    }
+
+    const fn is_qualifying(self) -> bool {
+        !matches!(self, Self::Smoke)
+    }
+}
 
 fn main() {
     if let Err(error) = run() {
@@ -38,6 +73,13 @@ fn main() {
 fn run() -> Result<()> {
     let config = CliConfig::parse(env::args().skip(1))?;
     let corpus = load_corpus(&config.corpus)?;
+    if config.run_kind == RunKind::Multilingual && config.requests_per_concurrency != corpus.len() {
+        bail!(
+            "multilingual mode requires exactly one request per corpus entry: expected {}, found {}",
+            corpus.len(),
+            config.requests_per_concurrency
+        );
+    }
     let api = Api::load(&config.library)?;
     if api.abi_version() != 1 {
         bail!("runtime ABI version must be 1, found {}", api.abi_version());
@@ -87,15 +129,18 @@ fn run() -> Result<()> {
     }
 
     engine.destroy()?;
+    let multilingual_coverage = evaluate_multilingual_coverage(&corpus, &scenarios);
     let gates = evaluate_gates(
-        config.qualifying_run,
+        config.run_kind,
         config.requests_per_concurrency,
         &preflight,
         &scenarios,
+        &multilingual_coverage,
     );
     let report = QualificationReport {
-        schema_version: 2,
-        qualifying_run: config.qualifying_run,
+        schema_version: 3,
+        run_kind: config.run_kind.as_str().to_owned(),
+        qualifying_run: config.run_kind.is_qualifying(),
         runtime_abi_version: api.abi_version(),
         model_root: config.model_root.display().to_string(),
         library: config.library.display().to_string(),
@@ -104,6 +149,7 @@ fn run() -> Result<()> {
         corpus_entries: corpus.len(),
         warmup_requests: config.warmup_requests,
         requests_per_concurrency: config.requests_per_concurrency,
+        multilingual_coverage,
         preflight,
         scenarios,
         gates,
@@ -116,7 +162,7 @@ fn run() -> Result<()> {
     fs::write(&config.output, &encoded)
         .with_context(|| format!("failed to write {}", config.output.display()))?;
     println!("{encoded}");
-    if config.qualifying_run && !report.gates.passed {
+    if config.run_kind.is_qualifying() && !report.gates.passed {
         bail!("native Qwen3-TTS qualification gates failed");
     }
     Ok(())
@@ -124,7 +170,7 @@ fn run() -> Result<()> {
 
 #[derive(Debug)]
 struct CliConfig {
-    qualifying_run: bool,
+    run_kind: RunKind,
     library: PathBuf,
     model_root: PathBuf,
     corpus: PathBuf,
@@ -145,9 +191,10 @@ impl CliConfig {
     fn parse(arguments: impl Iterator<Item = String>) -> Result<Self> {
         let mut arguments = arguments.peekable();
         let mode = arguments.next().context(usage())?;
-        let qualifying_run = match mode.as_str() {
-            "suite" => true,
-            "smoke" => false,
+        let run_kind = match mode.as_str() {
+            "suite" => RunKind::Suite,
+            "smoke" => RunKind::Smoke,
+            "multilingual" => RunKind::Multilingual,
             _ => bail!("unknown command {mode:?}\n{}", usage()),
         };
         let mut library = None;
@@ -155,16 +202,18 @@ impl CliConfig {
         let mut corpus = None;
         let mut output = None;
         let mut audio_dir = None;
-        let mut save_audio_count = 3;
-        let mut requests_per_concurrency = if qualifying_run {
-            DEFAULT_REQUESTS_PER_CONCURRENCY
-        } else {
-            3
+        let mut save_audio_count = match run_kind {
+            RunKind::Multilingual => DEFAULT_MULTILINGUAL_REQUESTS,
+            RunKind::Suite | RunKind::Smoke => 3,
         };
-        let mut concurrencies = if qualifying_run {
-            DEFAULT_CONCURRENCIES.to_vec()
-        } else {
-            vec![1]
+        let mut requests_per_concurrency = match run_kind {
+            RunKind::Suite => DEFAULT_REQUESTS_PER_CONCURRENCY,
+            RunKind::Smoke => 3,
+            RunKind::Multilingual => DEFAULT_MULTILINGUAL_REQUESTS,
+        };
+        let mut concurrencies = match run_kind {
+            RunKind::Suite => DEFAULT_CONCURRENCIES.to_vec(),
+            RunKind::Smoke | RunKind::Multilingual => vec![1],
         };
         let mut warmup_requests = 3;
         let mut packet_frames = DEFAULT_PACKET_FRAMES;
@@ -204,8 +253,11 @@ impl CliConfig {
             }
         }
 
-        if qualifying_run && requests_per_concurrency < 200 {
+        if run_kind == RunKind::Suite && requests_per_concurrency < 200 {
             bail!("suite requires at least 200 completed requests per concurrency");
+        }
+        if run_kind == RunKind::Multilingual && concurrencies.as_slice() != [1] {
+            bail!("multilingual mode requires concurrency 1");
         }
         if requests_per_concurrency == 0 || packet_frames == 0 || ring_slots == 0 {
             bail!("request count, packet frames, and ring slots must be non-zero");
@@ -218,7 +270,7 @@ impl CliConfig {
         }
 
         Ok(Self {
-            qualifying_run,
+            run_kind,
             library: library.context("--library is required")?,
             model_root: model_root.context("--model-root is required")?,
             corpus: corpus.context("--corpus is required")?,
@@ -238,7 +290,9 @@ impl CliConfig {
 }
 
 fn usage() -> &'static str {
-    "usage: qwen3-tts-bench <suite|smoke> --library LIB --model-root DIR \\\n+     --corpus FILE.jsonl --output REPORT.json [--concurrency 1,3,6] \\\n+     [--requests-per-concurrency 200] [--audio-dir DIR --save-audio-count 3]"
+    "usage: qwen3-tts-bench <suite|smoke|multilingual> --library LIB --model-root DIR \
+     \n  --corpus FILE.jsonl --output REPORT.json [--concurrency 1,3,6] \
+     \n  [--requests-per-concurrency 200] [--audio-dir DIR --save-audio-count 3]"
 }
 
 fn next_value(arguments: &mut impl Iterator<Item = String>, flag: &str) -> Result<String> {
@@ -710,11 +764,57 @@ fn exercise_backpressure_and_cancellation<'api>(
     })
 }
 
+fn evaluate_multilingual_coverage(
+    corpus: &[CorpusEntry],
+    scenarios: &[ScenarioReport],
+) -> MultilingualCoverageReport {
+    let required_languages = REQUIRED_LANGUAGES
+        .iter()
+        .map(|language| (*language).to_owned())
+        .collect::<Vec<_>>();
+    let corpus_languages = corpus
+        .iter()
+        .map(|entry| entry.language.clone())
+        .collect::<BTreeSet<_>>();
+    let corpus_identifiers = corpus
+        .iter()
+        .map(|entry| entry.id.clone())
+        .collect::<BTreeSet<_>>();
+    let observed_languages = scenarios
+        .iter()
+        .flat_map(|scenario| scenario.requests.iter())
+        .map(|request| request.language.clone())
+        .collect::<BTreeSet<_>>();
+    let observed_identifiers = scenarios
+        .iter()
+        .flat_map(|scenario| scenario.requests.iter())
+        .map(|request| request.corpus_id.clone())
+        .collect::<BTreeSet<_>>();
+    let all_required_languages_observed = REQUIRED_LANGUAGES
+        .iter()
+        .all(|language| observed_languages.contains(*language));
+    let all_corpus_entries_exercised = corpus_identifiers
+        .iter()
+        .all(|identifier| observed_identifiers.contains(identifier));
+    let passed = all_required_languages_observed && all_corpus_entries_exercised;
+    MultilingualCoverageReport {
+        required_languages,
+        corpus_languages: corpus_languages.into_iter().collect(),
+        observed_languages: observed_languages.into_iter().collect(),
+        corpus_entries: corpus_identifiers.len(),
+        observed_corpus_entries: observed_identifiers.len(),
+        all_required_languages_observed,
+        all_corpus_entries_exercised,
+        passed,
+    }
+}
+
 fn evaluate_gates(
-    qualifying_run: bool,
+    run_kind: RunKind,
     requests_per_concurrency: usize,
     preflight: &PreflightReport,
     scenarios: &[ScenarioReport],
+    multilingual_coverage: &MultilingualCoverageReport,
 ) -> QualificationGates {
     let all_requests_completed = scenarios
         .iter()
@@ -722,6 +822,7 @@ fn evaluate_gates(
     let natural_codec_eos_all_requests = scenarios
         .iter()
         .all(|scenario| scenario.natural_codec_eos_requests == scenario.completed);
+    let multilingual_coverage_complete = multilingual_coverage.passed;
     let at_least_200_requests_per_scenario = requests_per_concurrency >= 200
         && scenarios.iter().all(|scenario| scenario.completed >= 200);
     let progressive_streaming_observed = scenarios
@@ -738,19 +839,23 @@ fn evaluate_gates(
     let first_audio_p95_below_200_ms_all_scenarios = scenarios
         .iter()
         .all(|scenario| scenario.caller_ttfa_ms.p95 < 200.0);
-    let passed = qualifying_run
-        && all_requests_completed
+    let common_gates_passed = all_requests_completed
         && natural_codec_eos_all_requests
-        && at_least_200_requests_per_scenario
         && progressive_streaming_observed
         && packet_positions_contiguous
         && exact_pcm_copy_bounds
         && backpressure_and_cancellation
         && rtf_below_one_all_scenarios
         && first_audio_p95_below_200_ms_all_scenarios;
+    let passed = match run_kind {
+        RunKind::Suite => common_gates_passed && at_least_200_requests_per_scenario,
+        RunKind::Multilingual => common_gates_passed && multilingual_coverage_complete,
+        RunKind::Smoke => false,
+    };
     QualificationGates {
         all_requests_completed,
         natural_codec_eos_all_requests,
+        multilingual_coverage_complete,
         at_least_200_requests_per_scenario,
         progressive_streaming_observed,
         packet_positions_contiguous,
@@ -792,7 +897,21 @@ fn safe_filename(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{PreflightReport, evaluate_gates, parse_concurrencies, safe_filename};
+    use super::{
+        Distribution, MultilingualCoverageReport, PreflightReport, RunKind, ScenarioReport,
+        evaluate_gates, parse_concurrencies, safe_filename,
+    };
+
+    fn passing_preflight() -> PreflightReport {
+        PreflightReport {
+            configured_capacity: 1,
+            capacity_filled: true,
+            overflow_returned_would_block: true,
+            all_requests_cancelled_and_destroyed: true,
+            capacity_recovered_after_cancellation: true,
+            passed: true,
+        }
+    }
 
     #[test]
     fn concurrency_parser_deduplicates_and_sorts() {
@@ -807,16 +926,73 @@ mod tests {
 
     #[test]
     fn empty_smoke_result_never_claims_qualification() {
-        let preflight = PreflightReport {
-            configured_capacity: 1,
-            capacity_filled: true,
-            overflow_returned_would_block: true,
-            all_requests_cancelled_and_destroyed: true,
-            capacity_recovered_after_cancellation: true,
+        let preflight = passing_preflight();
+        let multilingual_coverage = MultilingualCoverageReport {
+            required_languages: Vec::new(),
+            corpus_languages: Vec::new(),
+            observed_languages: Vec::new(),
+            corpus_entries: 0,
+            observed_corpus_entries: 0,
+            all_required_languages_observed: false,
+            all_corpus_entries_exercised: false,
+            passed: false,
+        };
+        let gates = evaluate_gates(RunKind::Smoke, 3, &preflight, &[], &multilingual_coverage);
+        assert!(!gates.passed);
+        assert!(!gates.at_least_200_requests_per_scenario);
+    }
+
+    #[test]
+    fn multilingual_gate_is_independent_from_the_200_request_suite() {
+        let coverage = MultilingualCoverageReport {
+            required_languages: Vec::new(),
+            corpus_languages: Vec::new(),
+            observed_languages: Vec::new(),
+            corpus_entries: 24,
+            observed_corpus_entries: 24,
+            all_required_languages_observed: true,
+            all_corpus_entries_exercised: true,
             passed: true,
         };
-        let gates = evaluate_gates(false, 3, &preflight, &[]);
-        assert!(!gates.passed);
+        let scenario = ScenarioReport {
+            concurrency: 1,
+            requested: 24,
+            completed: 24,
+            failed: 0,
+            wall_seconds: 15.0,
+            synthesized_audio_seconds: 20.0,
+            aggregate_rtf: 0.75,
+            requests_per_second: 1.6,
+            progressive_streaming_requests: 24,
+            natural_codec_eos_requests: 24,
+            exact_copy_bound_requests: 24,
+            host_rss_start_bytes: None,
+            host_rss_peak_bytes: None,
+            host_rss_end_bytes: None,
+            caller_ttfa_ms: Distribution {
+                p95: 80.0,
+                ..Distribution::default()
+            },
+            request_wall_ms: Distribution::default(),
+            request_rtf: Distribution {
+                p95: 0.8,
+                ..Distribution::default()
+            },
+            runtime_first_audio_ms: Distribution::default(),
+            runtime_prefill_ms: Distribution::default(),
+            peak_request_device_bytes: 0,
+            peak_request_host_bytes: 0,
+            requests: Vec::new(),
+        };
+        let gates = evaluate_gates(
+            RunKind::Multilingual,
+            24,
+            &passing_preflight(),
+            &[scenario],
+            &coverage,
+        );
+        assert!(gates.passed);
+        assert!(gates.multilingual_coverage_complete);
         assert!(!gates.at_least_200_requests_per_scenario);
     }
 }

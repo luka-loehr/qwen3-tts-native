@@ -5,6 +5,7 @@ use crate::ffi::RequestMetrics;
 #[derive(Debug, Serialize)]
 pub struct QualificationReport {
     pub schema_version: u32,
+    pub run_kind: String,
     pub qualifying_run: bool,
     pub runtime_abi_version: u32,
     pub model_root: String,
@@ -14,6 +15,7 @@ pub struct QualificationReport {
     pub corpus_entries: usize,
     pub warmup_requests: usize,
     pub requests_per_concurrency: usize,
+    pub multilingual_coverage: MultilingualCoverageReport,
     pub preflight: PreflightReport,
     pub scenarios: Vec<ScenarioReport>,
     pub gates: QualificationGates,
@@ -33,6 +35,7 @@ pub struct PreflightReport {
 pub struct QualificationGates {
     pub all_requests_completed: bool,
     pub natural_codec_eos_all_requests: bool,
+    pub multilingual_coverage_complete: bool,
     pub at_least_200_requests_per_scenario: bool,
     pub progressive_streaming_observed: bool,
     pub packet_positions_contiguous: bool,
@@ -40,6 +43,18 @@ pub struct QualificationGates {
     pub backpressure_and_cancellation: bool,
     pub rtf_below_one_all_scenarios: bool,
     pub first_audio_p95_below_200_ms_all_scenarios: bool,
+    pub passed: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MultilingualCoverageReport {
+    pub required_languages: Vec<String>,
+    pub corpus_languages: Vec<String>,
+    pub observed_languages: Vec<String>,
+    pub corpus_entries: usize,
+    pub observed_corpus_entries: usize,
+    pub all_required_languages_observed: bool,
+    pub all_corpus_entries_exercised: bool,
     pub passed: bool,
 }
 
