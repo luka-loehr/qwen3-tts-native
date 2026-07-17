@@ -16,8 +16,8 @@ concurrency, defaults to `1,3,6`, polls audio progressively, poisons the unused
 tail of every caller buffer, and fails if the runtime writes beyond the exact
 packet sample count. It also verifies contiguous request, packet, codec-frame,
 and sample positions and compares observed totals with runtime metrics. Report
-schema version 2 records `finish_reason` for every request and natural-EOS
-counts for every scenario.
+schema version 3 records `run_kind`, `finish_reason` for every request,
+natural-EOS counts for every scenario, and explicit multilingual coverage.
 
 ```bash
 cargo run --release -- suite \
@@ -27,6 +27,24 @@ cargo run --release -- suite \
   --output ../../benchmarks/results/native-qualification.json \
   --audio-dir ../../benchmarks/results/native-qualification-audio
 ```
+
+The independent multilingual release gate runs every corpus entry exactly once
+at B1 and saves every listening artifact:
+
+```bash
+cargo run --release -- multilingual \
+  --library build/libqwen3_tts_runtime.so \
+  --model-root /models/Qwen3-TTS-12Hz-1.7B-VoiceDesign \
+  --corpus ../../benchmarks/corpora/qwen3-tts-voice-design.jsonl \
+  --output ../../benchmarks/results/native-multilingual.json \
+  --audio-dir ../../benchmarks/results/native-multilingual-audio
+```
+
+`multilingual` passes only when all ten explicitly supported languages plus
+`Auto` are observed, every corpus identifier runs exactly once, all requests
+reach natural codec EOS, progressive delivery and copy bounds hold, and TTFA
+and RTF remain inside their gates. It does not pretend to be the separate
+200-request concurrency suite.
 
 The suite gate requires all of the following:
 
