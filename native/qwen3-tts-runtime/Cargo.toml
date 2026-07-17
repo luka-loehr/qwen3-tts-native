@@ -9,6 +9,7 @@ crate-type = ["rlib", "staticlib", "cdylib"]
 [dependencies]
 anyhow = "1.0"
 libc = "0.2"
+libloading = "0.9"
 qwen3-tts-native = { path = "../qwen3-tts-native" }
 qwen3-tts-native-codec = { path = "../qwen3-tts-native-codec" }
 serde_json = "1.0.150"
