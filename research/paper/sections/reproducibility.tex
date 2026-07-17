@@ -34,15 +34,18 @@ repository revision.
   \end{tabularx}
 \end{table}
 
-The intended public code location is
-\url{https://github.com/luka-loehr/qwen3-tts-native}. At publication time, the
-paper must point to an immutable release tag and OCI digest, not only to a
-mutable branch. The release archive must contain the English LaTeX source,
-bibliography, vector figures, generated plot data, final paper PDF, benchmark
-report PDF, evidence manifest, and checksums. Large raw evidence may be hosted
-separately when the repository cannot carry it. Any publication record for
-that bundle is external to schema v1.2 and must not be inferred from a local
-path or mutable URL.
+The public code location is
+\url{https://github.com/luka-loehr/qwen3-tts-native}. The immutable
+\href{https://github.com/luka-loehr/qwen3-tts-native/releases/tag/v0.1.0}{v0.1.0
+release record} binds the annotated source tag to the exact released OCI
+digest and publishes the English LaTeX source, bibliography, vector figures,
+generated plot data, final paper PDF, benchmark report PDF, evidence manifest,
+and checksums. A registry digest shown as \texttt{N/A} in
+Table~\ref{tab:artifact-identity} means that the controlled comparison captured
+only the local image identity; it never authorizes deployment by a mutable tag.
+Large raw evidence may be hosted separately when the repository cannot carry
+it. Any publication record for that bundle is external to schema v1.2 and must
+not be inferred from a local path or mutable URL.
 
 Reproduction requires a clean pull by immutable image digest, an idle supported
 GPU, the documented hardened run command, a successful full-pipeline readiness
