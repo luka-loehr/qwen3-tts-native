@@ -1,0 +1,156 @@
+{
+  "schema_version": "1.0",
+  "evidence_kind": "test_fixture",
+  "test_fixture_notice": "TEST FIXTURE - NOT BENCHMARK EVIDENCE. All values are synthetic layout inputs.",
+  "report": {
+    "benchmark_id": "layout-fixture-native-vs-sglang",
+    "title": "TEST FIXTURE: Native versus SGLang report layout",
+    "generated_at": "2000-01-01T00:00:00Z",
+    "authors": ["Qwen3 TTS Native contributors"]
+  },
+  "system": {
+    "host_model": "Synthetic layout host",
+    "hostname_alias": "fixture-host",
+    "os": "Fixture OS 1.0",
+    "kernel": "fixture-kernel",
+    "architecture": "fixture-arch",
+    "cpu": "Synthetic CPU",
+    "accelerator": "Synthetic accelerator",
+    "driver_version": "0.0-fixture",
+    "cuda_version": "0.0-fixture",
+    "physical_unified_memory_bytes": 137438953472,
+    "power_measurement_source": "Synthetic power fixture",
+    "notes": ["No hardware was measured for this fixture."]
+  },
+  "model": {
+    "repository": "fixture/qwen3-tts-1.7b-voicedesign",
+    "revision": "fixture0000001",
+    "variant": "1.7B VoiceDesign fixture",
+    "parameter_count": 1700000000,
+    "precision": "BF16 fixture",
+    "manifest_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "weight_files": [
+      {
+        "path": "fixture-model-00001-of-00002.safetensors",
+        "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+        "bytes": 2000000000
+      },
+      {
+        "path": "fixture-model-00002-of-00002.safetensors",
+        "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+        "bytes": 1600000000
+      }
+    ]
+  },
+  "workload": {
+    "corpus_sha256": "91f814bd93019f75b6cbec7bebdb695b2f39c277bf62ff9fa59c2f80d7b8af16",
+    "seed": 7000,
+    "sample_rate_hz": 24000,
+    "channels": 1,
+    "sample_format": "pcm_s16le",
+    "response_mode": "streaming",
+    "warmup_requests_per_engine": 2,
+    "minimum_measured_requests_per_profile": 2,
+    "profiles": [
+      {"id": "B1", "concurrency": 1, "repetitions_per_request": 1},
+      {"id": "B3", "concurrency": 3, "repetitions_per_request": 1},
+      {"id": "B6", "concurrency": 6, "repetitions_per_request": 1}
+    ],
+    "language_policy": "Synthetic German and English fixture labels",
+    "voice_description_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "generation": {
+      "temperature": 0.9,
+      "top_p": 0.95,
+      "top_k": 50,
+      "max_codec_frames": 300
+    }
+  },
+  "implementations": [
+    {
+      "id": "native",
+      "role": "native",
+      "name": "Native fixture implementation",
+      "version": "0.0-fixture",
+      "source_commit": "fixture-native-commit",
+      "source_url": "https://example.invalid/native-fixture",
+      "container_image": "example.invalid/native:fixture",
+      "image_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+      "image_size_bytes": 5200000000,
+      "startup_ms": 14000.0,
+      "model_repository": "fixture/qwen3-tts-1.7b-voicedesign",
+      "model_revision": "fixture0000001",
+      "model_precision": "BF16 fixture",
+      "model_manifest_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "api_protocol": "Synthetic HTTP fixture",
+      "streaming_semantics": "Synthetic progressive fixture",
+      "runtime_components": ["Synthetic Rust", "Synthetic CUDA"],
+      "command_sha256": "5555555555555555555555555555555555555555555555555555555555555555"
+    },
+    {
+      "id": "sglang",
+      "role": "sglang",
+      "name": "SGLang fixture implementation",
+      "version": "0.0-fixture",
+      "source_commit": "fixture-sglang-commit",
+      "source_url": "https://example.invalid/sglang-fixture",
+      "container_image": "example.invalid/sglang:fixture",
+      "image_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+      "image_size_bytes": 18000000000,
+      "startup_ms": 45000.0,
+      "model_repository": "fixture/qwen3-tts-1.7b-voicedesign",
+      "model_revision": "fixture0000001",
+      "model_precision": "BF16 fixture",
+      "model_manifest_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "api_protocol": "Synthetic HTTP fixture",
+      "streaming_semantics": "Synthetic buffered fixture",
+      "runtime_components": ["Synthetic SGLang", "Synthetic Python"],
+      "command_sha256": "6666666666666666666666666666666666666666666666666666666666666666"
+    }
+  ],
+  "methodology": {
+    "clock_source": "Synthetic monotonic fixture clock",
+    "ttfa_definition": "Synthetic elapsed time to first playable PCM fixture bytes.",
+    "rtf_definition": "Synthetic total latency divided by synthetic audio duration.",
+    "throughput_definition": "Synthetic successful requests and audio duration over synthetic run span.",
+    "memory_definition": "Synthetic peak process RSS and GPU-visible unified memory fixture values.",
+    "power_definition": "Synthetic average and peak whole-system fixture power.",
+    "energy_definition": "Synthetic sampled whole-system energy attributed to each fixture request.",
+    "startup_definition": "Synthetic process start to ready health response fixture duration.",
+    "sampling_interval_ms": 200,
+    "run_order": "Synthetic alternating Native and SGLang fixture order.",
+    "statistical_method": "Synthetic p50, p95, and p99 linear interpolation fixture.",
+    "environment_controls": [
+      "No real host, model, network, or accelerator was used.",
+      "All numeric values exist only to exercise report layout."
+    ]
+  },
+  "evidence_files": [
+    {
+      "role": "requests",
+      "path": "requests.jsonl",
+      "format": "jsonl",
+      "sha256": "91f814bd93019f75b6cbec7bebdb695b2f39c277bf62ff9fa59c2f80d7b8af16",
+      "bytes": 714
+    },
+    {
+      "role": "measurements",
+      "engine_id": "native",
+      "path": "measurements.native.jsonl",
+      "format": "jsonl",
+      "sha256": "9e734818921250dfe605425dc6b4fc7756c14b267d86aa0c65f74fc8683c23d4",
+      "bytes": 2818
+    },
+    {
+      "role": "measurements",
+      "engine_id": "sglang",
+      "path": "measurements.sglang.jsonl",
+      "format": "jsonl",
+      "sha256": "b734b204571e1a647ed5d4401b5ad42dc0bd59796efd899ffaff9f3cfd57041a",
+      "bytes": 2759
+    }
+  ],
+  "limitations": [
+    "This is synthetic layout data and is not a benchmark.",
+    "No result in this fixture may be cited as measured performance."
+  ]
+}
