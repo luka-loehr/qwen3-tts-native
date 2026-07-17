@@ -11,9 +11,11 @@ resource use, and reliability. It does not evaluate perceptual speech quality.
 The production matrix contains 12 runs: two implementations, concurrency
 profiles B1, B3, and B6, and two rounds. Each run performs 24 unmeasured warm-up
 requests followed by at least 200 successfully completed measured requests.
-Only one subject may use CUDA during a run. Subject order alternates between
-rounds so persistent host state and thermal drift do not always favor the same
-implementation.
+Only one subject may use CUDA during a run. The six stock runs execute first,
+followed by one controlled container transition and the six Native runs. This
+grouped order avoids repeated eviction and loading of the roughly 109~GB stock
+working set, but it does not counterbalance persistent host-state or thermal
+order effects; Section~\ref{sec:limitations} treats that as a limitation.
 
 Both subjects receive the exact same ordered JSONL workload, model repository
 and revision, language, text, VoiceDesign description, seed, portable sampling
