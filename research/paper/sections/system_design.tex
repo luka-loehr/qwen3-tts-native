@@ -1,0 +1,52 @@
+\section{System Design}
+\label{sec:system-design}
+
+\begin{figure}[t]
+  \centering
+  \input{figures/system_architecture}
+  \caption{Implemented online path. Immutable model weights are shared, while
+  mutable request state and CUDA execution resources are request-local. The
+  diagram is a vector TikZ source and encodes no benchmark result.}
+  \label{fig:architecture}
+\end{figure}
+
+Figure~\ref{fig:architecture} shows the complete online path. A single process
+owns HTTP validation, scheduling, model execution, neural decoding, and
+response delivery. The server loads one shared engine, creates a fixed-capacity
+scheduler, and completes a real one-frame native warm-up before binding its
+listener. Readiness therefore establishes that the model and end-to-end native
+pipeline have produced a valid PCM packet; it is not merely a process-liveness
+signal.
+
+\subsection{Admission and ownership}
+
+The canonical synthesis endpoint validates bounded JSON before attempting
+engine admission. Text, textual VoiceDesign instruction, language, duration,
+sampling settings, and response mode are checked at this boundary. Each
+admitted request receives a unique identity and owns its cancellation state,
+generation session, decoder session, CUDA stream and events, cuBLAS handle,
+random state, PCM buffers, and scheduler slot. Immutable model weights are
+shared across sessions.
+
+The scheduler supports one through six active slots. Pending starts can be
+coalesced for at most 2 ms, but capacity is fixed and exhaustion is explicit.
+Each request has three reusable PCM buffers. A request advances only when a
+buffer and queue position are available, so a slow client applies backpressure
+instead of causing unbounded audio allocation.
+
+\subsection{Packet cadence}
+
+One codec frame represents 1,920 output samples, or 80 ms at 24 kHz. The first
+decoder step requests one frame to minimize first-audio latency. Subsequent
+steps request up to four frames and therefore produce at most 7,680 samples per
+packet. This policy bounds buffering without forcing every later step to pay
+the overhead of a one-frame packet.
+
+\subsection{Lifecycle and failure handling}
+
+Natural codec end-of-sequence closes a request after all owned PCM has been
+delivered. Cancellation is propagated through the scheduler to native state,
+and resource retirement is bounded. Model-contract, ABI, CUDA, packet-order,
+and state-transition failures are surfaced instead of silently falling back to
+a different implementation. The process does not attempt unsafe in-process
+recovery of a stuck CUDA session.

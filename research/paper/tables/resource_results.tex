@@ -1,0 +1,15 @@
+\begin{table}[t]
+  \centering
+  \caption{Measured-phase resource and energy results. GPU-visible unified memory is reported separately from process RSS and is not added to it.}
+  \label{tab:resource-results}
+  \small
+  \resizebox{\textwidth}{!}{%
+    \begin{tabular}{llccccc}
+      \toprule
+      Engine & Round & Profile & Peak RSS (GiB) & GPU-visible memory (GiB) & Mean power (W) & Energy/audio min (J) \\
+      \midrule
+      \ResourceResultRows
+      \bottomrule
+    \end{tabular}%
+  }
+\end{table}

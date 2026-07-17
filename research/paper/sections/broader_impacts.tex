@@ -1,0 +1,21 @@
+\section{Ethics and Broader Impacts}
+
+Description-conditioned speech can improve accessibility, multilingual
+interfaces, educational tools, and local control over speech infrastructure.
+It can also be used to create misleading or harassing audio. Removing
+reference-audio cloning from this runtime narrows one misuse path but does not
+make generated speech inherently benign: a textual description may still seek
+to evoke a recognizable person, role, or demographic stereotype.
+
+Deployers should require authorization, rate limits, abuse monitoring,
+appropriate disclosure that audio is synthetic, and a retention policy for
+input text and generated audio. Applications involving an identifiable person
+require consent and applicable legal review. Provenance or watermarking should
+be evaluated where the deployment context supports it; this runtime does not
+claim to add an inaudible watermark.
+
+Benchmark publication also has an integrity obligation. Failed trials,
+contamination, unsupported languages, unknown EOS state, unavailable sensors,
+and negative results must remain visible. Energy measurements from one device
+should not be generalized into a lifecycle environmental claim without a
+broader accounting boundary.

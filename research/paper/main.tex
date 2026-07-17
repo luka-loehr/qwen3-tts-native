@@ -1,0 +1,68 @@
+\documentclass[10pt]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage[letterpaper,margin=0.82in]{geometry}
+\usepackage{microtype}
+\usepackage{amsmath}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{siunitx}
+\usepackage{graphicx}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+\usepackage[hidelinks]{hyperref}
+
+\hypersetup{
+  pdftitle={Qwen3-TTS Native: A Rust and CUDA Runtime for Streaming VoiceDesign Inference on NVIDIA DGX Spark},
+  pdfauthor={Luka Loehr},
+  pdfsubject={Native streaming text-to-speech inference},
+  pdfkeywords={text-to-speech, Qwen3-TTS, Rust, CUDA, streaming inference}
+}
+
+\newcommand{\projectname}{Qwen3-TTS Native}
+\newcommand{\modelname}{Qwen3-TTS-12Hz-1.7B-VoiceDesign}
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\PendingEvidence}{\texttt{PENDING}}
+\newcommand{\EvidenceWarning}{%
+  \begin{center}
+    \fbox{\parbox{0.92\linewidth}{\centering\small
+      Quantitative evidence is pending final validation. This source is a
+      buildable research-paper scaffold, not a publishable result.}}
+  \end{center}}
+
+\input{data/evidence_placeholders}
+
+\title{\textbf{Qwen3-TTS Native: A Rust and CUDA Runtime for\\
+Streaming VoiceDesign Inference on NVIDIA DGX Spark}}
+\author{Luka L\"ohr}
+\date{July 2026}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+\input{sections/abstract}
+\end{abstract}
+
+\input{sections/introduction}
+\input{sections/related_work}
+\input{sections/system_design}
+\input{sections/native_implementation}
+\input{sections/streaming_api}
+\input{sections/evaluation}
+\input{sections/results}
+\input{sections/limitations}
+\input{sections/reproducibility}
+\input{sections/broader_impacts}
+\input{sections/conclusion}
+
+\bibliographystyle{plain}
+\bibliography{references}
+
+\end{document}

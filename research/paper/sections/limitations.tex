@@ -1,0 +1,28 @@
+\section{Limitations}
+
+The implementation and planned measurements target one platform:
+\code{linux/arm64} on NVIDIA DGX Spark with \code{sm\_121}. They do not
+establish portability or performance on x86-64, another GPU architecture, a
+multi-GPU server, or a cloud accelerator. Two rounds on one host reduce some
+ordering bias but cannot characterize population-level hardware variance.
+
+The runtime supports only the pinned 1.7B, 12-Hz VoiceDesign checkpoint. It
+does not implement voice cloning, reference-audio conditioning, speaker
+enrollment, Base or CustomVoice checkpoints, or the 0.6B model. Explicit
+language identifiers are limited to Chinese, English, Japanese, Korean,
+German, French, Russian, Portuguese, Spanish, and Italian, plus automatic
+selection. Unsupported languages are rejected rather than advertised from
+anecdotal output.
+
+The benchmark measures serving behavior, not speech naturalness,
+intelligibility, instruction adherence, accent, or listener preference. A
+faster result would not by itself demonstrate better audio. Conversely, the
+same released checkpoint does not guarantee bit-identical waveforms across two
+different implementations unless a separate parity test establishes that
+property.
+
+The native and stock HTTP paths do not expose identical termination semantics.
+Native reports natural EOS explicitly; stock raw PCM does not. The evaluation
+therefore preserves Stock EOS as unknown even when transport completion and a
+conservative length gate succeed. Finally, the current native path does not use
+CUDA Graph capture or replay, so this paper makes no claim about their effect.

@@ -1,0 +1,15 @@
+\begin{table}[t]
+  \centering
+  \caption{Per-run performance results. TTFA is measured at the client-visible first non-empty PCM byte. Aggregate RTF is scenario wall time divided by successful generated-audio duration.}
+  \label{tab:benchmark-results}
+  \small
+  \resizebox{\textwidth}{!}{%
+    \begin{tabular}{llcccccc}
+      \toprule
+      Engine & Round & Profile & Concurrency & Successes & TTFA p50 (ms) & TTFA p95 (ms) & Aggregate RTF \\
+      \midrule
+      \BenchmarkResultRows
+      \bottomrule
+    \end{tabular}%
+  }
+\end{table}

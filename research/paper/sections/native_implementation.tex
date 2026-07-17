@@ -1,0 +1,53 @@
+\section{Native Implementation}
+
+\subsection{Artifact boundary}
+
+The runtime consumes the immutable VoiceDesign snapshot at revision
+\code{5ecdb67327fd37bb2e042aab12ff7391903235d3}. Build-time and startup checks
+validate configuration fields, tensor metadata, artifact hashes, and the
+native ABI before serving traffic. The production image carries the
+VoiceDesign weights and decoder-only speech-tokenizer material required for
+inference. It excludes the tokenizer encoder, Base and CustomVoice checkpoints,
+reference-audio functionality, and 0.6B weights.
+
+\subsection{Talker and residual predictor}
+
+The Rust model layer parses configuration and tokenizer artifacts, constructs
+the VoiceDesign prompt from text, instruction, and official language name, and
+owns the request lifecycle. Shared weights are uploaded once. Each session
+retains independent key-value caches, workspaces, counters, random state, CUDA
+stream, and cuBLAS handle.
+
+For each codec frame, the talker predicts the semantic code and the native
+15-step predictor produces the residual codebook values, yielding 16 codes per
+frame. Sampling state is local to the request and is initialized from the
+effective seed. Predictor and talker controls remain distinct; the predictor's
+repetition penalty is fixed by the implemented model contract.
+
+\subsection{Device-to-device handoff}
+
+The production ABI avoids a codec-token round trip through host memory. The
+talker exposes its device-resident frame and records a producer-ready CUDA
+event. A non-blocking staging stream waits on that event, copies each frame into
+a bounded device packet, and records completion. The decoder waits on the
+packet-ready event and records a consumed event before the staging slot can be
+reused. Tickets and device identity are checked so stale or cross-device state
+cannot be accepted accidentally.
+
+\subsection{Incremental decoder}
+
+The decoder shares immutable weights but gives each active request its own
+incremental neural state, stream, cuBLAS handle, events, histories, and bounded
+PCM staging. CUDA kernels and cuBLAS execute the decoder path and clamp output
+into signed 16-bit PCM. The current implementation uses non-blocking streams,
+events, custom kernels, and cuBLAS. It does not claim CUDA Graph capture or
+replay.
+
+\subsection{Production image}
+
+The runtime container targets \code{linux/arm64} and real \code{sm\_121} SASS
+without a PTX fallback. The final stage contains CUDA runtime and the required
+cuBLAS families but excludes compilers, development packages, Python, Node.js,
+PyTorch, SGLang, vLLM, TensorRT, cuDNN, NPP, cuSPARSE, and NCCL. It runs as an
+unprivileged user and is designed for a read-only root filesystem with dropped
+Linux capabilities.

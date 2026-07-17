@@ -1,0 +1,27 @@
+\begin{tikzpicture}[
+  node distance=4.5mm,
+  box/.style={
+    draw=black,
+    rounded corners=1.5pt,
+    align=center,
+    inner sep=5pt,
+    text width=0.78\linewidth,
+    font=\small
+  },
+  arrow/.style={-{Stealth[length=2.2mm]},thick}
+]
+  \node[box] (request) {HTTP request: text, VoiceDesign description, language, seed, and output mode};
+  \node[box,below=of request] (server) {Rust HTTP server: validation, request identity, admission, cancellation, and response framing};
+  \node[box,below=of server] (scheduler) {Fixed-capacity Rust scheduler: request-local state, bounded PCM rings, and backpressure};
+  \node[box,below=of scheduler] (talker) {VoiceDesign talker and 15-step code predictor on CUDA/cuBLAS};
+  \node[box,below=of talker] (handoff) {CUDA-event-ordered device-to-device handoff of 16 codec codes per frame};
+  \node[box,below=of handoff] (decoder) {Stateful native neural speech decoder on CUDA/cuBLAS};
+  \node[box,below=of decoder] (response) {Progressive 24 kHz PCM multipart stream or bounded buffered WAV response};
+
+  \draw[arrow] (request) -- (server);
+  \draw[arrow] (server) -- (scheduler);
+  \draw[arrow] (scheduler) -- (talker);
+  \draw[arrow] (talker) -- (handoff);
+  \draw[arrow] (handoff) -- (decoder);
+  \draw[arrow] (decoder) -- (response);
+\end{tikzpicture}

@@ -1,0 +1,38 @@
+\section{Introduction}
+
+Modern text-to-speech systems increasingly combine a language-model-style
+generator with a learned neural speech codec. Qwen3-TTS follows this pattern
+and exposes textual VoiceDesign conditioning alongside multilingual synthesis
+\cite{hu2026qwen3tts}. Its 12-Hz family predicts a hierarchical set of speech
+codes and supports incremental waveform reconstruction. This structure is
+well-suited to interactive delivery, but the serving implementation determines
+whether model capability translates into bounded memory, low first-audio
+latency, and progressive output under concurrent load.
+
+\projectname{} is an inference-system implementation rather than a new model.
+It implements the pinned \modelname{} checkpoint as a native Rust/CUDA service
+for a specific hardware target: NVIDIA DGX Spark with a GB10 GPU and
+\code{sm\_121} machine code. It deliberately narrows the product surface to
+textual VoiceDesign. Reference-audio voice cloning, speaker enrollment, the
+speech-tokenizer encoder, other Qwen3-TTS variants, and the retired 0.6B model
+are out of scope.
+
+The implementation makes four systems contributions:
+
+\begin{enumerate}
+  \item a native execution path for the VoiceDesign talker, its 15-step code
+        predictor, and the decoder-only neural speech tokenizer;
+  \item an event-ordered device-to-device handoff that keeps generated codec
+        codes on the GPU until the decoder consumes them;
+  \item a fixed-capacity scheduler with request-local CUDA state, bounded PCM
+        ownership, backpressure, cancellation, and progressive HTTP framing;
+        and
+  \item a fail-closed evaluation protocol that compares an immutable native
+        candidate with a pinned stock SGLang-Omni comparator using one external
+        client and digest-bound raw evidence.
+\end{enumerate}
+
+The present source is intentionally conservative. It documents implemented
+mechanisms and a complete evaluation design, but does not turn exploratory
+measurements into publication claims. Section~\ref{sec:evaluation} defines the
+acceptance protocol, while Section~\ref{sec:results} remains evidence-gated.
