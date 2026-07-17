@@ -2,7 +2,7 @@
 name = "qwen3-tts-bench"
 version = "0.1.0"
 edition = "2024"
-license = "MIT"
+license = "Apache-2.0"
 description = "Qualification harness for the native Qwen3-TTS runtime ABI"
 
 [dependencies]

@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "model_id": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+  "revision": "5ecdb67327fd37bb2e042aab12ff7391903235d3",
+  "upstream_url": "https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign/tree/5ecdb67327fd37bb2e042aab12ff7391903235d3",
+  "upstream_project": "https://github.com/QwenLM/Qwen3-TTS",
+  "license": "Apache-2.0",
+  "artifact": "qwen3-tts-native-1.7b-voice-design",
+  "artifact_manifest_sha256": "9bb96a8d24bbb2d8933245e27083b8e7290346b776306dcb8a8f3aed68594527",
+  "voice_design_weights_sha256": "391e8db219f292c515297cdceeb43e4eae67cdde35fa57e79a6a8a532fca0522",
+  "speech_decoder_weights_sha256": "062caa0a31346422410e4c0d2494aec14be20553f8cb0b71a875329de99ce180",
+  "voice_clone_included": false,
+  "base_model_included": false,
+  "speech_tokenizer_encoder_included": false
+}
+
