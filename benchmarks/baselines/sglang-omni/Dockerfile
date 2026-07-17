@@ -62,7 +62,11 @@ RUN python3 -m pip install \
 # the OCI base. Resolved ancillary versions and `pip check` are captured by the
 # provenance script; the immutable comparator image digest is the runtime pin.
 WORKDIR /opt/sglang-omni
-RUN UV_NO_CACHE=1 uv pip install --system --no-build-isolation -e .
+RUN UV_NO_CACHE=1 uv pip install \
+      --system \
+      --break-system-packages \
+      --no-build-isolation \
+      -e .
 
 COPY requirements-qwen.txt /tmp/requirements-qwen.txt
 RUN python3 -m pip install \
