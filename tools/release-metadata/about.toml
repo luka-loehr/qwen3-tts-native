@@ -1,0 +1,17 @@
+# The accepted list is intentionally narrow and ordered. For an OR expression,
+# cargo-about selects the first acceptable license. Any new, unreviewed license
+# fails generation instead of silently appearing in a release.
+accepted = [
+    "Apache-2.0",
+    "MIT",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+]
+
+targets = ["aarch64-unknown-linux-gnu"]
+ignore-build-dependencies = false
+ignore-dev-dependencies = true
+ignore-transitive-dependencies = false
+private = { ignore = true }
