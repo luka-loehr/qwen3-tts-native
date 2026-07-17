@@ -1,0 +1,112 @@
+{
+  "schema_version": 1,
+  "operation": "qwen3-tts-native-multilingual-natural-eos-qualification-provenance",
+  "qualifying_run": true,
+  "gate_passed": true,
+  "source": {
+    "repository": "https://github.com/luka-loehr/qwen3-tts-native",
+    "qualification_client_commit": "ff061b6226fbd05ed20e2255e74c9d85d3f7c2c5",
+    "runtime_commit": "55b0d666e6f0e90f8064c60c7c49cc6bf95fa6a6",
+    "spark_worktree": "/home/administrator/codex-playground-worktrees/multilingual-1ad5e4e"
+  },
+  "model": {
+    "id": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+    "revision": "5ecdb67327fd37bb2e042aab12ff7391903235d3",
+    "artifact_manifest_sha256": "9bb96a8d24bbb2d8933245e27083b8e7290346b776306dcb8a8f3aed68594527"
+  },
+  "artifacts": {
+    "qualification_client": {
+      "sha256": "0413aa0d19608becc162d533efa51961a74a13232dd7f4a651db2a65137f9193"
+    },
+    "runtime_library": {
+      "sha256": "f45c112fd16ff629fa507d5f35a7e8d875f2f08690140f626a9e32e1da7f0264"
+    },
+    "talker_library": {
+      "sha256": "c91d6306402d00520a5f5688a8e0bfce1779011fc205a0ba1a5399304f6b9d84"
+    },
+    "codec_library": {
+      "sha256": "2262aea07134842b73cf7df66f5f321736341183b05f4a573bca3a8808670594"
+    },
+    "report": {
+      "path_in_repository": "benchmarks/results/native-multilingual-natural-eos-ff061b6.json",
+      "sha256": "feed352bdf6955db6cbc595dd2b1eff717faf3ce2898717ed084899424cdd052"
+    },
+    "audio_hash_manifest": {
+      "path_in_repository": "benchmarks/results/native-multilingual-natural-eos-ff061b6-audio.sha256",
+      "sha256": "cf9dad7b4e9fc1690c93ba7e97a3cb0a2433f7f58d04cce9e80b7fa0b4002d99",
+      "wav_files": 24
+    },
+    "deterministic_audio_archive": {
+      "filename": "qwen3-tts-native-multilingual-ff061b6.tar.gz",
+      "sha256": "2cccdd5b99cb8ab61a82c8e9962542c20cb0de4ee30e1a341c6907460d793796",
+      "bytes": 7755048
+    }
+  },
+  "coverage": {
+    "corpus_entries": 24,
+    "observed_corpus_entries": 24,
+    "required_language_modes": 11,
+    "observed_language_modes": 11,
+    "languages": [
+      "Auto",
+      "Chinese",
+      "English",
+      "French",
+      "German",
+      "Italian",
+      "Japanese",
+      "Korean",
+      "Portuguese",
+      "Russian",
+      "Spanish"
+    ],
+    "completed_requests": 24,
+    "natural_codec_eos_requests": 24,
+    "progressive_streaming_requests": 24,
+    "exact_copy_bound_requests": 24,
+    "failed_requests": 0
+  },
+  "performance": {
+    "synthesized_audio_seconds": 200.24,
+    "wall_seconds": 150.291725245,
+    "aggregate_rtf": 0.7505579566769877,
+    "ttfa_p95_ms": 78.465352,
+    "request_rtf_p95": 0.7630369160845587,
+    "peak_process_rss_bytes": 736919552,
+    "peak_request_device_bytes": 146528532,
+    "peak_request_host_bytes": 46080
+  },
+  "audio_signal_validation": {
+    "tool": "SoX v14.4.2",
+    "all_wav_headers_valid": true,
+    "channels": 1,
+    "sample_rate_hz": 24000,
+    "precision_bits": 16,
+    "encoding": "signed integer PCM",
+    "wav_files": 24,
+    "samples": 4805760,
+    "duration_seconds": 200.24,
+    "maximum_amplitude": 0.765656,
+    "minimum_amplitude": -0.741699,
+    "mean_amplitude": 0.000041,
+    "rms_amplitude": 0.089980,
+    "clipping_warnings": 0,
+    "automated_signal_gate_passed": true,
+    "human_intelligibility_review_is_separate": true
+  },
+  "spark_system_change_for_audio_validation": {
+    "authorized": true,
+    "installed_packages": {
+      "sox": "14.4.2+git20190427-4build4",
+      "libsox3:arm64": "14.4.2+git20190427-4build4",
+      "libsox-fmt-base:arm64": "14.4.2+git20190427-4build4",
+      "libsox-fmt-alsa:arm64": "14.4.2+git20190427-4build4",
+      "libgsm1:arm64": "1.0.22-1build1",
+      "libopencore-amrnb0:arm64": "0.1.6-1build1",
+      "libopencore-amrwb0:arm64": "0.1.6-1build1"
+    },
+    "additional_disk_bytes_reported_by_apt": 2512000,
+    "services_restarted": 0,
+    "containers_restarted": 0
+  }
+}
