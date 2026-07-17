@@ -71,8 +71,11 @@ installs a floating `latest` version.
 
 ## Network and lockfile behavior
 
-`generate.sh` performs one `cargo fetch --locked` step for the pinned ARM64
-graph. It then runs Cargo metadata, cargo-about, and cargo-cyclonedx offline.
+`generate.sh` performs one `cargo fetch --locked` step for the complete pinned
+lockfile graph. Fetching the complete graph is required because Cargo 1.95 can
+otherwise omit host-side metadata packages needed by the frozen license pass.
+It then filters metadata and generated output to the pinned ARM64 target while
+running cargo-about and cargo-cyclonedx offline.
 The source `Cargo.lock` SHA-256 is checked before and after every phase.
 
 Because cargo-cyclonedx writes beside its input manifest, the script creates a
