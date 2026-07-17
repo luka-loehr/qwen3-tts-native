@@ -16,6 +16,7 @@ use qwen3_tts_native_codec::{
     STATUS_STATE as CODEC_STATUS_STATE,
 };
 
+use crate::cuda_packet_stager::{CudaPacketStager, CudaRuntime};
 use crate::{
     BackendError, BackendPacket, BackendRequest, BackendStarted, BackendStepInput,
     MAX_CODEC_FRAMES, RuntimeStatus, StreamingBackend,
@@ -28,11 +29,14 @@ const CODEC_STATUS_ALLOCATION: i32 = -4;
 pub struct NativeBackend {
     talker: Arc<NativeTalkerModel>,
     codec: Arc<NativeCodecModel>,
+    cuda_stager_runtime: Option<Arc<CudaRuntime>>,
+    device_index: i32,
 }
 
 pub struct NativeBackendSession {
     talker: NativeTalkerSession,
     codec: NativeCodecSession,
+    cuda_stager: Option<CudaPacketStager>,
     first_packet: bool,
     peak_request_device_bytes: u64,
     peak_request_host_bytes: u64,
@@ -72,12 +76,39 @@ impl NativeBackend {
                     format!("failed to load codec model: {message}"),
                 )
             })?;
-        Ok(Self { talker, codec })
+        let cuda_stager_runtime = match (
+            talker.supports_device_frames(),
+            codec.supports_device_packets(),
+        ) {
+            (true, true) => Some(CudaRuntime::load().map_err(|message| {
+                BackendError::with_status(
+                    RuntimeStatus::Cuda,
+                    format!("failed to load CUDA packet stager: {message}"),
+                )
+            })?),
+            (false, false) => None,
+            (talker_device_frames, codec_device_packets) => {
+                return Err(BackendError::with_status(
+                    RuntimeStatus::Model,
+                    format!(
+                        "native device handoff ABI mismatch: talker device frames={talker_device_frames}, codec device packets={codec_device_packets}"
+                    ),
+                ));
+            }
+        };
+        Ok(Self {
+            talker,
+            codec,
+            cuda_stager_runtime,
+            device_index,
+        })
     }
 
     fn start_session(
         talker: &Arc<NativeTalkerModel>,
         codec: &Arc<NativeCodecModel>,
+        cuda_stager_runtime: Option<&Arc<CudaRuntime>>,
+        device_index: i32,
         request: BackendRequest,
     ) -> Result<BackendStarted<NativeBackendSession>, BackendError> {
         let started_at = Instant::now();
@@ -108,12 +139,26 @@ impl NativeBackend {
                 format!("failed to inspect codec session memory: {message}"),
             )
         })?;
+        let cuda_stager = cuda_stager_runtime
+            .map(|runtime| {
+                CudaPacketStager::new(Arc::clone(runtime), device_index).map_err(|message| {
+                    BackendError::with_status(
+                        RuntimeStatus::Cuda,
+                        format!("failed to create CUDA packet stager: {message}"),
+                    )
+                })
+            })
+            .transpose()?;
+        let stager_device_bytes = cuda_stager
+            .as_ref()
+            .map_or(0, CudaPacketStager::device_bytes);
         let peak_request_device_bytes = checked_sum(
             &[
                 talker_memory.talker_kv_bytes,
                 talker_memory.predictor_kv_bytes,
                 talker_memory.workspace_bytes,
                 codec_memory.device_bytes,
+                stager_device_bytes,
             ],
             "request device memory accounting overflowed",
         )?;
@@ -122,6 +167,7 @@ impl NativeBackend {
             session: NativeBackendSession {
                 talker: talker_session,
                 codec: codec_session,
+                cuda_stager,
                 first_packet: true,
                 peak_request_device_bytes,
                 peak_request_host_bytes: codec_memory.host_pinned_bytes,
@@ -169,6 +215,20 @@ impl NativeBackend {
             ));
         }
 
+        let packet = if session.cuda_stager.is_some() {
+            Self::step_device_session(session, requested_frames, pcm)?
+        } else {
+            Self::step_host_session(session, requested_frames, pcm)?
+        };
+        session.first_packet = false;
+        Ok(packet)
+    }
+
+    fn step_host_session(
+        session: &mut NativeBackendSession,
+        requested_frames: usize,
+        pcm: &mut [i16],
+    ) -> Result<BackendPacket, BackendError> {
         let mut frames = [[0_u16; CODEBOOKS]; CODEC_MAX_PACKET_FRAMES];
         let mut frame_count = 0_usize;
         let mut talker_gpu_microseconds = 0.0_f32;
@@ -215,7 +275,124 @@ impl NativeBackend {
                 "codec returned an inconsistent packet descriptor",
             ));
         }
-        session.first_packet = false;
+
+        Ok(BackendPacket {
+            codec_frames: frame_count as u32,
+            is_final,
+            talker_gpu_microseconds,
+            codec_gpu_microseconds: result.gpu_microseconds,
+            peak_request_device_bytes: session.peak_request_device_bytes,
+            peak_request_host_bytes: session.peak_request_host_bytes,
+        })
+    }
+
+    fn step_device_session(
+        session: &mut NativeBackendSession,
+        requested_frames: usize,
+        pcm: &mut [i16],
+    ) -> Result<BackendPacket, BackendError> {
+        let stager = session.cuda_stager.as_mut().ok_or_else(|| {
+            BackendError::with_status(RuntimeStatus::Internal, "CUDA packet stager is missing")
+        })?;
+        if stager.staged_frames() != 0 {
+            return Err(BackendError::with_status(
+                RuntimeStatus::State,
+                "CUDA packet stager contains an unconsumed packet",
+            ));
+        }
+
+        let mut frame_count = 0_usize;
+        let mut talker_gpu_microseconds = 0.0_f32;
+        while frame_count < requested_frames {
+            let Some(frame) = session.talker.begin_device_frame().map_err(|error| {
+                map_talker_error(
+                    "Talker device-frame generation failed",
+                    error,
+                    RuntimeStatus::State,
+                )
+            })?
+            else {
+                break;
+            };
+            let code_count = frame.code_count();
+            let device_index = frame.device_index();
+            let (device_codes, producer_ready_event) = unsafe { frame.raw_device_parts() };
+            let copied_event = unsafe {
+                stager.stage_frame(device_codes, code_count, producer_ready_event, device_index)
+            }
+            .map_err(|message| {
+                BackendError::with_status(
+                    RuntimeStatus::Cuda,
+                    format!("failed to stage Talker device frame: {message}"),
+                )
+            })?;
+            let finished =
+                unsafe { frame.finish_with_consumer_event(copied_event) }.map_err(|error| {
+                    map_talker_error(
+                        "Talker device-frame completion failed",
+                        error,
+                        RuntimeStatus::State,
+                    )
+                })?;
+            frame_count += 1;
+            talker_gpu_microseconds +=
+                (finished.talker_gpu_milliseconds + finished.predictor_gpu_milliseconds) * 1_000.0;
+            if session.talker.is_ended() {
+                break;
+            }
+        }
+        if frame_count == 0 {
+            return Err(BackendError::with_status(
+                RuntimeStatus::State,
+                "Talker ended without a decodable device codec frame",
+            ));
+        }
+
+        let view = stager.packet_view().map_err(|message| {
+            BackendError::with_status(
+                RuntimeStatus::State,
+                format!("failed to inspect staged CUDA packet: {message}"),
+            )
+        })?;
+        if view.frame_count != frame_count {
+            return Err(BackendError::with_status(
+                RuntimeStatus::State,
+                "CUDA packet stager returned an inconsistent frame count",
+            ));
+        }
+        let packet = unsafe {
+            session
+                .codec
+                .begin_device_packet(view.device_codes, view.frame_count, view.ready_event)
+        }
+        .map_err(|(status, message)| {
+            map_codec_error("Codec device-packet begin failed", status, message)
+        })?;
+        let codes_consumed_event = packet.codes_consumed_event();
+        unsafe { stager.release_after_consumer(codes_consumed_event) }.map_err(|message| {
+            BackendError::with_status(
+                RuntimeStatus::Cuda,
+                format!("failed to release CUDA packet staging buffer: {message}"),
+            )
+        })?;
+
+        let is_final = session.talker.is_ended();
+        let sample_count = frame_count * SAMPLES_PER_FRAME;
+        let result =
+            packet
+                .finish(is_final, &mut pcm[..sample_count])
+                .map_err(|(status, message)| {
+                    map_codec_error("Codec device-packet finish failed", status, message)
+                })?;
+        if result.frame_count as usize != frame_count
+            || result.sample_count as usize != sample_count
+            || (result.is_final != 0) != is_final
+        {
+            return Err(BackendError::with_status(
+                RuntimeStatus::State,
+                "Codec device path returned an inconsistent packet descriptor",
+            ));
+        }
 
         Ok(BackendPacket {
             codec_frames: frame_count as u32,
@@ -235,7 +412,13 @@ impl StreamingBackend for NativeBackend {
         &mut self,
         request: BackendRequest,
     ) -> Result<BackendStarted<Self::Session>, BackendError> {
-        Self::start_session(&self.talker, &self.codec, request)
+        Self::start_session(
+            &self.talker,
+            &self.codec,
+            self.cuda_stager_runtime.as_ref(),
+            self.device_index,
+            request,
+        )
     }
 
     fn start_batch(
@@ -244,13 +427,24 @@ impl StreamingBackend for NativeBackend {
     ) -> Vec<Result<BackendStarted<Self::Session>, BackendError>> {
         let talker = Arc::clone(&self.talker);
         let codec = Arc::clone(&self.codec);
+        let cuda_stager_runtime = self.cuda_stager_runtime.clone();
+        let device_index = self.device_index;
         thread::scope(|scope| {
             let handles = requests
                 .into_iter()
                 .map(|request| {
                     let talker = Arc::clone(&talker);
                     let codec = Arc::clone(&codec);
-                    scope.spawn(move || Self::start_session(&talker, &codec, request))
+                    let cuda_stager_runtime = cuda_stager_runtime.clone();
+                    scope.spawn(move || {
+                        Self::start_session(
+                            &talker,
+                            &codec,
+                            cuda_stager_runtime.as_ref(),
+                            device_index,
+                            request,
+                        )
+                    })
                 })
                 .collect::<Vec<_>>();
             handles
