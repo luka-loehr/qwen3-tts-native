@@ -46,17 +46,14 @@ rejects tag drift, a non-ARM64 runtime, absent BuildKit SPDX/SLSA evidence,
 credential-like provenance, private absolute provenance paths, Git-history
 secrets, high/critical vulnerabilities, or a compressed image above 6.0 GB.
 
-After the private supply-chain scan passes, make only the container package
-public so the anonymous pull can be proved. Keep the repository private until
-the signed digest, GPU acceptance, promoted tags, Git tag, and GitHub release
-are complete. Then sign the accepted digest from the Mac (replace the digest
-with the value in the record):
+After the private supply-chain scan passes, sign the accepted digest while both
+the repository and package are still private. Keep the repository private until
+GPU acceptance, promoted tags, Git tag, and GitHub release are complete.
+Replace the digest below with the value in the release record:
 
 ```bash
 test "$(gh repo view luka-loehr/qwen3-tts-native \
   --json visibility --jq .visibility)" = PRIVATE
-gh api --method PATCH /user/packages/container/qwen3-tts-native \
-  -f visibility=public
 REPO=luka-loehr/qwen3-tts-native
 SOURCE_REVISION=$(git rev-parse origin/main)
 DIGEST='sha256:<PUBLISHED_DIGEST>'
@@ -82,6 +79,13 @@ gh run view "$RUN_ID" --repo "$REPO" \
   .conclusion == "success" and .event == "workflow_dispatch"
   and .headBranch == "main" and .headSha == $sha
 '
+
+# The accepted digest is now signed. Expose only the package so the following
+# clean pull can be genuinely anonymous; keep the repository private.
+gh api --method PATCH /user/packages/container/qwen3-tts-native \
+  -f visibility=public
+test "$(gh api /user/packages/container/qwen3-tts-native \
+  --jq .visibility)" = public
 ```
 
 Run `clean-pull-gpu-acceptance.sh` on a separate Spark Docker daemon selected
