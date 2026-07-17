@@ -1,0 +1,77 @@
+\section{Evaluation Methodology}
+\label{sec:evaluation}
+
+The evaluation is a controlled comparison of the native release candidate and
+the pinned stock SGLang-Omni comparator on one DGX Spark. It is designed to
+answer serving-system questions about latency, throughput, streaming cadence,
+resource use, and reliability. It does not evaluate perceptual speech quality.
+
+\subsection{Subjects and workload}
+
+The production matrix contains 12 runs: two implementations, concurrency
+profiles B1, B3, and B6, and two rounds. Each run performs 24 unmeasured warm-up
+requests followed by at least 200 successfully completed measured requests.
+Only one subject may use CUDA during a run. Subject order alternates between
+rounds so persistent host state and thermal drift do not always favor the same
+implementation.
+
+Both subjects receive the exact same ordered JSONL workload, model repository
+and revision, language, text, VoiceDesign description, seed, portable sampling
+controls, streaming mode, and 20.48-s duration ceiling. Workload identity is
+bound by SHA-256, including the ordered row seeds. The external Rust HTTP client
+and localhost transport are shared.
+
+Native completion is accepted only with explicit natural end-of-sequence,
+\code{finish\_reason=stop}, and no length limit. The stock raw-PCM endpoint does
+not expose a finish reason; its natural-EOS and length-limit fields must remain
+unknown. As a conservative boundary gate, an accepted stock response must be
+strictly shorter than 489,600 samples and 20.40 s. Passing that gate excludes a
+known length-boundary case but does not prove natural EOS.
+
+\subsection{Client-visible metrics}
+
+The client records a monotonic start time immediately before writing each
+request. Time to first audio (TTFA) ends when the first non-empty decoded PCM
+payload byte reaches the client. Headers, multipart JSON, WAV headers, framing,
+and zero-length transport chunks do not count as audio.
+
+For request $i$, with wall time $w_i$ and decoded audio duration $a_i$,
+
+\begin{equation}
+  \mathrm{RTF}_i = \frac{w_i}{a_i}.
+\end{equation}
+
+For a concurrent scenario with elapsed wall time $W$ and successful requests
+$S$, the throughput-oriented aggregate real-time factor is
+
+\begin{equation}
+  \mathrm{RTF}_{\mathrm{aggregate}} =
+  \frac{W}{\sum_{i \in S} a_i}.
+\end{equation}
+
+The report keeps this quantity distinct from
+$\sum_i w_i / \sum_i a_i$, which is a summed-request-wall latency view. It also
+reports successful and attempted request throughput, first-to-final PCM
+streaming window, packet arrivals, inter-packet gaps, response validity,
+timeouts, cancellations, malformed responses, and explicit termination fields.
+
+\subsection{Resource and energy measurement}
+
+Timestamped host, cgroup, NVIDIA, and power telemetry is sampled every 100 ms;
+a run fails if any required stream has an observed gap greater than 200 ms.
+Measured-phase boundaries exclude warm-up work from performance and energy
+reduction. Process RSS and GPU-visible unified memory are reported separately
+and are not summed as independent physical memory. Energy is integrated from
+the timestamped board-power series after subtraction of a separately measured
+idle baseline, then normalized per generated audio minute. An unavailable
+sensor remains unavailable rather than becoming an estimate.
+
+\subsection{Fail-closed publication gate}
+
+A run is excluded if another CUDA process is present, evidence is missing or
+digest-mismatched, the workload or normalized sampling differs between
+subjects, the success minimum is not met, Native completion is not natural EOS,
+Stock EOS is imputed, telemetry cadence fails, or the comparator contains an
+undisclosed execution change. Setup failures remain in the audit trail but do
+not enter distributions. Every accepted evidence path is relative to the
+manifest root and bound by byte length and SHA-256.

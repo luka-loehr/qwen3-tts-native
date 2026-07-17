@@ -1,0 +1,32 @@
+\section{Related Work}
+
+\paragraph{Qwen3-TTS.}
+The Qwen3-TTS technical report presents a family of multilingual,
+description-controllable text-to-speech models and two speech-tokenizer rates
+\cite{hu2026qwen3tts}. The 12-Hz design uses residual vector-quantized speech
+tokens: a backbone predicts the zeroth codebook and a multi-token prediction
+module produces the residual codebooks. The report evaluates model quality and
+streaming efficiency under its own inference environment. Our work neither
+changes the trained model nor reproduces those model-quality claims. It studies
+a separate systems question: how to execute the released 1.7B VoiceDesign
+checkpoint through a purpose-built Rust/CUDA path on DGX Spark.
+
+\paragraph{SGLang and the stock comparator.}
+SGLang introduced a programming and runtime system for structured language
+model workloads, including runtime optimizations such as RadixAttention
+\cite{zheng2023sglang}. The comparison in this paper uses the separately
+versioned SGLang-Omni 0.1.0 Qwen3-TTS serving path, not the experiments reported
+in the original SGLang paper. Its upstream source commit, container base,
+dependency inventory, compatibility patch, and launch configuration are pinned
+in the benchmark evidence. The comparator remains labelled \emph{stock} only
+when packaging changes do not alter scheduling, model execution, codec cadence,
+or streaming behavior.
+
+\paragraph{Scope of comparison.}
+The paper compares serving implementations, not trained model quality. Both
+subjects use the same checkpoint repository, immutable revision, ordered input
+workload, language values, VoiceDesign instructions, seeds, portable sampling
+controls, duration ceiling, client, host, and audio measurement boundary.
+Implementation-specific model artifacts are recorded separately because the
+native runtime packages only decoder inference material whereas the stock stack
+may retain a broader speech-tokenizer artifact.

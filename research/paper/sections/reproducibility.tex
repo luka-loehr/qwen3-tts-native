@@ -1,0 +1,50 @@
+\section{Reproducibility and Artifact Identity}
+
+The release record binds source, containers, model material, workload, raw
+measurements, telemetry, and rendered reports. Local Docker image IDs and
+unpacked sizes are distinct from registry manifest digests and compressed
+sizes; neither is inferred from the other. Native and stock model-artifact
+inventories are also recorded independently even though both share the same
+repository revision.
+
+\begin{table}[t]
+  \centering
+  \caption{Digest-bound artifact identity. Every pending value must be replaced
+  from the accepted production manifest before publication.}
+  \label{tab:artifact-identity}
+  \small
+  \begin{tabularx}{\textwidth}{>{\raggedright\arraybackslash}p{0.31\textwidth}X}
+    \toprule
+    Record & Value \\
+    \midrule
+    Evidence state & \PaperEvidenceState \\
+    Native Git commit & \NativeCommit \\
+    Native local image ID & \NativeLocalImageId \\
+    Native OCI digest & \NativeImageDigest \\
+    Stock local image ID & \StockLocalImageId \\
+    Stock OCI digest & \StockImageDigest \\
+    Shared model revision & \code{5ecdb67327fd37bb2e042aab12ff7391903235d3} \\
+    Native model-artifact SHA-256 & \NativeModelArtifactSha \\
+    Stock model-artifact SHA-256 & \StockModelArtifactSha \\
+    Evidence-manifest SHA-256 & \EvidenceManifestSha \\
+    Evidence timestamp & \EvidenceTimestamp \\
+    Evidence bundle & \EvidenceBundleUri \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+The intended public code location is
+\url{https://github.com/luka-loehr/qwen3-tts-native}. At publication time, the
+paper must point to an immutable release tag and OCI digest, not only to a
+mutable branch. The release archive must contain the English LaTeX source,
+bibliography, vector figures, generated plot data, final paper PDF, benchmark
+report PDF, evidence manifest, and checksums. Large raw evidence may be hosted
+separately when the repository cannot carry it, but the public URI and manifest
+digest must remain stable.
+
+Reproduction requires a clean pull by immutable image digest, an idle supported
+GPU, the documented hardened run command, a successful full-pipeline readiness
+check, and the external workload client. Reproducers should validate the
+manifest before generating tables or plots and should report any hardware,
+driver, power-mode, workload, or comparator difference rather than presenting
+it as the original experiment.

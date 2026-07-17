@@ -1,0 +1,15 @@
+\section{Conclusion}
+
+This paper describes a complete native Rust/CUDA serving path for the pinned
+Qwen3-TTS 1.7B VoiceDesign checkpoint on NVIDIA DGX Spark. The system combines
+request-local model sessions, event-ordered device token handoff, incremental
+neural decoding, bounded scheduling, backpressure, cancellation, and
+progressive PCM delivery in one process and one production image.
+
+The accompanying evaluation design makes implementation comparisons auditable:
+one external client, one ordered workload, two rounds, three concurrency
+levels, explicit termination semantics, measured-phase telemetry, and
+digest-bound raw evidence. Final performance, memory, energy, reliability, and
+container-footprint conclusions will be stated only after the production
+manifest validates and the evidence placeholders in this source have been
+replaced.

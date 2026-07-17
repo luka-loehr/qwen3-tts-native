@@ -1,0 +1,27 @@
+\section{Streaming API}
+
+The primary endpoint is
+\code{POST /v1/voice-design/speech}. A request contains non-empty UTF-8 text, a
+natural-language VoiceDesign description, an optional language (default
+\code{auto}), an optional seed, a bounded maximum duration, and an output mode.
+The endpoint accepts VoiceDesign instructions only; a voice name, speaker
+embedding, reference sample, or cloning identifier is not part of the schema.
+
+Progressive responses use \code{multipart/mixed}. The first part is a JSON
+start event, subsequent binary parts contain 24,000-Hz mono signed 16-bit
+little-endian PCM, and exactly one JSON end or error event terminates the
+application stream. Multipart boundaries define application packets; HTTP/1.1
+chunks or HTTP/2 DATA frames do not. A separate buffered mode returns a bounded
+RIFF/WAVE object after synthesis completes.
+
+The service also exposes liveness, readiness, capability discovery, bounded
+request cancellation, and prompt-free Prometheus counters. A conservative
+compatibility endpoint returns buffered WAV but is not presented as a complete
+implementation of any third-party audio API.
+
+The standalone process does not terminate TLS or implement identity. A public
+deployment therefore requires an authenticated and rate-limited proxy with
+bounded request and response timeouts. Normal service logs and metrics omit
+text, voice descriptions, language values, request identifiers, and generated
+audio; surrounding proxies and clients require their own payload-retention
+controls.
