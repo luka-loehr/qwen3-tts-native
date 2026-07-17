@@ -100,9 +100,9 @@ delivery metrics. The strict C harness additionally covers malformed structure
 sizes, malformed UTF-8, cancellation/destruction, undersized-buffer preflight,
 engine destruction before a live request, packet continuity, and WAV output.
 
-The public concurrency harness runs 24 warmups and 200 measured requests at
-each of B1, B3, and B6. The qualifying run completed all 600 requests without a
-failure:
+The public concurrency harness runs 24 warmups and 200 measured four-frame
+requests at each of B1, B3, and B6. The qualifying run completed all 600
+requests without a failure:
 
 | Concurrency | TTFA p95 | Request RTF p50 | Aggregate RTF |
 | ---: | ---: | ---: | ---: |
@@ -114,6 +114,39 @@ The complete evidence is stored in
 [`../../benchmarks/results/native-runtime-public-c-abi-qualification.json`](../../benchmarks/results/native-runtime-public-c-abi-qualification.json).
 Aggregate throughput is faster than real time at every tested level. B3/B6
 per-request RTF and the stricter B1 RTF target below 0.50 remain open.
+
+This fixed 320 ms harness measures scheduler throughput and packet delivery. It
+does not claim that the model reached a natural end-of-sequence. The separate
+`c_abi_endurance.c` harness is the release gate for complete requests. It runs
+three full warmups followed by 200 full measured requests at B1, uses 512 codec
+frames only as an emergency guard, and fails immediately unless every request
+ends with `QWEN3_TTS_FINISH_REASON_CODEC_EOS`. It also validates packet
+continuity, caller-buffer boundaries, terminal delivery, and exact metrics.
+
+Build the release library first, then compile and run the endurance consumer:
+
+```text
+cargo build --release --locked --manifest-path native/qwen3-tts-runtime/Cargo.toml
+
+cc -std=c11 -O3 -Wall -Wextra -Wpedantic -Werror \
+  -I native/qwen3-tts-runtime/include \
+  native/qwen3-tts-runtime/tests/c_abi_endurance.c \
+  -L native/qwen3-tts-runtime/target/release \
+  -Wl,-rpath,"$PWD/native/qwen3-tts-runtime/target/release" \
+  -lqwen3_tts_runtime -lpthread -ldl \
+  -o native/qwen3-tts-runtime/target/c_abi_endurance
+
+QWEN3_TTS_LIBRARY_DIR=/path/to/native-libraries \
+  native/qwen3-tts-runtime/target/c_abi_endurance \
+  /path/to/qwen3-tts-1.7b-voice-design-bf16-indexed \
+  /tmp/native-runtime-natural-eos-endurance.json
+```
+
+The output JSON contains all 200 request records plus aggregate TTFA, RTF,
+memory, completion, and finish-reason evidence. A run is qualifying only when
+`completed_requests`, `codec_eos_requests`, and `measured_requests` are all 200,
+`failed_requests` and `max_codec_frames_requests` are zero, and
+`all_packet_metric_and_finish_reason_invariants_passed` is true.
 
 ## Direct native smoke
 
