@@ -15,9 +15,11 @@ the runtime or production image.
 > implemented, but the first registry digest is still undergoing final
 > container qualification. No image should be treated as released until the
 > exact digest is published here and every item in the
-> [release checklist](containers/RELEASE_CHECKLIST.md) is complete. In the
-> commands below, `sha256:<PUBLISHED_DIGEST>` and `<PUBLISHED_RELEASE_TAG>` are
-> deliberate release placeholders, not working values.
+> [release checklist](containers/RELEASE_CHECKLIST.md) is complete. In this
+> document, `<PUBLISHED_IMAGE>`, `sha256:<PUBLISHED_DIGEST>`, and
+> `<PUBLISHED_RELEASE_TAG>` are deliberate release placeholders, not working
+> values. The registry location is intentionally not promised before the first
+> accepted digest exists.
 
 ## What this project provides
 
@@ -97,8 +99,8 @@ After the release digest has been published, pull and run it by immutable
 digest:
 
 ```bash
-IMAGE=docker.io/luka-loehr/qwen3-tts-native
-DIGEST=sha256:<PUBLISHED_DIGEST>
+IMAGE='<PUBLISHED_IMAGE>'
+DIGEST='sha256:<PUBLISHED_DIGEST>'
 
 docker pull "$IMAGE@$DIGEST"
 
@@ -113,10 +115,11 @@ docker run --rm \
   "$IMAGE@$DIGEST"
 ```
 
-Production execution uses the immutable digest. The human-readable release tag
-is recorded in the release notes and OCI labels. Do not mount alternate weights
-over `/opt/qwen3-tts/model`, as that would invalidate the model identity
-recorded in the OCI metadata.
+Replace both placeholders with the image reference and digest published in the
+release notes. Production execution uses the immutable digest. The
+human-readable release tag is recorded in the release notes and OCI labels. Do
+not mount alternate weights over `/opt/qwen3-tts/model`, as that would
+invalidate the model identity recorded in the OCI metadata.
 
 Wait for the complete native warm-up:
 
@@ -180,12 +183,44 @@ sampling controls, limits, packet headers, request IDs, and cancellation.
 | `DELETE /v1/requests/{request-id}` | Bounded cancellation of an admitted request. |
 | `GET /metrics` | Prompt-free Prometheus request counters and engine-health gauge. |
 
+`POST /v1/voice-design/speech` is the canonical synthesis endpoint. Its core
+request fields are:
+
+| Field | Required | Default | Meaning |
+| --- | ---: | --- | --- |
+| `text` | yes | — | Non-empty UTF-8 text to synthesize. |
+| `voice_description` | yes | — | Natural-language VoiceDesign conditioning; never a voice name, audio sample, or clone reference. |
+| `language` | no | `auto` | `auto` or one of the ten explicit model languages listed above. |
+| `stream` | no | inferred | `true` selects progressive multipart PCM; `false` selects buffered WAV. |
+| `output_format` | no | inferred | `pcm_s16le` for streaming or `wav` for buffered output; it must agree with `stream`. |
+| `seed` | no | random | Optional reproducibility seed returned by the service. |
+| `max_duration_seconds` | no | lower of 120 s and instance maximum | Safety ceiling; generation may stop earlier at natural codec EOS. |
+
+Omitting both `stream` and `output_format` selects progressive multipart PCM.
+The `/v1/audio/speech` compatibility endpoint instead accepts `input` and
+`voice`, fixes the language to `auto`, and returns buffered WAV only; it is not
+a general OpenAI Audio API implementation. See the
+[complete HTTP API](docs/API.md) for validation, sampling, multipart framing,
+response headers, errors, and the exact compatibility schema.
+
 The standalone server binary binds to `127.0.0.1:8080` by default. The
 production image listens on `0.0.0.0:8080` inside its container; the hardened
 run command above publishes that port to host loopback only. The service does
 not terminate TLS or provide an identity provider. Public deployments must
 place it behind an authenticated, rate-limited proxy with request and response
 timeouts. Review [SECURITY.md](SECURITY.md) before exposing the service.
+
+### Data handling and deployment boundary
+
+The native service does not add prompts, voice descriptions, generated audio,
+request IDs, or language values to normal logs or Prometheus labels. That does
+not make an unprotected deployment private: HTTP payloads are plaintext unless
+a trusted proxy provides TLS, and proxies or clients can still record request
+and response bodies. Operators are responsible for authentication,
+authorization, tenant isolation, retention policy, access-controlled metrics,
+and disabling payload logging throughout the surrounding stack. Do not send
+sensitive text to a deployment whose transport and observability controls you
+have not verified.
 
 ## Verified performance
 
