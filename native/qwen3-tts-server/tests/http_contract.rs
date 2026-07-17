@@ -236,6 +236,10 @@ async fn turkish_returns_structured_422_before_the_engine_is_called() {
     );
     let body = response_json(response).await;
     assert_eq!(body["code"], "unsupported_language");
+    assert_eq!(
+        body["type"],
+        "urn:qwen3-tts-native:problem:unsupported_language"
+    );
     assert_eq!(state.starts.load(Ordering::Relaxed), 0);
 }
 

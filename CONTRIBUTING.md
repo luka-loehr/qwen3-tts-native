@@ -131,6 +131,42 @@ Every pull request must state which tiers were run, the exact commands, and the
 result. If a tier is not relevant or unavailable, say why; never imply that it
 passed.
 
+### Canonical repository verification
+
+From the repository root, run the complete platform-neutral gate:
+
+```bash
+./tools/verify-repository.sh
+```
+
+The script requires the pinned Rust toolchain, Node.js 22.12 or newer, and
+`npx`. Node.js is used only to run the pinned OpenAPI development linter; it is
+not an inference or image dependency. The gate runs metadata, formatting,
+tests, and Clippy for every shipped manifest:
+
+```text
+native/qwen3-tts-native/Cargo.toml
+native/qwen3-tts-native-codec/Cargo.toml
+native/qwen3-tts-runtime/Cargo.toml
+native/qwen3-tts-server/Cargo.toml
+native/qwen3-tts-bench/Cargo.toml
+native/qwen3-tts-http-bench/Cargo.toml
+```
+
+For each manifest, the exact Cargo command family is:
+
+```bash
+cargo metadata --locked --no-deps --format-version 1 --manifest-path <manifest>
+cargo fmt --all --manifest-path <manifest> -- --check
+cargo test --all-targets --all-features --locked --manifest-path <manifest>
+cargo clippy --all-targets --all-features --locked \
+  --manifest-path <manifest> -- -D warnings
+```
+
+It also runs `bash -n` over every tracked shell script, validates
+`docs/openapi.yaml` with `@redocly/cli@2.38.0` and the OpenAPI specification
+ruleset, and finishes with `git diff --check`.
+
 ### Tier 0: documentation and static hygiene
 
 Required for every change:
@@ -147,7 +183,9 @@ contracts, release metadata, benchmark interpretation, or generated files.
 
 ### Tier 1: local component tests
 
-Required for affected Rust components and CPU-testable behavior:
+Required for affected Rust components and CPU-testable behavior. The canonical
+script above runs the commands below for all six manifests; to isolate one
+crate, use its explicit manifest path:
 
 ```bash
 cargo test --all-targets --locked \
@@ -165,6 +203,29 @@ smoke. A local compile does not qualify CUDA execution or model behavior.
 
 Required for talker, predictor, codec, scheduler, artifact, memory, or
 performance changes:
+
+Build both CUDA libraries from the repository root on the DGX Spark with the
+same architecture contract used by the production image:
+
+```bash
+cmake -S native/qwen3-tts-native/native \
+  -B build/verify-talker -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_CUDA_ARCHITECTURES=121-real
+cmake --build build/verify-talker --parallel
+
+cmake -S native/qwen3-tts-native-codec/native \
+  -B build/verify-codec -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_CUDA_ARCHITECTURES=121-real
+cmake --build build/verify-codec --parallel
+```
+
+Inspect both shared libraries with `cuobjdump --list-elf`,
+`cuobjdump --list-ptx`, and `cuobjdump --dump-sass --gpu-architecture sm_121`.
+Qualifying artifacts contain real `sm_121` SASS and no PTX fallback. Run the
+component-specific real-model commands documented in the talker, codec,
+runtime, server, and benchmark READMEs; preserve their machine-readable output.
 
 - build from a clean, identified commit in an isolated worktree;
 - use the pinned model revision and verify all artifact hashes;
@@ -186,6 +247,22 @@ simulator, synthetic decoder, local model, or differently sized checkpoint.
 Required before a registry digest or release tag is promoted. Complete every
 item in [`containers/RELEASE_CHECKLIST.md`](containers/RELEASE_CHECKLIST.md)
 against the exact pushed digest, including:
+
+Run the Dockerfile static check with the same read-only model and generated
+release-metadata contexts used by the candidate build:
+
+```bash
+docker buildx build --check \
+  --platform linux/arm64 \
+  --file containers/Dockerfile.runtime \
+  --build-context model=/absolute/path/to/pinned-model-context \
+  --build-context release-metadata=/absolute/path/to/release-metadata \
+  .
+```
+
+Then run the complete `--provenance=mode=max --sbom=true --push` candidate
+command from [`containers/README.md`](containers/README.md#candidate-build).
+The static check does not replace an image build or any digest-specific gate.
 
 - reproducible metadata and license policy;
 - SBOM and provenance attestations;

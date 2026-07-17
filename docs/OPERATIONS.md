@@ -199,7 +199,7 @@ docker run --detach \
   --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m,uid=10001,gid=10001 \
   --pids-limit=256 \
   --publish 127.0.0.1:8080:8080 \
-  'docker.io/luka-loehr/qwen3-tts-native@sha256:<published-digest>'
+  'docker.io/luka-loehr/qwen3-tts-native@sha256:<PUBLISHED_DIGEST>'
 ```
 
 The digest is a publication placeholder until qualification finishes.

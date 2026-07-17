@@ -140,7 +140,7 @@ impl IntoResponse for ApiError {
         let mut response = (
             self.status,
             Json(ProblemDetails {
-                problem_type: format!("https://qwen3-tts.local/problems/{}", self.code),
+                problem_type: format!("urn:qwen3-tts-native:problem:{}", self.code),
                 title: self.title,
                 status: self.status.as_u16(),
                 code: self.code,

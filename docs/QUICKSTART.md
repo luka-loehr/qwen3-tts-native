@@ -16,10 +16,10 @@ download a model separately and do not mount model files into the container.
 ## 1. Select the immutable image
 
 ```bash
-IMAGE='docker.io/luka-loehr/qwen3-tts-native@sha256:<published-digest>'
+IMAGE='docker.io/luka-loehr/qwen3-tts-native@sha256:<PUBLISHED_DIGEST>'
 ```
 
-`<published-digest>` is deliberately a placeholder while registry publication
+`<PUBLISHED_DIGEST>` is deliberately a placeholder while registry publication
 and clean-pull qualification are pending. Replace it with the release digest;
 do not deploy a mutable `latest` tag.
 
@@ -144,8 +144,28 @@ part's `Content-Length`. See [Multipart stream](API.md#multipart-stream).
 Choose an `x-request-id` before starting a long request, then cancel it from a
 second connection:
 
+Terminal 1:
+
 ```bash
-curl --request DELETE \
+curl --no-buffer --fail-with-body \
+  --request POST \
+  --header 'Content-Type: application/json' \
+  --header 'x-request-id: 0198f65d-a679-7411-8f7c-151dbf0486be' \
+  --data '{
+    "text": "Read this extended systems report slowly and clearly. Describe the architecture, deployment controls, monitoring strategy, failure recovery, benchmark methodology, release process, and operational safeguards in enough detail for a careful technical review.",
+    "voice_description": "A composed technical narrator with clear, unhurried articulation.",
+    "language": "english",
+    "seed": 44,
+    "max_duration_seconds": 120
+  }' \
+  --output cancelled.multipart \
+  http://127.0.0.1:8080/v1/voice-design/speech
+```
+
+While Terminal 1 is still receiving audio, run this in Terminal 2:
+
+```bash
+curl --fail-with-body --request DELETE \
   http://127.0.0.1:8080/v1/requests/0198f65d-a679-7411-8f7c-151dbf0486be
 ```
 

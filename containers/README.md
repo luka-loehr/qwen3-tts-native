@@ -156,12 +156,12 @@ binding the listener. The container runs as UID/GID `10001`.
 | Method and path | Contract |
 | --- | --- |
 | `GET /health/live` | Process/event-loop liveness. |
-| `GET /health/ready` | Shared engine loaded, full native pipeline warmed, work accepted. |
+| `GET /health/ready` | Shared engine loaded, full native pipeline warmed, and engine healthy. |
 | `GET /v1/capabilities` | VoiceDesign-only formats, languages, and limits. |
 | `POST /v1/voice-design/speech` | Progressive multipart PCM or buffered WAV. |
 | `POST /v1/audio/speech` | Narrow buffered-WAV compatibility endpoint. |
 | `DELETE /v1/requests/{request-id}` | Bounded cancellation. |
-| `GET /metrics` | Prompt-free Prometheus counters and latency metrics. |
+| `GET /metrics` | Prompt-free Prometheus request counters and engine-health gauge. |
 
 Example progressive request:
 

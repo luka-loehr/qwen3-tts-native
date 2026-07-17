@@ -395,7 +395,7 @@ Errors produced before response streaming begins use
 
 ```json
 {
-  "type": "https://qwen3-tts.local/problems/unsupported_language",
+  "type": "urn:qwen3-tts-native:problem:unsupported_language",
   "title": "Request validation failed",
   "status": 422,
   "code": "unsupported_language",

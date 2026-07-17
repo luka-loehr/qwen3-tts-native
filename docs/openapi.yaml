@@ -377,7 +377,7 @@ components:
           examples:
             malformedJson:
               value:
-                type: https://qwen3-tts.local/problems/malformed_json
+                type: urn:qwen3-tts-native:problem:malformed_json
                 title: Malformed JSON request
                 status: 400
                 code: malformed_json
