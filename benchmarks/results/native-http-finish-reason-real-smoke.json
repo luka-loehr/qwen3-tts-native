@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "status": "pass",
+  "collected_at_utc": "2026-07-17T08:12:00Z",
+  "scope": "real DGX Spark finish-reason propagation through Talker, scheduler, Rust API, C API, multipart streaming, and buffered WAV",
+  "source": {
+    "branch": "perf/device-code-handoff",
+    "commit": "f398427fd06239b9a224b6e31ae551911e0bcafc",
+    "worktree": "/home/administrator/codex-playground-worktrees/finish-f398427",
+    "server_release_build_seconds": 11.4,
+    "runtime_cdylib_release_build_seconds": 5.85,
+    "target": "aarch64-unknown-linux-gnu",
+    "rust": "1.97.0"
+  },
+  "model": {
+    "id": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+    "revision": "5ecdb67327fd37bb2e042aab12ff7391903235d3",
+    "artifact": "/home/administrator/codex-playground-artifacts/qwen3-tts-1.7b-voice-design-bf16-indexed",
+    "manifest_sha256": "9bb96a8d24bbb2d8933245e27083b8e7290346b776306dcb8a8f3aed68594527"
+  },
+  "artifacts": {
+    "server_sha256": "353a0edfd704d21e1ce7e485fd18e13c08a261f2155437e8c8e0fe85c1a21239",
+    "runtime_cdylib_sha256": "4e192626b10d30383ca7a1926b6ed1952cc872936f242cf6c9efd50b0bb02df8",
+    "runtime_c_symbol": "qwen3_tts_request_finish_reason_v1",
+    "runtime_c_symbol_exported": true,
+    "runtime_c_symbol_type": "T"
+  },
+  "natural_stop": {
+    "language": "german",
+    "seed": 42,
+    "configured_max_duration_seconds": 8.0,
+    "finish_reason": "stop",
+    "runtime_finish_reason": "codec_eos",
+    "generated_codec_frames": 63,
+    "emitted_samples": 120960,
+    "audio_seconds": 5.04,
+    "multipart_sha256": "4e2181a4ed2ff34b7910c8ae09ba7df1451333776b9685984e640cbd2af863e2"
+  },
+  "length_limited_stream": {
+    "language": "german",
+    "seed": 46,
+    "configured_max_duration_seconds": 0.16,
+    "configured_max_codec_frames": 2,
+    "finish_reason": "length",
+    "runtime_finish_reason": "max_codec_frames",
+    "generated_codec_frames": 2,
+    "emitted_samples": 3840,
+    "audio_seconds": 0.16,
+    "multipart_sha256": "c7934feb2a1eda7accdca5a0675b1c2ce31a2f70fb6ef9b6b2a0fa2c3a8861b3"
+  },
+  "length_limited_buffered_wav": {
+    "language": "german",
+    "seed": 47,
+    "configured_max_duration_seconds": 0.16,
+    "http_status": 200,
+    "x_finish_reason": "length",
+    "format": "RIFF WAVE PCM signed 16-bit little-endian mono 24000 Hz",
+    "sha256": "4628a1fab01de318c29be570259f90174f69e6a3ac43af4fc0ac89d7a8c58e2c"
+  },
+  "server_metrics": {
+    "accepted_requests": 3,
+    "active_requests": 0,
+    "completed_requests": 3,
+    "failed_requests": 0,
+    "cancelled_requests": 0,
+    "retirement_timeouts": 0,
+    "emitted_samples": 128640
+  },
+  "verification": {
+    "runtime_tests_passed": 36,
+    "server_tests_passed": 32,
+    "tests_failed": 0,
+    "runtime_clippy_deny_warnings": "pass",
+    "server_clippy_deny_warnings": "pass",
+    "runtime_fmt_check": "pass",
+    "server_fmt_check": "pass",
+    "c11_header_compile": "pass",
+    "cxx17_header_compile": "pass",
+    "server_process_exit_code": 0
+  },
+  "remaining_release_gates": [
+    "multilingual real-model validation",
+    "subjective audio-quality review",
+    "at least 200 full requests on this server/runtime revision",
+    "clean Docker image build, pull, and runtime smoke"
+  ]
+}
