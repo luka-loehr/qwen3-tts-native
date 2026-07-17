@@ -383,6 +383,10 @@ impl WorkloadEntry {
         object.insert("language".to_owned(), Value::String(self.language.clone()));
         object.insert("stream".to_owned(), Value::Bool(true));
         object.insert(
+            "stream_format".to_owned(),
+            Value::String("audio".to_owned()),
+        );
+        object.insert(
             "response_format".to_owned(),
             Value::String("pcm".to_owned()),
         );
@@ -632,6 +636,7 @@ mod tests {
         assert_eq!(body["task_type"], "VoiceDesign");
         assert_eq!(body["response_format"], "pcm");
         assert_eq!(body["stream"], true);
+        assert_eq!(body["stream_format"], "audio");
         assert_eq!(body["do_sample"], true);
         assert_eq!(body["temperature"], 0.8);
         assert_eq!(body["top_p"], 0.95);
