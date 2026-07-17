@@ -19,6 +19,7 @@ captured on the target Spark.
 | Linux ARM64 manifest | `sha256:f9860e7a07845585ccf082ec97bba712086bf10ef9ddaa317085a4a0316a4b8e` |
 | SGLang build | `0.5.12.post1`, source commit `5a15cde858ea09b77116212a39356f2fc51b8584` |
 | PyTorch / Transformers | `2.11.0` / `5.6.0` |
+| Dependency installer | `uv 0.11.16`, ARM64 wheel SHA-256 `cfe1f06fb8f135a735a961065d5ee90f99cccf41749fb1f964edb5b3c3dae19b` |
 | qwen-tts | `0.1.1`, wheel SHA-256 `11a290d8dabc7ef91a90c54478c8ab19b3edb1d85c0882313721892bdc4af15d` |
 | System SoX | Ubuntu Noble ARM64 `14.4.2+git20190427-4build4` |
 | VoiceDesign model | revision `5ecdb67327fd37bb2e042aab12ff7391903235d3` |
@@ -30,11 +31,18 @@ Qwen packages are installed from [`requirements-qwen.txt`](requirements-qwen.txt
 with hashes and without dependency resolution.
 
 SGLang-Omni 0.1.0 itself does not publish a complete dependency lock: several
-ancillary packages use version ranges. The Dockerfile installs that official
-dependency set, while upstream pins the compute-critical Torch, Transformers,
-SGLang, relay, and kernel versions. A qualifying run therefore identifies the
-resolved comparator by its immutable image ID or registry digest and attaches
-the complete `pip freeze`, system-package list, and image inspection produced by
+ancillary packages use version ranges, and its declared graph contains mutually
+incompatible Protobuf requirements (`s3prl` requires Protobuf 4.21 or newer,
+while `descript-audiotools` requires a version below 3.20). Pip's strict resolver
+therefore rejects the unmodified full declaration. The pinned upstream Spark
+recipe uses uv to install that declared environment and then captures the known
+incompatibilities. This comparator pins and hashes the same installer rather
+than silently dropping unrelated dependencies.
+
+Upstream pins the compute-critical Torch, Transformers, SGLang, relay, and
+kernel versions. A qualifying run identifies the resolved comparator by its
+immutable image ID or registry digest and attaches the complete `pip freeze`,
+`pip check`, system-package list, and image inspection produced by
 `scripts/capture-provenance.sh`. Rebuilding source without comparing those
 records is not sufficient evidence of an identical benchmark environment.
 

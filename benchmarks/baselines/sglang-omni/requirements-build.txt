@@ -1,0 +1,5 @@
+# Platform: CPython 3.12 on Linux ARM64.
+# uv is the installer used by the upstream Spark recipe. It is a build tool;
+# the complete resolved runtime environment is captured after image creation.
+uv==0.11.16 \
+    --hash=sha256:cfe1f06fb8f135a735a961065d5ee90f99cccf41749fb1f964edb5b3c3dae19b
