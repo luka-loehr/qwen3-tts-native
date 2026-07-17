@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Assemble one immutable schema-v1.1 production evidence manifest.
+"""Assemble one immutable schema-v1.2 production evidence manifest.
 
 This tool intentionally uses only the Python standard library.  It does not
 normalize, repair, or infer benchmark metadata.  Static claims come from an
@@ -23,11 +23,13 @@ from pathlib import Path, PurePosixPath
 from typing import Any, NoReturn
 
 
-SCHEMA_VERSION = "1.1"
+SCHEMA_VERSION = "1.2"
 EVIDENCE_KIND = "production"
 RUN_SCHEMA_VERSION = "qwen3-tts-qualifying-run/v1"
 CLIENT_SCHEMA_VERSION = "qwen3-tts-http-bench/v1"
 AUDIT_SCHEMA_VERSION = "qwen3-tts-spark-resource-audit/v1"
+MODEL_ARTIFACT_SCHEMA_VERSION = "qwen3-tts-model-artifact/v1"
+REGISTRY_METADATA_SCHEMA_VERSION = "qwen3-tts-registry-image/v1"
 ENGINES = ("native", "sglang")
 PROFILES = {"B1": 1, "B3": 3, "B6": 6}
 ROUNDS = (1, 2)
@@ -77,12 +79,12 @@ CONFIG_KEYS = {
 }
 WORKLOAD_CONFIG_KEYS = {
     "corpus_sha256",
-    "seed",
+    "ordered_seeds",
     "sample_rate_hz",
     "channels",
     "sample_format",
     "response_mode",
-    "warmup_requests_per_engine",
+    "warmup_requests_per_run",
     "minimum_measured_requests_per_profile",
     "minimum_rounds_per_subject",
     "profiles",
@@ -126,6 +128,15 @@ class RunBundle:
     invocation: dict[str, Any]
     summary: dict[str, Any]
     resource: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class BoundEvidence:
+    role: str
+    engine: str
+    path: str
+    identity: FileIdentity
+    payload: dict[str, Any]
 
 
 def _fail(message: str) -> NoReturn:
@@ -348,9 +359,12 @@ def _load_config(path: Path) -> dict[str, Any]:
     return _strict_object(config, "config", CONFIG_KEYS)
 
 
-def _validate_workload(path: Path, evidence_root: Path) -> FileIdentity:
+def _validate_workload(
+    path: Path, evidence_root: Path
+) -> tuple[FileIdentity, tuple[int, ...]]:
     records = _parse_jsonl(path, evidence_root, "workload")
     identifiers: set[str] = set()
+    ordered_seeds: list[int] = []
     for index, raw in enumerate(records, 1):
         label = f"workload:{index}"
         item = _strict_object(
@@ -367,6 +381,7 @@ def _validate_workload(path: Path, evidence_root: Path) -> FileIdentity:
         identifiers.add(identifier)
         _string(item["text"], f"{label}.text")
         _string(item["voice_description"], f"{label}.voice_description")
+        ordered_seeds.append(_integer(item.get("seed"), f"{label}.seed", 0))
         if item.get("stream") is not True:
             _fail(f"{label}.stream: production evidence requires true")
         duration = _number(
@@ -378,7 +393,218 @@ def _validate_workload(path: Path, evidence_root: Path) -> FileIdentity:
                 f"{label}.max_duration_seconds: production evidence requires "
                 f"exactly {PRODUCTION_DURATION_SECONDS}"
             )
-    return _hash_regular(path, evidence_root)
+    return _hash_regular(path, evidence_root), tuple(ordered_seeds)
+
+
+def _load_bound_json_evidence(
+    reference: dict[str, Any],
+    evidence_root: Path,
+    label: str,
+) -> tuple[str, FileIdentity, dict[str, Any]]:
+    reference = _strict_object(reference, label, {"path", "sha256"})
+    relative = _safe_relative_posix(reference["path"], f"{label}.path").as_posix()
+    if not relative.endswith(".json"):
+        _fail(f"{label}.path: evidence must be a JSON file")
+    path = evidence_root / relative
+    if not path.exists() or not path.is_file():
+        _fail(
+            f"{label}.path: required digest-bound evidence is unavailable: {relative}"
+        )
+    identity = _hash_regular(path, evidence_root)
+    if identity.sha256 != reference["sha256"]:
+        _fail(
+            f"{label}.sha256: declared {reference['sha256']}, "
+            f"observed {identity.sha256}"
+        )
+    payload = _load_json_file(path, evidence_root, label)
+    if not isinstance(payload, dict):
+        _fail(f"{label}: expected a JSON object")
+    return relative, identity, payload
+
+
+def _validate_artifact_weights(artifact: dict[str, Any], label: str) -> None:
+    weights = artifact.get("weight_files")
+    if not isinstance(weights, list) or not weights:
+        _fail(f"{label}.weight_files: expected at least one weight file")
+    paths: set[str] = set()
+    precisions: set[str] = set()
+    parameter_total = 0
+    for index, raw in enumerate(weights):
+        item_label = f"{label}.weight_files[{index}]"
+        item = _strict_object(
+            raw,
+            item_label,
+            {"path", "sha256", "bytes", "parameter_count", "precision"},
+        )
+        path = _safe_relative_posix(item["path"], f"{item_label}.path").as_posix()
+        if path in paths:
+            _fail(f"{item_label}.path: duplicate artifact path")
+        paths.add(path)
+        if not SHA256_RE.fullmatch(str(item["sha256"])):
+            _fail(f"{item_label}.sha256: invalid digest")
+        _integer(item["bytes"], f"{item_label}.bytes", 1)
+        parameter_total += _integer(
+            item["parameter_count"], f"{item_label}.parameter_count", 1
+        )
+        precisions.add(_string(item["precision"], f"{item_label}.precision"))
+    if parameter_total != artifact.get("parameter_count"):
+        _fail(
+            f"{label}.parameter_count: expected the exact sum of weight-file "
+            f"parameter counts ({parameter_total})"
+        )
+    declared_precisions = artifact.get("precision")
+    if not isinstance(declared_precisions, list) or declared_precisions != sorted(
+        precisions
+    ):
+        _fail(
+            f"{label}.precision: expected the sorted unique weight precision set "
+            f"{sorted(precisions)}"
+        )
+
+
+def _load_model_artifact_evidence(
+    implementation: dict[str, Any],
+    common_model: dict[str, Any],
+    evidence_root: Path,
+) -> BoundEvidence:
+    engine = implementation["id"]
+    artifact = implementation["model_artifact"]
+    label = f"config.implementations[{engine}].model_artifact"
+    relative, identity, payload = _load_bound_json_evidence(
+        artifact["evidence"], evidence_root, f"{label}.evidence"
+    )
+    payload = _strict_object(
+        payload,
+        f"{label}.evidence_payload",
+        {
+            "schema_version",
+            "implementation_id",
+            "local_image_id",
+            "repository",
+            "revision",
+            "variant",
+            "parameter_count",
+            "precision",
+            "manifest_sha256",
+            "weight_files",
+            "source",
+        },
+    )
+    if payload["schema_version"] != MODEL_ARTIFACT_SCHEMA_VERSION:
+        _fail(f"{label}.evidence_payload.schema_version: unexpected schema")
+    if payload["implementation_id"] != engine:
+        _fail(f"{label}.evidence_payload.implementation_id: engine mismatch")
+    if payload["local_image_id"] != implementation["local_image"]["id"]:
+        _fail(
+            f"{label}.evidence_payload.local_image_id: does not bind the tested "
+            "local Docker image ID"
+        )
+    for field in (
+        "repository",
+        "revision",
+        "variant",
+        "parameter_count",
+        "precision",
+        "manifest_sha256",
+        "weight_files",
+    ):
+        if payload[field] != artifact[field]:
+            _fail(f"{label}.{field}: differs from digest-bound artifact evidence")
+    for field in ("repository", "revision", "variant"):
+        if artifact[field] != common_model[field]:
+            _fail(f"{label}.{field}: must equal config.model.{field}")
+    manifest_digest = artifact["manifest_sha256"]
+    if manifest_digest is not None and not SHA256_RE.fullmatch(str(manifest_digest)):
+        _fail(f"{label}.manifest_sha256: invalid digest")
+    _integer(artifact["parameter_count"], f"{label}.parameter_count", 1)
+    _validate_artifact_weights(artifact, label)
+    source = _strict_object(
+        payload["source"],
+        f"{label}.evidence_payload.source",
+        {"kind", "container_path", "read_only"},
+        {"host_path", "snapshot_path", "revision_ref_path"},
+    )
+    if source["kind"] not in {"container_image", "read_only_bind_mount"}:
+        _fail(f"{label}.evidence_payload.source.kind: unsupported source")
+    _string(source["container_path"], f"{label}.evidence_payload.source.container_path")
+    if source["read_only"] is not True:
+        _fail(f"{label}.evidence_payload.source.read_only: expected true")
+    for field in ("host_path", "snapshot_path", "revision_ref_path"):
+        if field in source:
+            _string(source[field], f"{label}.evidence_payload.source.{field}")
+    if engine == "sglang" and source["kind"] != "read_only_bind_mount":
+        _fail(
+            f"{label}.evidence_payload.source.kind: stock SGLang weights must "
+            "identify the observed read-only bind mount"
+        )
+    return BoundEvidence("model_artifact", engine, relative, identity, payload)
+
+
+def _load_registry_evidence(
+    implementation: dict[str, Any], evidence_root: Path
+) -> BoundEvidence | None:
+    registry = implementation.get("registry_image")
+    if registry is None:
+        return None
+    engine = implementation["id"]
+    label = f"config.implementations[{engine}].registry_image"
+    relative, identity, payload = _load_bound_json_evidence(
+        registry["evidence"], evidence_root, f"{label}.evidence"
+    )
+    payload = _strict_object(
+        payload,
+        f"{label}.evidence_payload",
+        {
+            "schema_version",
+            "implementation_id",
+            "local_image_id",
+            "reference",
+            "manifest_digest",
+        },
+        {"compressed_size_bytes"},
+    )
+    if payload["schema_version"] != REGISTRY_METADATA_SCHEMA_VERSION:
+        _fail(f"{label}.evidence_payload.schema_version: unexpected schema")
+    expected = {
+        "implementation_id": engine,
+        "local_image_id": implementation["local_image"]["id"],
+        "reference": registry["reference"],
+        "manifest_digest": registry["manifest_digest"],
+    }
+    for field, value in expected.items():
+        if payload[field] != value:
+            _fail(f"{label}.{field}: differs from digest-bound registry evidence")
+    if registry.get("compressed_size_bytes") != payload.get("compressed_size_bytes"):
+        _fail(
+            f"{label}.compressed_size_bytes: differs from digest-bound registry evidence"
+        )
+    if "compressed_size_bytes" in registry:
+        _integer(registry["compressed_size_bytes"], f"{label}.compressed_size_bytes", 1)
+    if not IMAGE_DIGEST_RE.fullmatch(str(registry["manifest_digest"])):
+        _fail(f"{label}.manifest_digest: invalid OCI digest")
+    return BoundEvidence("registry_metadata", engine, relative, identity, payload)
+
+
+def _load_bound_implementation_evidence(
+    config: dict[str, Any], evidence_root: Path
+) -> list[BoundEvidence]:
+    bound: list[BoundEvidence] = []
+    seen_paths: set[str] = set()
+    for implementation in config["implementations"]:
+        items = [
+            _load_model_artifact_evidence(
+                implementation, config["model"], evidence_root
+            ),
+            _load_registry_evidence(implementation, evidence_root),
+        ]
+        for item in items:
+            if item is None:
+                continue
+            if item.path in seen_paths:
+                _fail(f"duplicate bound evidence path: {item.path}")
+            seen_paths.add(item.path)
+            bound.append(item)
+    return bound
 
 
 def _parse_checksum_inventory(run_dir: Path) -> dict[str, FileIdentity]:
@@ -901,13 +1127,31 @@ def _validate_run(
     )
     if implementation is None:
         _fail(f"config.implementations: no unique declaration for {engine}")
+    local_image = implementation["local_image"]
     image_id = invocation["image"].get("resolved_id")
-    if image_id != implementation.get("image_digest"):
+    if image_id != local_image["id"]:
         _fail(
-            f"{run_dir}: resolved image digest differs from configured implementation"
+            f"{run_dir}: resolved local Docker image ID differs from configured implementation"
         )
     if not IMAGE_DIGEST_RE.fullmatch(str(image_id)):
-        _fail(f"{run_dir}: invalid resolved image digest")
+        _fail(f"{run_dir}: invalid resolved local Docker image ID")
+    if invocation["image"].get("reference") != local_image["reference"]:
+        _fail(f"{run_dir}: tested local image reference differs from configuration")
+    image_inspect = _load_json_file(
+        run_dir / "provenance/image-inspect.json", run_dir, "image-inspect"
+    )
+    if not isinstance(image_inspect, list) or len(image_inspect) != 1:
+        _fail(f"{run_dir}: image-inspect evidence must contain exactly one image")
+    inspected = image_inspect[0]
+    if not isinstance(inspected, dict):
+        _fail(f"{run_dir}: image-inspect entry must be an object")
+    if inspected.get("Id") != image_id:
+        _fail(f"{run_dir}: image-inspect Id differs from invocation resolved_id")
+    inspected_size = _integer(inspected.get("Size"), f"{run_dir}.image-inspect.Size", 1)
+    if inspected_size != local_image["unpacked_size_bytes"]:
+        _fail(
+            f"{run_dir}: image-inspect Size differs from configured local unpacked size"
+        )
 
     request = invocation["request"]
     _integer(request["requests"], f"{run_dir}.request.requests", 200)
@@ -942,7 +1186,7 @@ def _validate_run(
         profile,
         invocation,
         config["workload"]["minimum_measured_requests_per_profile"],
-        config["workload"]["warmup_requests_per_engine"],
+        config["workload"]["warmup_requests_per_run"],
     )
     return RunBundle(
         key=key,
@@ -991,10 +1235,18 @@ def _raw_format(relative: str) -> str | None:
 def _assemble_descriptors(
     workload_path: str,
     workload_identity: FileIdentity,
+    bound_evidence: list[BoundEvidence],
     runs: list[RunBundle],
 ) -> list[dict[str, Any]]:
     descriptors = [_descriptor("workload", workload_path, "jsonl", workload_identity)]
     seen_paths = {workload_path}
+    for item in bound_evidence:
+        if item.path in seen_paths:
+            _fail(f"duplicate evidence path: {item.path}")
+        seen_paths.add(item.path)
+        descriptor = _descriptor(item.role, item.path, "json", item.identity)
+        descriptor["engine_id"] = item.engine
+        descriptors.append(descriptor)
     for run in runs:
         for relative, (role, format_name) in CLIENT_FILES.items():
             evidence_path = f"{run.evidence_prefix}/{relative}"
@@ -1162,7 +1414,11 @@ def _validate_schema(
             raise SchemaViolation(f"{label}: number is below exclusive minimum")
 
 
-def _validate_static_config(config: dict[str, Any], workload: FileIdentity) -> None:
+def _validate_static_config(
+    config: dict[str, Any],
+    workload: FileIdentity,
+    ordered_seeds: tuple[int, ...],
+) -> None:
     workload_config = _strict_object(
         config["workload"], "config.workload", WORKLOAD_CONFIG_KEYS
     )
@@ -1170,6 +1426,11 @@ def _validate_static_config(config: dict[str, Any], workload: FileIdentity) -> N
         _fail(
             "config.workload.corpus_sha256: configured digest does not match "
             "the central workload"
+        )
+    if workload_config["ordered_seeds"] != list(ordered_seeds):
+        _fail(
+            "config.workload.ordered_seeds: must exactly match the ordered seed "
+            "from every digest-verified workload row"
         )
     if workload_config["sample_rate_hz"] != SAMPLE_RATE_HZ:
         _fail(f"config.workload.sample_rate_hz: production requires {SAMPLE_RATE_HZ}")
@@ -1181,13 +1442,13 @@ def _validate_static_config(config: dict[str, Any], workload: FileIdentity) -> N
         _fail("config.workload.response_mode: production requires streaming")
     if (
         _integer(
-            workload_config["warmup_requests_per_engine"],
-            "config.workload.warmup_requests_per_engine",
+            workload_config["warmup_requests_per_run"],
+            "config.workload.warmup_requests_per_run",
             24,
         )
         < 24
     ):
-        _fail("config.workload.warmup_requests_per_engine: production requires 24")
+        _fail("config.workload.warmup_requests_per_run: production requires 24")
     if (
         _integer(
             workload_config["minimum_measured_requests_per_profile"],
@@ -1229,21 +1490,31 @@ def _validate_static_config(config: dict[str, Any], workload: FileIdentity) -> N
         if role not in ENGINES or implementation.get("id") != role or role in roles:
             _fail(f"config.implementations[{index}]: invalid or duplicate role")
         roles.add(role)
-        if not IMAGE_DIGEST_RE.fullmatch(str(implementation.get("image_digest"))):
-            _fail(f"config.implementations[{index}].image_digest: invalid digest")
-        comparisons = {
-            "model_repository": "repository",
-            "model_revision": "revision",
-            "model_precision": "precision",
-            "model_manifest_sha256": "manifest_sha256",
-        }
-        for implementation_field, model_field in comparisons.items():
-            if implementation.get(implementation_field) != config["model"].get(
-                model_field
-            ):
+        local_image = implementation.get("local_image")
+        if not isinstance(local_image, dict):
+            _fail(f"config.implementations[{index}].local_image: expected an object")
+        if not IMAGE_DIGEST_RE.fullmatch(str(local_image.get("id"))):
+            _fail(f"config.implementations[{index}].local_image.id: invalid ID")
+        _string(
+            local_image.get("reference"),
+            f"config.implementations[{index}].local_image.reference",
+        )
+        _integer(
+            local_image.get("unpacked_size_bytes"),
+            f"config.implementations[{index}].local_image.unpacked_size_bytes",
+            1,
+        )
+        artifact = implementation.get("model_artifact")
+        if not isinstance(artifact, dict):
+            _fail(
+                f"config.implementations[{index}].model_artifact: required "
+                "digest-bound artifact metadata is unavailable"
+            )
+        for field in ("repository", "revision", "variant"):
+            if artifact.get(field) != config["model"].get(field):
                 _fail(
-                    f"config.implementations[{index}].{implementation_field}: "
-                    f"must equal config.model.{model_field}"
+                    f"config.implementations[{index}].model_artifact.{field}: "
+                    f"must equal config.model.{field}"
                 )
 
 
@@ -1335,8 +1606,9 @@ def assemble_manifest(
     config = _load_config(config_path)
     schema = _load_evidence_schema()
     _validate_config_against_schema(config, schema)
-    workload_identity = _validate_workload(workload_path, evidence_root)
-    _validate_static_config(config, workload_identity)
+    workload_identity, ordered_seeds = _validate_workload(workload_path, evidence_root)
+    _validate_static_config(config, workload_identity, ordered_seeds)
+    bound_evidence = _load_bound_implementation_evidence(config, evidence_root)
 
     candidates = _discover_run_directories(runs_root)
     if len(candidates) != 12:
@@ -1362,7 +1634,7 @@ def assemble_manifest(
         "implementations": config["implementations"],
         "methodology": config["methodology"],
         "evidence_files": _assemble_descriptors(
-            workload_relative, workload_identity, runs
+            workload_relative, workload_identity, bound_evidence, runs
         ),
         "run_resources": [run.resource for run in runs],
         "limitations": config["limitations"],
@@ -1398,7 +1670,7 @@ def assemble_manifest(
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Assemble one fail-closed schema-v1.1 production manifest."
+        description="Assemble one fail-closed schema-v1.2 production manifest."
     )
     parser.add_argument(
         "--config",

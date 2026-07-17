@@ -35,6 +35,8 @@ NATIVE_DIGEST = "sha256:" + "a" * 64
 SGLANG_DIGEST = "sha256:" + "b" * 64
 TOOLING_COMMIT = "c" * 40
 MODEL_MANIFEST_DIGEST = "d" * 64
+NATIVE_IMAGE_SIZE = 5_000_000_000
+SGLANG_IMAGE_SIZE = 29_000_000_000
 
 
 def sha256(payload: bytes) -> str:
@@ -112,24 +114,61 @@ class EvidenceFixture:
             "repository": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
             "revision": "5ecdb1a0123456789abcdef0123456789abcdef0",
             "variant": "1.7B VoiceDesign",
-            "parameter_count": 1_700_000_000,
-            "precision": "bfloat16",
-            "manifest_sha256": MODEL_MANIFEST_DIGEST,
-            "weight_files": [
-                {
-                    "path": "model-00001-of-00002.safetensors",
-                    "sha256": "e" * 64,
-                    "bytes": 2_000_000_000,
-                },
-                {
-                    "path": "model-00002-of-00002.safetensors",
-                    "sha256": "f" * 64,
-                    "bytes": 1_000_000_000,
-                },
-            ],
         }
 
         def implementation(engine: str, digest: str) -> dict[str, Any]:
+            native = engine == "native"
+            weights = [
+                {
+                    "path": "model.safetensors",
+                    "sha256": "e" * 64,
+                    "bytes": 2_000_000_000,
+                    "parameter_count": 1_000_000_000,
+                    "precision": "bfloat16",
+                },
+                {
+                    "path": "speech_tokenizer/model.safetensors",
+                    "sha256": ("f" if native else "9") * 64,
+                    "bytes": 200_000_000 if native else 600_000_000,
+                    "parameter_count": 100_000_000 if native else 150_000_000,
+                    "precision": "bfloat16" if native else "float32",
+                },
+            ]
+            artifact: dict[str, Any] = {
+                **model,
+                "parameter_count": sum(item["parameter_count"] for item in weights),
+                "precision": sorted({item["precision"] for item in weights}),
+                "manifest_sha256": MODEL_MANIFEST_DIGEST if native else None,
+                "weight_files": weights,
+            }
+            artifact_payload = {
+                "schema_version": "qwen3-tts-model-artifact/v1",
+                "implementation_id": engine,
+                "local_image_id": digest,
+                **artifact,
+                "source": {
+                    "kind": "container_image" if native else "read_only_bind_mount",
+                    "container_path": "/opt/qwen3-tts/model"
+                    if native
+                    else "/models/hf-repository",
+                    "read_only": True,
+                    **(
+                        {}
+                        if native
+                        else {
+                            "host_path": "/srv/fixture/hf-cache",
+                            "snapshot_path": "snapshots/5ecdb1a0",
+                            "revision_ref_path": "refs/main",
+                        }
+                    ),
+                },
+            }
+            artifact_path = self.evidence / "artifacts" / engine / "model-artifact.json"
+            write_json(artifact_path, artifact_payload)
+            artifact["evidence"] = {
+                "path": artifact_path.relative_to(self.evidence).as_posix(),
+                "sha256": sha256(artifact_path.read_bytes()),
+            }
             return {
                 "id": engine,
                 "role": engine,
@@ -137,14 +176,14 @@ class EvidenceFixture:
                 "version": "0.1.0",
                 "source_commit": "1" * 40 if engine == "native" else "2" * 40,
                 "source_url": f"https://example.invalid/{engine}",
-                "container_image": f"example.invalid/{engine}@{digest}",
-                "image_digest": digest,
-                "image_size_bytes": 5_000_000_000,
-                "startup_ms": 1_000.0,
-                "model_repository": model["repository"],
-                "model_revision": model["revision"],
-                "model_precision": model["precision"],
-                "model_manifest_sha256": model["manifest_sha256"],
+                "local_image": {
+                    "reference": f"fixture/{engine}:candidate",
+                    "id": digest,
+                    "unpacked_size_bytes": NATIVE_IMAGE_SIZE
+                    if native
+                    else SGLANG_IMAGE_SIZE,
+                },
+                "model_artifact": artifact,
                 "api_protocol": "HTTP/1.1 raw PCM16",
                 "streaming_semantics": "progressive"
                 if engine == "native"
@@ -152,7 +191,6 @@ class EvidenceFixture:
                 "runtime_components": ["Rust", "CUDA"]
                 if engine == "native"
                 else ["SGLang-Omni"],
-                "command_sha256": "3" * 64 if engine == "native" else "4" * 64,
             }
 
         return {
@@ -179,12 +217,12 @@ class EvidenceFixture:
             "model": model,
             "workload": {
                 "corpus_sha256": workload_digest,
-                "seed": 42,
+                "ordered_seeds": [42],
                 "sample_rate_hz": 24_000,
                 "channels": 1,
                 "sample_format": "pcm_s16le",
                 "response_mode": "streaming",
-                "warmup_requests_per_engine": 24,
+                "warmup_requests_per_run": 24,
                 "minimum_measured_requests_per_profile": 200,
                 "minimum_rounds_per_subject": 2,
                 "profiles": [
@@ -206,7 +244,6 @@ class EvidenceFixture:
                 "memory_definition": "Peak measured process RSS and NVIDIA unified memory.",
                 "power_definition": "NVIDIA board power sampled every one hundred milliseconds.",
                 "energy_definition": "Trapezoidal board energy minus measured idle baseline energy.",
-                "startup_definition": "Container start to successful readiness response.",
                 "sampling_interval_ms": 100,
                 "run_order": "Round one Native then SGLang; round two reversed.",
                 "statistical_method": "Two complete rounds with raw-request percentiles.",
@@ -233,6 +270,9 @@ class EvidenceFixture:
         evidence_prefix = run_dir.relative_to(self.evidence).as_posix()
         client_payload = b"qwen3-tts-http-bench-fixture\n"
         image_digest = NATIVE_DIGEST if engine == "native" else SGLANG_DIGEST
+        implementation = self.config_value["implementations"][
+            0 if engine == "native" else 1
+        ]
         request_count = 200
         invocation = {
             "schema_version": "qwen3-tts-qualifying-run/v1",
@@ -241,7 +281,7 @@ class EvidenceFixture:
             "round": round_number,
             "container": {"name": f"fixture-{engine}", "id": "5" * 64},
             "image": {
-                "reference": f"fixture/{engine}:candidate",
+                "reference": implementation["local_image"]["reference"],
                 "resolved_id": image_digest,
             },
             "client": {
@@ -278,7 +318,18 @@ class EvidenceFixture:
             "run-qualifying-benchmark.sh": "#!/bin/sh\n",
             "capture-spark-telemetry.sh": "#!/bin/sh\n",
             "reduce-spark-run.sh": "#!/bin/sh\n",
-            "image-inspect.json": "[]\n",
+            "image-inspect.json": json.dumps(
+                [
+                    {
+                        "Id": image_digest,
+                        "RepoTags": [implementation["local_image"]["reference"]],
+                        "RepoDigests": [],
+                        "Size": implementation["local_image"]["unpacked_size_bytes"],
+                    }
+                ],
+                indent=2,
+            )
+            + "\n",
             "container-inspect.sanitized.json": "[]\n",
             "client-version.txt": "fixture-client 1.0\n",
             "uname.txt": "Linux spark fixture\n",
@@ -427,6 +478,32 @@ class EvidenceFixture:
             self.config, self.workload, self.runs, self.output
         )
 
+    def add_registry_evidence(self, engine: str) -> None:
+        implementation = next(
+            item
+            for item in self.config_value["implementations"]
+            if item["id"] == engine
+        )
+        registry = {
+            "reference": f"ghcr.io/example/{engine}",
+            "manifest_digest": "sha256:" + "7" * 64,
+            "compressed_size_bytes": 4_000_000_000,
+        }
+        payload = {
+            "schema_version": "qwen3-tts-registry-image/v1",
+            "implementation_id": engine,
+            "local_image_id": implementation["local_image"]["id"],
+            **registry,
+        }
+        path = self.evidence / "artifacts" / engine / "registry-image.json"
+        write_json(path, payload)
+        registry["evidence"] = {
+            "path": path.relative_to(self.evidence).as_posix(),
+            "sha256": sha256(path.read_bytes()),
+        }
+        implementation["registry_image"] = registry
+        write_json(self.config, self.config_value)
+
 
 class AssembleProductionManifestTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -438,7 +515,7 @@ class AssembleProductionManifestTests(unittest.TestCase):
 
     def test_assembles_exact_production_matrix_create_new(self) -> None:
         manifest = self.fixture.assemble()
-        self.assertEqual(manifest["schema_version"], "1.1")
+        self.assertEqual(manifest["schema_version"], "1.2")
         self.assertEqual(manifest["evidence_kind"], "production")
         self.assertEqual(len(manifest["run_resources"]), 12)
         self.assertEqual(
@@ -450,6 +527,18 @@ class AssembleProductionManifestTests(unittest.TestCase):
         )
         self.assertEqual(manifest, json.loads(self.fixture.output.read_text()))
         self.assertIs(report_generator._validate_manifest(manifest), manifest)
+        artifacts = {
+            item["id"]: item["model_artifact"] for item in manifest["implementations"]
+        }
+        self.assertNotEqual(
+            artifacts["native"]["parameter_count"],
+            artifacts["sglang"]["parameter_count"],
+        )
+        self.assertNotEqual(
+            artifacts["native"]["precision"], artifacts["sglang"]["precision"]
+        )
+        self.assertIsNotNone(artifacts["native"]["manifest_sha256"])
+        self.assertIsNone(artifacts["sglang"]["manifest_sha256"])
         descriptors = manifest["evidence_files"]
         self.assertEqual(sum(item["role"] == "workload" for item in descriptors), 1)
         self.assertEqual(
@@ -544,10 +633,82 @@ class AssembleProductionManifestTests(unittest.TestCase):
 
     def test_rejects_configured_image_digest_mismatch(self) -> None:
         config = json.loads(self.fixture.config.read_text())
-        config["implementations"][0]["image_digest"] = "sha256:" + "9" * 64
+        config["implementations"][0]["local_image"]["id"] = "sha256:" + "9" * 64
         write_json(self.fixture.config, config)
         with self.assertRaisesRegex(
-            assembler.AssemblyError, "resolved image digest differs"
+            assembler.AssemblyError, "local_image_id|local Docker image ID"
+        ):
+            self.fixture.assemble()
+
+    def test_rejects_ordered_seed_drift(self) -> None:
+        config = json.loads(self.fixture.config.read_text())
+        config["workload"]["ordered_seeds"] = [43]
+        write_json(self.fixture.config, config)
+        with self.assertRaisesRegex(assembler.AssemblyError, "ordered_seeds"):
+            self.fixture.assemble()
+
+    def test_rejects_missing_stock_artifact_evidence(self) -> None:
+        stock = self.fixture.evidence / "artifacts/sglang/model-artifact.json"
+        stock.unlink()
+        with self.assertRaisesRegex(
+            assembler.AssemblyError, "digest-bound evidence is unavailable"
+        ):
+            self.fixture.assemble()
+
+    def test_rejects_stock_artifact_digest_drift(self) -> None:
+        stock = self.fixture.evidence / "artifacts/sglang/model-artifact.json"
+        payload = json.loads(stock.read_text())
+        payload["weight_files"][1]["sha256"] = "8" * 64
+        write_json(stock, payload)
+        with self.assertRaisesRegex(assembler.AssemblyError, "declared .* observed"):
+            self.fixture.assemble()
+
+    def test_rejects_artifact_parameter_sum_mismatch(self) -> None:
+        config = json.loads(self.fixture.config.read_text())
+        config["implementations"][0]["model_artifact"]["parameter_count"] += 1
+        write_json(self.fixture.config, config)
+        with self.assertRaisesRegex(
+            assembler.AssemblyError, "parameter_count|digest-bound artifact evidence"
+        ):
+            self.fixture.assemble()
+
+    def test_rejects_local_image_size_mismatch(self) -> None:
+        config = json.loads(self.fixture.config.read_text())
+        config["implementations"][1]["local_image"]["unpacked_size_bytes"] += 1
+        write_json(self.fixture.config, config)
+        with self.assertRaisesRegex(
+            assembler.AssemblyError, "image-inspect Size|local unpacked size"
+        ):
+            self.fixture.assemble()
+
+    def test_optional_registry_metadata_is_separate_and_evidence_bound(self) -> None:
+        self.fixture.add_registry_evidence("native")
+        manifest = self.fixture.assemble()
+        native = next(
+            item for item in manifest["implementations"] if item["id"] == "native"
+        )
+        self.assertNotEqual(
+            native["local_image"]["id"], native["registry_image"]["manifest_digest"]
+        )
+        self.assertNotEqual(
+            native["local_image"]["unpacked_size_bytes"],
+            native["registry_image"]["compressed_size_bytes"],
+        )
+        self.assertEqual(
+            sum(
+                item["role"] == "registry_metadata"
+                for item in manifest["evidence_files"]
+            ),
+            1,
+        )
+
+    def test_rejects_registry_metadata_drift(self) -> None:
+        self.fixture.add_registry_evidence("native")
+        config = json.loads(self.fixture.config.read_text())
+        config["implementations"][0]["registry_image"]["compressed_size_bytes"] += 1
+        write_json(self.fixture.config, config)
+        with self.assertRaisesRegex(
+            assembler.AssemblyError, "compressed_size_bytes.*digest-bound"
         ):
             self.fixture.assemble()
 

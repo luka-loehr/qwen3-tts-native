@@ -260,23 +260,17 @@ def _validate_system(value: Any) -> dict[str, Any]:
     return system
 
 
-def _validate_model(value: Any) -> dict[str, Any]:
+def _validate_model(value: Any, schema_version: str) -> dict[str, Any]:
+    common = ("repository", "revision", "variant")
+    legacy = ("parameter_count", "precision", "manifest_sha256", "weight_files")
     model = _strict_object(
-        value,
-        "model",
-        (
-            "repository",
-            "revision",
-            "variant",
-            "parameter_count",
-            "precision",
-            "manifest_sha256",
-            "weight_files",
-        ),
+        value, "model", common if schema_version == "1.2" else common + legacy
     )
     _string(model["repository"], "model.repository", 3)
     _string(model["revision"], "model.revision", 7)
     _string(model["variant"], "model.variant", 3)
+    if schema_version == "1.2":
+        return model
     _integer(model["parameter_count"], "model.parameter_count", 1)
     _string(model["precision"], "model.precision", 2)
     _sha256(model["manifest_sha256"], "model.manifest_sha256")
@@ -303,17 +297,23 @@ def _validate_workload(
     schema_version: str,
 ) -> dict[str, Any]:
     legacy_fields = ("voice_description_sha256", "generation")
+    seed_field = "ordered_seeds" if schema_version == "1.2" else "seed"
+    warmup_field = (
+        "warmup_requests_per_run"
+        if schema_version == "1.2"
+        else "warmup_requests_per_engine"
+    )
     workload = _strict_object(
         value,
         "workload",
         (
             "corpus_sha256",
-            "seed",
+            seed_field,
             "sample_rate_hz",
             "channels",
             "sample_format",
             "response_mode",
-            "warmup_requests_per_engine",
+            warmup_field,
             "minimum_measured_requests_per_profile",
             "profiles",
             "language_policy",
@@ -325,7 +325,14 @@ def _validate_workload(
         ),
     )
     _sha256(workload["corpus_sha256"], "workload.corpus_sha256")
-    _integer(workload["seed"], "workload.seed")
+    if schema_version == "1.2":
+        ordered_seeds = workload["ordered_seeds"]
+        if not isinstance(ordered_seeds, list) or not ordered_seeds:
+            _fail("workload.ordered_seeds", "expected at least one ordered seed")
+        for index, seed in enumerate(ordered_seeds):
+            _integer(seed, f"workload.ordered_seeds[{index}]", 0)
+    else:
+        _integer(workload["seed"], "workload.seed")
     _integer(workload["sample_rate_hz"], "workload.sample_rate_hz", 1)
     _integer(workload["channels"], "workload.channels", 1)
     if workload["sample_format"] != "pcm_s16le":
@@ -333,12 +340,12 @@ def _validate_workload(
     if workload["response_mode"] not in {"streaming", "buffered"}:
         _fail("workload.response_mode", "expected streaming or buffered")
     warmups = _integer(
-        workload["warmup_requests_per_engine"],
-        "workload.warmup_requests_per_engine",
+        workload[warmup_field],
+        f"workload.{warmup_field}",
     )
     if evidence_kind == "production" and warmups < 24:
         _fail(
-            "workload.warmup_requests_per_engine",
+            f"workload.{warmup_field}",
             "production evidence requires at least 24",
         )
     minimum = _integer(
@@ -351,7 +358,7 @@ def _validate_workload(
             "workload.minimum_measured_requests_per_profile",
             "production evidence requires at least 200",
         )
-    if schema_version == "1.1":
+    if schema_version in {"1.1", "1.2"}:
         rounds = _integer(
             workload["minimum_rounds_per_subject"],
             "workload.minimum_rounds_per_subject",
@@ -423,11 +430,11 @@ def _validate_workload(
 
 
 def _validate_implementations(
-    value: Any, model: dict[str, Any]
+    value: Any, model: dict[str, Any], schema_version: str
 ) -> list[dict[str, Any]]:
     if not isinstance(value, list) or len(value) != 2:
         _fail("implementations", "expected exactly Native and SGLang")
-    required = (
+    legacy_required = (
         "id",
         "role",
         "name",
@@ -447,9 +454,27 @@ def _validate_implementations(
         "runtime_components",
         "command_sha256",
     )
+    v12_required = (
+        "id",
+        "role",
+        "name",
+        "version",
+        "source_commit",
+        "source_url",
+        "local_image",
+        "model_artifact",
+        "api_protocol",
+        "streaming_semantics",
+        "runtime_components",
+    )
     roles: set[str] = set()
     for index, raw in enumerate(value):
-        item = _strict_object(raw, f"implementations[{index}]", required)
+        item = _strict_object(
+            raw,
+            f"implementations[{index}]",
+            v12_required if schema_version == "1.2" else legacy_required,
+            ("registry_image",) if schema_version == "1.2" else (),
+        )
         role = item["role"]
         if item["id"] not in {"native", "sglang"} or role not in {"native", "sglang"}:
             _fail(f"implementations[{index}]", "id and role must be native or sglang")
@@ -463,11 +488,50 @@ def _validate_implementations(
             "version",
             "source_commit",
             "source_url",
-            "container_image",
             "api_protocol",
             "streaming_semantics",
         ):
             _string(item[field], f"implementations[{index}].{field}")
+        _string_list(
+            item["runtime_components"],
+            f"implementations[{index}].runtime_components",
+            1,
+        )
+        if schema_version == "1.2":
+            local_image = _strict_object(
+                item["local_image"],
+                f"implementations[{index}].local_image",
+                ("reference", "id", "unpacked_size_bytes"),
+            )
+            _string(
+                local_image["reference"],
+                f"implementations[{index}].local_image.reference",
+            )
+            digest = _string(
+                local_image["id"], f"implementations[{index}].local_image.id"
+            )
+            if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+                _fail(
+                    f"implementations[{index}].local_image.id",
+                    "expected local Docker sha256:<64 lowercase hex> ID",
+                )
+            _integer(
+                local_image["unpacked_size_bytes"],
+                f"implementations[{index}].local_image.unpacked_size_bytes",
+                1,
+            )
+            _validate_model_artifact(
+                item["model_artifact"],
+                model,
+                f"implementations[{index}].model_artifact",
+            )
+            if "registry_image" in item:
+                _validate_registry_image(
+                    item["registry_image"],
+                    f"implementations[{index}].registry_image",
+                )
+            continue
+        _string(item["container_image"], f"implementations[{index}].container_image")
         digest = _string(item["image_digest"], f"implementations[{index}].image_digest")
         if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
             _fail(
@@ -478,11 +542,6 @@ def _validate_implementations(
             item["image_size_bytes"], f"implementations[{index}].image_size_bytes", 1
         )
         _number(item["startup_ms"], f"implementations[{index}].startup_ms")
-        _string_list(
-            item["runtime_components"],
-            f"implementations[{index}].runtime_components",
-            1,
-        )
         _sha256(item["command_sha256"], f"implementations[{index}].command_sha256")
         _sha256(
             item["model_manifest_sha256"],
@@ -505,7 +564,94 @@ def _validate_implementations(
     return value
 
 
-def _validate_methodology(value: Any) -> dict[str, Any]:
+def _validate_evidence_reference(value: Any, path: str) -> dict[str, Any]:
+    reference = _strict_object(value, path, ("path", "sha256"))
+    _string(reference["path"], f"{path}.path")
+    _sha256(reference["sha256"], f"{path}.sha256")
+    return reference
+
+
+def _validate_model_artifact(
+    value: Any, common_model: dict[str, Any], path: str
+) -> dict[str, Any]:
+    artifact = _strict_object(
+        value,
+        path,
+        (
+            "repository",
+            "revision",
+            "variant",
+            "parameter_count",
+            "precision",
+            "manifest_sha256",
+            "weight_files",
+            "evidence",
+        ),
+    )
+    for field in ("repository", "revision", "variant"):
+        _string(artifact[field], f"{path}.{field}")
+        if artifact[field] != common_model[field]:
+            _fail(f"{path}.{field}", f"must exactly match model.{field}")
+    _integer(artifact["parameter_count"], f"{path}.parameter_count", 1)
+    precisions = artifact["precision"]
+    if not isinstance(precisions, list) or not precisions:
+        _fail(f"{path}.precision", "expected a non-empty sorted precision list")
+    for index, precision in enumerate(precisions):
+        _string(precision, f"{path}.precision[{index}]", 2)
+    if precisions != sorted(set(precisions)):
+        _fail(f"{path}.precision", "must be sorted and unique")
+    manifest_digest = artifact["manifest_sha256"]
+    if manifest_digest is not None:
+        _sha256(manifest_digest, f"{path}.manifest_sha256")
+    weights = artifact["weight_files"]
+    if not isinstance(weights, list) or not weights:
+        _fail(f"{path}.weight_files", "expected at least one weight file")
+    seen: set[str] = set()
+    parameter_total = 0
+    weight_precisions: set[str] = set()
+    for index, value in enumerate(weights):
+        item_path = f"{path}.weight_files[{index}]"
+        item = _strict_object(
+            value,
+            item_path,
+            ("path", "sha256", "bytes", "parameter_count", "precision"),
+        )
+        weight_path = _string(item["path"], f"{item_path}.path")
+        if weight_path in seen:
+            _fail(f"{item_path}.path", "duplicate path")
+        seen.add(weight_path)
+        _sha256(item["sha256"], f"{item_path}.sha256")
+        _integer(item["bytes"], f"{item_path}.bytes", 1)
+        parameter_total += _integer(
+            item["parameter_count"], f"{item_path}.parameter_count", 1
+        )
+        weight_precisions.add(_string(item["precision"], f"{item_path}.precision"))
+    if parameter_total != artifact["parameter_count"]:
+        _fail(f"{path}.parameter_count", "must equal the weight-file parameter sum")
+    if precisions != sorted(weight_precisions):
+        _fail(f"{path}.precision", "must equal the weight-file precision set")
+    _validate_evidence_reference(artifact["evidence"], f"{path}.evidence")
+    return artifact
+
+
+def _validate_registry_image(value: Any, path: str) -> dict[str, Any]:
+    registry = _strict_object(
+        value,
+        path,
+        ("reference", "manifest_digest", "evidence"),
+        ("compressed_size_bytes",),
+    )
+    _string(registry["reference"], f"{path}.reference")
+    digest = _string(registry["manifest_digest"], f"{path}.manifest_digest")
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+        _fail(f"{path}.manifest_digest", "expected OCI sha256 digest")
+    if "compressed_size_bytes" in registry:
+        _integer(registry["compressed_size_bytes"], f"{path}.compressed_size_bytes", 1)
+    _validate_evidence_reference(registry["evidence"], f"{path}.evidence")
+    return registry
+
+
+def _validate_methodology(value: Any, schema_version: str) -> dict[str, Any]:
     required = (
         "clock_source",
         "ttfa_definition",
@@ -514,14 +660,17 @@ def _validate_methodology(value: Any) -> dict[str, Any]:
         "memory_definition",
         "power_definition",
         "energy_definition",
-        "startup_definition",
         "sampling_interval_ms",
         "run_order",
         "statistical_method",
         "environment_controls",
     )
+    if schema_version != "1.2":
+        required = required[:7] + ("startup_definition",) + required[7:]
     methodology = _strict_object(value, "methodology", required)
-    for field in required[:8] + required[9:11]:
+    for field in required:
+        if field in {"sampling_interval_ms", "environment_controls"}:
+            continue
         _string(methodology[field], f"methodology.{field}", 8)
     _integer(methodology["sampling_interval_ms"], "methodology.sampling_interval_ms", 1)
     _string_list(
@@ -532,7 +681,10 @@ def _validate_methodology(value: Any) -> dict[str, Any]:
 
 def _validate_run_resources(value: Any, evidence_kind: str) -> list[dict[str, Any]]:
     if not isinstance(value, list) or not value:
-        _fail("run_resources", "schema 1.1 requires one resource record per client run")
+        _fail(
+            "run_resources",
+            "direct client schemas require one resource record per client run",
+        )
     required = (
         "engine_id",
         "profile_id",
@@ -618,8 +770,8 @@ def _validate_manifest(value: Any) -> dict[str, Any]:
         ),
         ("test_fixture_notice", "run_resources"),
     )
-    if manifest["schema_version"] not in {"1.0", "1.1"}:
-        _fail("schema_version", "expected version 1.0 or 1.1")
+    if manifest["schema_version"] not in {"1.0", "1.1", "1.2"}:
+        _fail("schema_version", "expected version 1.0, 1.1, or 1.2")
     kind = manifest["evidence_kind"]
     if kind not in {"production", "test_fixture"}:
         _fail("evidence_kind", "expected production or test_fixture")
@@ -629,10 +781,10 @@ def _validate_manifest(value: Any) -> dict[str, Any]:
             _fail("test_fixture_notice", f"must contain '{TEST_FIXTURE_BANNER}'")
     elif "test_fixture_notice" in manifest:
         _fail("test_fixture_notice", "is forbidden for production evidence")
-    if kind == "production" and manifest["schema_version"] != "1.1":
+    if kind == "production" and manifest["schema_version"] != "1.2":
         _fail(
             "schema_version",
-            "production evidence requires the direct client-run schema 1.1",
+            "production evidence requires the evidence-bound schema 1.2",
         )
     if manifest["schema_version"] == "1.0" and kind != "test_fixture":
         _fail(
@@ -641,10 +793,12 @@ def _validate_manifest(value: Any) -> dict[str, Any]:
         )
     _validate_report(manifest["report"])
     _validate_system(manifest["system"])
-    model = _validate_model(manifest["model"])
+    model = _validate_model(manifest["model"], manifest["schema_version"])
     _validate_workload(manifest["workload"], kind, manifest["schema_version"])
-    _validate_implementations(manifest["implementations"], model)
-    _validate_methodology(manifest["methodology"])
+    _validate_implementations(
+        manifest["implementations"], model, manifest["schema_version"]
+    )
+    _validate_methodology(manifest["methodology"], manifest["schema_version"])
     limitations = _string_list(manifest["limitations"], "limitations", 1)
     for index, limitation in enumerate(limitations):
         if len(limitation.strip()) < 8:
@@ -654,10 +808,10 @@ def _validate_manifest(value: Any) -> dict[str, Any]:
         or len(manifest["evidence_files"]) < 3
     ):
         _fail("evidence_files", "expected a non-empty evidence inventory")
-    if manifest["schema_version"] == "1.1":
+    if manifest["schema_version"] in {"1.1", "1.2"}:
         _validate_run_resources(manifest.get("run_resources"), kind)
     elif "run_resources" in manifest:
-        _fail("run_resources", "is only valid with schema 1.1")
+        _fail("run_resources", "is only valid with schema 1.1 or 1.2")
     return manifest
 
 
@@ -1015,6 +1169,7 @@ def _validate_measurements(
 
 CLIENT_SCHEMA_VERSION = "qwen3-tts-http-bench/v1"
 CLIENT_ROLES = {"client_summary", "client_requests", "client_packets"}
+BOUND_IMPLEMENTATION_ROLES = {"model_artifact", "registry_metadata"}
 
 
 def _load_client_evidence_files(
@@ -1027,6 +1182,9 @@ def _load_client_evidence_files(
     client_keys: dict[str, set[tuple[str, str, int]]] = {
         role: set() for role in CLIENT_ROLES
     }
+    bound_roles: dict[str, set[str]] = {
+        role: set() for role in BOUND_IMPLEMENTATION_ROLES
+    }
     allowed_formats = {"json", "jsonl", "csv", "txt", "log", "stdout", "stderr"}
     for index, raw in enumerate(manifest["evidence_files"]):
         path = f"evidence_files[{index}]"
@@ -1037,10 +1195,10 @@ def _load_client_evidence_files(
             ("engine_id", "profile_id", "round"),
         )
         role = descriptor["role"]
-        if role not in {"workload", "raw"} | CLIENT_ROLES:
+        if role not in {"workload", "raw"} | CLIENT_ROLES | BOUND_IMPLEMENTATION_ROLES:
             _fail(
                 f"{path}.role",
-                "expected workload, client_summary, client_requests, client_packets, or raw",
+                "expected workload, client evidence, bound implementation evidence, or raw",
             )
         relative = _string(descriptor["path"], f"{path}.path")
         if relative in descriptors:
@@ -1082,6 +1240,16 @@ def _load_client_evidence_files(
             if key in client_keys[role]:
                 _fail(path, f"duplicate {role} for {key}")
             client_keys[role].add(key)
+        elif role in BOUND_IMPLEMENTATION_ROLES:
+            if engine not in {"native", "sglang"}:
+                _fail(f"{path}.engine_id", f"{role} requires native or sglang")
+            if profile_id is not None or round_number is not None:
+                _fail(path, f"{role} must not declare profile or round")
+            if format_name != "json":
+                _fail(f"{path}.format", f"{role} requires json")
+            if engine in bound_roles[role]:
+                _fail(path, f"duplicate {role} for {engine}")
+            bound_roles[role].add(engine)
         else:
             specified = [
                 engine is not None,
@@ -1125,7 +1293,10 @@ def _load_client_evidence_files(
         payloads[relative] = parsed
         descriptors[relative] = descriptor
     if len(workload_descriptors) != 1:
-        _fail("evidence_files", "schema 1.1 requires exactly one shared workload JSONL")
+        _fail(
+            "evidence_files",
+            "direct client schemas require exactly one shared workload JSONL",
+        )
     if workload_descriptors[0]["sha256"] != manifest["workload"]["corpus_sha256"]:
         _fail("workload.corpus_sha256", "must equal the shared workload file digest")
     if not client_keys["client_summary"]:
@@ -1134,6 +1305,14 @@ def _load_client_evidence_files(
         _fail(
             "evidence_files",
             "every client run requires one summary, requests, and packets artifact",
+        )
+    if manifest["schema_version"] == "1.2" and bound_roles["model_artifact"] != {
+        "native",
+        "sglang",
+    }:
+        _fail(
+            "evidence_files",
+            "schema 1.2 requires one digest-bound model_artifact per implementation",
         )
     expected_profiles = {item["id"] for item in manifest["workload"]["profiles"]}
     minimum_rounds = manifest["workload"]["minimum_rounds_per_subject"]
@@ -1168,6 +1347,209 @@ def _load_client_evidence_files(
         if native_rounds != sglang_rounds:
             _fail("evidence_files", f"Native and SGLang rounds differ for {profile_id}")
     return payloads, descriptors
+
+
+def _validate_bound_implementation_evidence(
+    manifest: dict[str, Any],
+    payloads: dict[str, Any],
+    descriptors: dict[str, dict[str, Any]],
+) -> None:
+    implementations = {item["id"]: item for item in manifest["implementations"]}
+    for engine, implementation in implementations.items():
+        if manifest["evidence_kind"] == "production":
+            image_inspections = [
+                (path, descriptor)
+                for path, descriptor in descriptors.items()
+                if descriptor["role"] == "raw"
+                and descriptor.get("engine_id") == engine
+                and path.endswith("/provenance/image-inspect.json")
+            ]
+            invocations = [
+                (path, descriptor)
+                for path, descriptor in descriptors.items()
+                if descriptor["role"] == "raw"
+                and descriptor.get("engine_id") == engine
+                and path.endswith("/provenance/invocation.json")
+            ]
+            if not image_inspections or not invocations:
+                _fail(
+                    "evidence_files",
+                    f"production requires image-inspect and invocation evidence for {engine}",
+                )
+            for path, _ in image_inspections:
+                inspected = payloads[path]
+                if not isinstance(inspected, list) or len(inspected) != 1:
+                    _fail(path, "expected exactly one inspected local Docker image")
+                entry = inspected[0]
+                if not isinstance(entry, dict):
+                    _fail(path, "expected one image-inspect object")
+                if entry.get("Id") != implementation["local_image"]["id"]:
+                    _fail(path, "Docker inspect Id differs from local_image.id")
+                if (
+                    entry.get("Size")
+                    != implementation["local_image"]["unpacked_size_bytes"]
+                ):
+                    _fail(
+                        path,
+                        "Docker inspect Size differs from local_image.unpacked_size_bytes",
+                    )
+            for path, _ in invocations:
+                invocation = payloads[path]
+                if not isinstance(invocation, dict):
+                    _fail(path, "expected an invocation object")
+                image = invocation.get("image")
+                if not isinstance(image, dict):
+                    _fail(path, "invocation image identity is unavailable")
+                if image.get("resolved_id") != implementation["local_image"]["id"]:
+                    _fail(path, "invocation resolved_id differs from local_image.id")
+                if image.get("reference") != implementation["local_image"]["reference"]:
+                    _fail(
+                        path,
+                        "invocation image reference differs from local_image.reference",
+                    )
+        artifact = implementation["model_artifact"]
+        reference = artifact["evidence"]
+        descriptor = descriptors.get(reference["path"])
+        if descriptor is None or descriptor.get("role") != "model_artifact":
+            _fail(
+                f"implementations[{engine}].model_artifact.evidence.path",
+                "must reference model_artifact evidence",
+            )
+        if descriptor.get("engine_id") != engine:
+            _fail(
+                f"implementations[{engine}].model_artifact.evidence.path",
+                "references evidence for a different implementation",
+            )
+        if descriptor["sha256"] != reference["sha256"]:
+            _fail(
+                f"implementations[{engine}].model_artifact.evidence.sha256",
+                "must equal the evidence descriptor digest",
+            )
+        payload = _strict_object(
+            payloads[reference["path"]],
+            f"model_artifact_evidence[{engine}]",
+            (
+                "schema_version",
+                "implementation_id",
+                "local_image_id",
+                "repository",
+                "revision",
+                "variant",
+                "parameter_count",
+                "precision",
+                "manifest_sha256",
+                "weight_files",
+                "source",
+            ),
+        )
+        if payload["schema_version"] != "qwen3-tts-model-artifact/v1":
+            _fail(f"model_artifact_evidence[{engine}].schema_version", "unsupported")
+        if payload["implementation_id"] != engine:
+            _fail(
+                f"model_artifact_evidence[{engine}].implementation_id",
+                "implementation mismatch",
+            )
+        if payload["local_image_id"] != implementation["local_image"]["id"]:
+            _fail(
+                f"model_artifact_evidence[{engine}].local_image_id",
+                "must bind the tested local Docker image ID",
+            )
+        for field in (
+            "repository",
+            "revision",
+            "variant",
+            "parameter_count",
+            "precision",
+            "manifest_sha256",
+            "weight_files",
+        ):
+            if payload[field] != artifact[field]:
+                _fail(
+                    f"implementations[{engine}].model_artifact.{field}",
+                    "differs from digest-bound evidence",
+                )
+        source = _strict_object(
+            payload["source"],
+            f"model_artifact_evidence[{engine}].source",
+            ("kind", "container_path", "read_only"),
+            ("host_path", "snapshot_path", "revision_ref_path"),
+        )
+        if source["kind"] not in {"container_image", "read_only_bind_mount"}:
+            _fail(
+                f"model_artifact_evidence[{engine}].source.kind",
+                "expected container_image or read_only_bind_mount",
+            )
+        _string(
+            source["container_path"],
+            f"model_artifact_evidence[{engine}].source.container_path",
+        )
+        if source["read_only"] is not True:
+            _fail(
+                f"model_artifact_evidence[{engine}].source.read_only",
+                "must be true",
+            )
+        if engine == "sglang" and source["kind"] != "read_only_bind_mount":
+            _fail(
+                f"model_artifact_evidence[{engine}].source.kind",
+                "stock SGLang must identify its observed read-only model mount",
+            )
+
+        registry = implementation.get("registry_image")
+        registry_descriptors = [
+            item
+            for item in descriptors.values()
+            if item["role"] == "registry_metadata" and item.get("engine_id") == engine
+        ]
+        if registry is None:
+            if registry_descriptors:
+                _fail(
+                    "evidence_files",
+                    f"registry metadata exists for {engine} without a declared registry image",
+                )
+            continue
+        registry_reference = registry["evidence"]
+        registry_descriptor = descriptors.get(registry_reference["path"])
+        if (
+            registry_descriptor is None
+            or registry_descriptor.get("role") != "registry_metadata"
+            or registry_descriptor.get("engine_id") != engine
+        ):
+            _fail(
+                f"implementations[{engine}].registry_image.evidence.path",
+                "must reference registry_metadata for the same implementation",
+            )
+        if registry_descriptor["sha256"] != registry_reference["sha256"]:
+            _fail(
+                f"implementations[{engine}].registry_image.evidence.sha256",
+                "must equal the evidence descriptor digest",
+            )
+        registry_payload = _strict_object(
+            payloads[registry_reference["path"]],
+            f"registry_metadata[{engine}]",
+            (
+                "schema_version",
+                "implementation_id",
+                "local_image_id",
+                "reference",
+                "manifest_digest",
+            ),
+            ("compressed_size_bytes",),
+        )
+        expected = {
+            "schema_version": "qwen3-tts-registry-image/v1",
+            "implementation_id": engine,
+            "local_image_id": implementation["local_image"]["id"],
+            "reference": registry["reference"],
+            "manifest_digest": registry["manifest_digest"],
+            "compressed_size_bytes": registry.get("compressed_size_bytes"),
+        }
+        observed = dict(registry_payload)
+        observed.setdefault("compressed_size_bytes", None)
+        if observed != expected:
+            _fail(
+                f"implementations[{engine}].registry_image",
+                "differs from digest-bound registry evidence",
+            )
 
 
 def _boolean(value: Any, path: str) -> bool:
@@ -1906,7 +2288,12 @@ def _validate_client_summary(
     ):
         _fail(f"{path}.synchronized_batch_width", "does not match the profile")
     warmups = _integer(summary["warmups"], f"{path}.warmups")
-    if warmups < workload["warmup_requests_per_engine"]:
+    required_warmups = workload[
+        "warmup_requests_per_run"
+        if "warmup_requests_per_run" in workload
+        else "warmup_requests_per_engine"
+    ]
+    if warmups < required_warmups:
         _fail(f"{path}.warmups", "below the manifest warmup requirement")
     for field in (
         "planned_requests",
@@ -2114,6 +2501,13 @@ def _validate_client_runs(
         if descriptor["role"] == "workload"
     )
     workload_records = _validate_client_workload(payloads[workload_path])
+    if manifest["schema_version"] == "1.2":
+        observed_seeds = [item.get("seed") for item in workload_records]
+        if observed_seeds != manifest["workload"]["ordered_seeds"]:
+            _fail(
+                "workload.ordered_seeds",
+                "must exactly match every ordered seed in the digest-verified workload",
+            )
     if manifest["evidence_kind"] == "production":
         if manifest["workload"]["response_mode"] != "streaming":
             _fail("workload.response_mode", "production comparison requires streaming")
@@ -2314,10 +2708,12 @@ def load_bundle(manifest_path: Path, allow_test_fixture: bool = False) -> Bundle
     manifest = _validate_manifest(_parse_json_bytes(manifest_bytes, str(manifest_path)))
     if manifest["evidence_kind"] == "test_fixture" and not allow_test_fixture:
         _fail("evidence_kind", "test fixtures require --allow-test-fixture")
-    if manifest["schema_version"] == "1.1":
+    if manifest["schema_version"] in {"1.1", "1.2"}:
         payloads, descriptors = _load_client_evidence_files(
             manifest, manifest_path.parent
         )
+        if manifest["schema_version"] == "1.2":
+            _validate_bound_implementation_evidence(manifest, payloads, descriptors)
         requests, measurements, run_summaries, run_resources = _validate_client_runs(
             manifest,
             payloads,
@@ -2397,7 +2793,7 @@ def aggregate(
                     "at least one successful request is required",
                 )
             statuses = Counter(item["status"] for item in rows)
-            if bundle.manifest["schema_version"] == "1.1":
+            if bundle.manifest["schema_version"] in {"1.1", "1.2"}:
                 keys = sorted(
                     key
                     for key in bundle.run_summaries
@@ -2915,6 +3311,7 @@ def _build_story(bundle: Bundle, doc_width: float) -> list[Any]:
     ]
     engines = _engine_map(bundle)
     fixture = manifest["evidence_kind"] == "test_fixture"
+    v12 = manifest["schema_version"] == "1.2"
     story: list[Any] = []
     if fixture:
         warning = Table(
@@ -2933,6 +3330,97 @@ def _build_story(bundle: Bundle, doc_width: float) -> list[Any]:
             )
         )
         story.extend([warning, Spacer(1, 16)])
+    if v12:
+        footprint_rows = [
+            [
+                "Implementation",
+                "Local unpacked size",
+                "Local Docker image ID",
+                "Registry manifest / compressed size",
+            ]
+        ]
+        for engine, label in (("native", "Native"), ("sglang", "SGLang")):
+            registry = engines[engine].get("registry_image")
+            registry_value = "not evidenced"
+            if registry is not None:
+                compressed = registry.get("compressed_size_bytes")
+                registry_value = registry["manifest_digest"]
+                if compressed is not None:
+                    registry_value += f" / {_size(compressed)}"
+            footprint_rows.append(
+                [
+                    label,
+                    _size(engines[engine]["local_image"]["unpacked_size_bytes"]),
+                    engines[engine]["local_image"]["id"],
+                    registry_value,
+                ]
+            )
+        footprint_story = [
+            _section_title(11, "Container footprint and provenance", styles),
+            _table(
+                footprint_rows,
+                [
+                    doc_width * 0.13,
+                    doc_width * 0.17,
+                    doc_width * 0.36,
+                    doc_width * 0.34,
+                ],
+                styles,
+                long=True,
+            ),
+            Spacer(1, 8),
+            _paragraph(
+                "Local size is Docker's inspected local unpacked/virtual Size value. "
+                "Registry manifest digests and compressed sizes appear only when separately "
+                "digest-bound registry evidence exists. Startup was not measured by these "
+                "already-running-container benchmark runs and is therefore not reported.",
+                styles["body"],
+            ),
+        ]
+    else:
+        footprint_story = [
+            _section_title(11, "Startup time and image size", styles),
+            _table(
+                [
+                    ["Implementation", "Startup", "Image size", "Image digest"],
+                    [
+                        "Native",
+                        _ms(engines["native"]["startup_ms"]),
+                        _size(engines["native"]["image_size_bytes"]),
+                        engines["native"]["image_digest"],
+                    ],
+                    [
+                        "SGLang",
+                        _ms(engines["sglang"]["startup_ms"]),
+                        _size(engines["sglang"]["image_size_bytes"]),
+                        engines["sglang"]["image_digest"],
+                    ],
+                ],
+                [
+                    doc_width * 0.15,
+                    doc_width * 0.15,
+                    doc_width * 0.16,
+                    doc_width * 0.54,
+                ],
+                styles,
+            ),
+            Spacer(1, 12),
+            KeepTogether(
+                [
+                    PatternBarChart(
+                        doc_width,
+                        175,
+                        ["Startup (s)"],
+                        [float(engines["native"]["startup_ms"]) / 1000],
+                        [float(engines["sglang"]["startup_ms"]) / 1000],
+                        "Seconds",
+                    ),
+                    _paragraph(
+                        "Figure 6. Ready-to-serve startup time.", styles["caption"]
+                    ),
+                ]
+            ),
+        ]
     story.extend(
         [
             _paragraph(manifest["report"]["title"], styles["title"]),
@@ -2956,14 +3444,24 @@ def _build_story(bundle: Bundle, doc_width: float) -> list[Any]:
             Spacer(1, 18),
             _paragraph(
                 "This report is generated only from digest-verified JSON and JSONL evidence. "
-                "The validator confirmed identical canonical workload keys and exact model "
-                "identity across both implementations before aggregation.",
+                "The validator confirmed identical canonical workload keys, shared model "
+                "repository/revision identity, and separately evidence-bound runtime artifacts "
+                "for both implementations before aggregation."
+                if v12
+                else "The validator confirmed identical canonical workload keys and exact "
+                "model identity across both implementations before aggregation.",
                 styles["body"],
             ),
             Spacer(1, 12),
             _paragraph(
-                "Lower is better for TTFA, RTF, memory, power, energy, startup, and image size. "
-                "Higher is better for throughput and reliability.",
+                (
+                    "Lower is better for TTFA, RTF, memory, power, energy, and local "
+                    "unpacked image size. "
+                    if v12
+                    else "Lower is better for TTFA, RTF, memory, power, energy, startup, "
+                    "and image size. "
+                )
+                + "Higher is better for throughput and reliability.",
                 styles["small"],
             ),
             PageBreak(),
@@ -3048,10 +3546,14 @@ def _build_story(bundle: Bundle, doc_width: float) -> list[Any]:
                     ["Memory", manifest["methodology"]["memory_definition"]],
                     ["Power", manifest["methodology"]["power_definition"]],
                     ["Energy", manifest["methodology"]["energy_definition"]],
-                    ["Startup", manifest["methodology"]["startup_definition"]],
                     ["Run order", manifest["methodology"]["run_order"]],
                     ["Statistics", manifest["methodology"]["statistical_method"]],
-                ],
+                ]
+                + (
+                    []
+                    if v12
+                    else [["Startup", manifest["methodology"]["startup_definition"]]]
+                ),
                 [doc_width * 0.20, doc_width * 0.80],
                 styles,
                 long=True,
@@ -3059,7 +3561,10 @@ def _build_story(bundle: Bundle, doc_width: float) -> list[Any]:
             Spacer(1, 6),
             _paragraph(
                 f"Power sampling interval: {manifest['methodology']['sampling_interval_ms']} ms. "
-                f"Warmup requests per engine: {manifest['workload']['warmup_requests_per_engine']}.",
+                f"Warmup requests per run: {manifest['workload']['warmup_requests_per_run']}."
+                if v12
+                else f"Warmup requests per engine: "
+                f"{manifest['workload']['warmup_requests_per_engine']}.",
                 styles["body"],
             ),
             _paragraph("Environment controls", styles["h2"]),
@@ -3070,6 +3575,97 @@ def _build_story(bundle: Bundle, doc_width: float) -> list[Any]:
 
     system = manifest["system"]
     model = manifest["model"]
+    model_rows = [
+        ["Field", "Value"],
+        ["Repository", model["repository"]],
+        ["Revision", model["revision"]],
+        ["Variant", model["variant"]],
+    ]
+    if not v12:
+        model_rows.extend(
+            [
+                ["Parameters", f"{model['parameter_count']:,}"],
+                ["Precision", model["precision"]],
+                ["Manifest SHA-256", model["manifest_sha256"]],
+            ]
+        )
+    implementation_rows = [
+        ["Field", "Native", "SGLang"],
+        ["Name", engines["native"]["name"], engines["sglang"]["name"]],
+        ["Version", engines["native"]["version"], engines["sglang"]["version"]],
+        [
+            "Source commit",
+            engines["native"]["source_commit"],
+            engines["sglang"]["source_commit"],
+        ],
+    ]
+    if v12:
+        native_artifact = engines["native"]["model_artifact"]
+        sglang_artifact = engines["sglang"]["model_artifact"]
+        implementation_rows.extend(
+            [
+                [
+                    "Local image reference",
+                    engines["native"]["local_image"]["reference"],
+                    engines["sglang"]["local_image"]["reference"],
+                ],
+                [
+                    "Local Docker image ID",
+                    engines["native"]["local_image"]["id"],
+                    engines["sglang"]["local_image"]["id"],
+                ],
+                [
+                    "Model parameters",
+                    f"{native_artifact['parameter_count']:,}",
+                    f"{sglang_artifact['parameter_count']:,}",
+                ],
+                [
+                    "Weight precision",
+                    ", ".join(native_artifact["precision"]),
+                    ", ".join(sglang_artifact["precision"]),
+                ],
+                [
+                    "Artifact manifest",
+                    native_artifact["manifest_sha256"] or "not available",
+                    sglang_artifact["manifest_sha256"] or "not available",
+                ],
+                [
+                    "API",
+                    engines["native"]["api_protocol"],
+                    engines["sglang"]["api_protocol"],
+                ],
+                [
+                    "Streaming",
+                    engines["native"]["streaming_semantics"],
+                    engines["sglang"]["streaming_semantics"],
+                ],
+            ]
+        )
+    else:
+        implementation_rows.extend(
+            [
+                [
+                    "Image",
+                    engines["native"]["container_image"],
+                    engines["sglang"]["container_image"],
+                ],
+                [
+                    "Image digest",
+                    engines["native"]["image_digest"],
+                    engines["sglang"]["image_digest"],
+                ],
+                [
+                    "API",
+                    engines["native"]["api_protocol"],
+                    engines["sglang"]["api_protocol"],
+                ],
+                [
+                    "Streaming",
+                    engines["native"]["streaming_semantics"],
+                    engines["sglang"]["streaming_semantics"],
+                ],
+            ]
+        )
     story.extend(
         [
             _section_title(3, "System, model, and implementation versions", styles),
@@ -3099,54 +3695,13 @@ def _build_story(bundle: Bundle, doc_width: float) -> list[Any]:
             ),
             _paragraph("Model identity", styles["h2"]),
             _table(
-                [
-                    ["Field", "Value"],
-                    ["Repository", model["repository"]],
-                    ["Revision", model["revision"]],
-                    ["Variant", model["variant"]],
-                    ["Parameters", f"{model['parameter_count']:,}"],
-                    ["Precision", model["precision"]],
-                    ["Manifest SHA-256", model["manifest_sha256"]],
-                ],
+                model_rows,
                 [doc_width * 0.28, doc_width * 0.72],
                 styles,
             ),
             _paragraph("Implementations", styles["h2"]),
             _table(
-                [
-                    ["Field", "Native", "SGLang"],
-                    ["Name", engines["native"]["name"], engines["sglang"]["name"]],
-                    [
-                        "Version",
-                        engines["native"]["version"],
-                        engines["sglang"]["version"],
-                    ],
-                    [
-                        "Source commit",
-                        engines["native"]["source_commit"],
-                        engines["sglang"]["source_commit"],
-                    ],
-                    [
-                        "Image",
-                        engines["native"]["container_image"],
-                        engines["sglang"]["container_image"],
-                    ],
-                    [
-                        "Image digest",
-                        engines["native"]["image_digest"],
-                        engines["sglang"]["image_digest"],
-                    ],
-                    [
-                        "API",
-                        engines["native"]["api_protocol"],
-                        engines["sglang"]["api_protocol"],
-                    ],
-                    [
-                        "Streaming",
-                        engines["native"]["streaming_semantics"],
-                        engines["sglang"]["streaming_semantics"],
-                    ],
-                ],
+                implementation_rows,
                 [doc_width * 0.20, doc_width * 0.40, doc_width * 0.40],
                 styles,
                 long=True,
@@ -3576,47 +4131,7 @@ def _build_story(bundle: Bundle, doc_width: float) -> list[Any]:
                 styles,
             ),
             Spacer(1, 12),
-            _section_title(11, "Startup time and image size", styles),
-            _table(
-                [
-                    ["Implementation", "Startup", "Image size", "Image digest"],
-                    [
-                        "Native",
-                        _ms(engines["native"]["startup_ms"]),
-                        _size(engines["native"]["image_size_bytes"]),
-                        engines["native"]["image_digest"],
-                    ],
-                    [
-                        "SGLang",
-                        _ms(engines["sglang"]["startup_ms"]),
-                        _size(engines["sglang"]["image_size_bytes"]),
-                        engines["sglang"]["image_digest"],
-                    ],
-                ],
-                [
-                    doc_width * 0.15,
-                    doc_width * 0.15,
-                    doc_width * 0.16,
-                    doc_width * 0.54,
-                ],
-                styles,
-            ),
-            Spacer(1, 12),
-            KeepTogether(
-                [
-                    PatternBarChart(
-                        doc_width,
-                        175,
-                        ["Startup (s)"],
-                        [float(engines["native"]["startup_ms"]) / 1000],
-                        [float(engines["sglang"]["startup_ms"]) / 1000],
-                        "Seconds",
-                    ),
-                    _paragraph(
-                        "Figure 6. Ready-to-serve startup time.", styles["caption"]
-                    ),
-                ]
-            ),
+            *footprint_story,
             _section_title(12, "Limitations", styles),
             *_bullet_list(manifest["limitations"], styles),
             PageBreak(),
@@ -3637,9 +4152,36 @@ def _build_story(bundle: Bundle, doc_width: float) -> list[Any]:
                 descriptor["sha256"],
             ]
         )
-    weight_rows = [["Weight file", "Bytes", "SHA-256"]]
-    for weight in sorted(model["weight_files"], key=lambda item: item["path"]):
-        weight_rows.append([weight["path"], f"{weight['bytes']:,}", weight["sha256"]])
+    if v12:
+        weight_rows = [
+            ["Engine / weight file", "Precision / parameters", "Bytes", "SHA-256"]
+        ]
+        for engine, label in (("native", "Native"), ("sglang", "SGLang")):
+            for weight in sorted(
+                engines[engine]["model_artifact"]["weight_files"],
+                key=lambda item: item["path"],
+            ):
+                weight_rows.append(
+                    [
+                        f"{label}: {weight['path']}",
+                        f"{weight['precision']} / {weight['parameter_count']:,}",
+                        f"{weight['bytes']:,}",
+                        weight["sha256"],
+                    ]
+                )
+        weight_widths = [
+            doc_width * 0.24,
+            doc_width * 0.19,
+            doc_width * 0.12,
+            doc_width * 0.45,
+        ]
+    else:
+        weight_rows = [["Weight file", "Bytes", "SHA-256"]]
+        for weight in sorted(model["weight_files"], key=lambda item: item["path"]):
+            weight_rows.append(
+                [weight["path"], f"{weight['bytes']:,}", weight["sha256"]]
+            )
+        weight_widths = [doc_width * 0.34, doc_width * 0.16, doc_width * 0.50]
     count_rows = [["Profile", "Engine", "Rows", "Successful", "Required minimum"]]
     for profile in profiles:
         for engine, label in (("native", "Native"), ("sglang", "SGLang")):
@@ -3672,7 +4214,7 @@ def _build_story(bundle: Bundle, doc_width: float) -> list[Any]:
             _paragraph("Model artifacts", styles["h2"]),
             _table(
                 weight_rows,
-                [doc_width * 0.34, doc_width * 0.16, doc_width * 0.50],
+                weight_widths,
                 styles,
                 long=True,
             ),

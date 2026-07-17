@@ -17,7 +17,7 @@
     "limitations"
   ],
   "properties": {
-    "schema_version": {"enum": ["1.0", "1.1"]},
+    "schema_version": {"enum": ["1.0", "1.1", "1.2"]},
     "evidence_kind": {"enum": ["production", "test_fixture"]},
     "test_fixture_notice": {"type": "string", "minLength": 20},
     "report": {"$ref": "#/$defs/report"},
@@ -53,8 +53,24 @@
       "then": {"required": ["test_fixture_notice"]},
       "else": {
         "required": ["run_resources"],
-        "properties": {"schema_version": {"const": "1.1"}},
+        "properties": {"schema_version": {"const": "1.2"}},
         "not": {"required": ["test_fixture_notice"]}
+      }
+    },
+    {
+      "if": {"properties": {"schema_version": {"const": "1.2"}}},
+      "then": {
+        "properties": {
+          "model": {"$ref": "#/$defs/common_model"},
+          "workload": {"$ref": "#/$defs/v12_workload"},
+          "implementations": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 2,
+            "items": {"$ref": "#/$defs/v12_implementation"}
+          },
+          "methodology": {"$ref": "#/$defs/v12_methodology"}
+        }
       }
     }
   ],
@@ -106,7 +122,28 @@
         "bytes": {"$ref": "#/$defs/positive_integer"}
       }
     },
-    "model": {
+    "artifact_weight_file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "bytes", "parameter_count", "precision"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "bytes": {"$ref": "#/$defs/positive_integer"},
+        "parameter_count": {"$ref": "#/$defs/positive_integer"},
+        "precision": {"type": "string", "minLength": 2}
+      }
+    },
+    "evidence_reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "legacy_model": {
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -122,6 +159,22 @@
         "manifest_sha256": {"$ref": "#/$defs/sha256"},
         "weight_files": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/weight_file"}}
       }
+    },
+    "common_model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "revision", "variant"],
+      "properties": {
+        "repository": {"type": "string", "minLength": 3},
+        "revision": {"type": "string", "minLength": 7},
+        "variant": {"type": "string", "minLength": 3}
+      }
+    },
+    "model": {
+      "oneOf": [
+        {"$ref": "#/$defs/legacy_model"},
+        {"$ref": "#/$defs/common_model"}
+      ]
     },
     "profile": {
       "type": "object",
@@ -144,7 +197,7 @@
         "max_codec_frames": {"$ref": "#/$defs/positive_integer"}
       }
     },
-    "workload": {
+    "legacy_or_v11_workload": {
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -168,7 +221,38 @@
         "generation": {"$ref": "#/$defs/generation"}
       }
     },
-    "implementation": {
+    "v12_workload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "corpus_sha256", "ordered_seeds", "sample_rate_hz", "channels", "sample_format",
+        "response_mode", "warmup_requests_per_run", "minimum_measured_requests_per_profile",
+        "minimum_rounds_per_subject", "profiles", "language_policy"
+      ],
+      "properties": {
+        "corpus_sha256": {"$ref": "#/$defs/sha256"},
+        "ordered_seeds": {
+          "type": "array", "minItems": 1,
+          "items": {"type": "integer", "minimum": 0}
+        },
+        "sample_rate_hz": {"$ref": "#/$defs/positive_integer"},
+        "channels": {"$ref": "#/$defs/positive_integer"},
+        "sample_format": {"enum": ["pcm_s16le"]},
+        "response_mode": {"enum": ["streaming", "buffered"]},
+        "warmup_requests_per_run": {"type": "integer", "minimum": 0},
+        "minimum_measured_requests_per_profile": {"$ref": "#/$defs/positive_integer"},
+        "minimum_rounds_per_subject": {"$ref": "#/$defs/positive_integer"},
+        "profiles": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/profile"}},
+        "language_policy": {"type": "string", "minLength": 4}
+      }
+    },
+    "workload": {
+      "oneOf": [
+        {"$ref": "#/$defs/legacy_or_v11_workload"},
+        {"$ref": "#/$defs/v12_workload"}
+      ]
+    },
+    "legacy_implementation": {
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -198,7 +282,86 @@
         "command_sha256": {"$ref": "#/$defs/sha256"}
       }
     },
-    "methodology": {
+    "local_image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reference", "id", "unpacked_size_bytes"],
+      "properties": {
+        "reference": {"type": "string", "minLength": 3},
+        "id": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "unpacked_size_bytes": {"$ref": "#/$defs/positive_integer"}
+      }
+    },
+    "registry_image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reference", "manifest_digest", "evidence"],
+      "properties": {
+        "reference": {"type": "string", "minLength": 3},
+        "manifest_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "compressed_size_bytes": {"$ref": "#/$defs/positive_integer"},
+        "evidence": {"$ref": "#/$defs/evidence_reference"}
+      }
+    },
+    "model_artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository", "revision", "variant", "parameter_count", "precision",
+        "manifest_sha256", "weight_files", "evidence"
+      ],
+      "properties": {
+        "repository": {"type": "string", "minLength": 3},
+        "revision": {"type": "string", "minLength": 7},
+        "variant": {"type": "string", "minLength": 3},
+        "parameter_count": {"$ref": "#/$defs/positive_integer"},
+        "precision": {
+          "type": "array", "minItems": 1, "uniqueItems": true,
+          "items": {"type": "string", "minLength": 2}
+        },
+        "manifest_sha256": {
+          "oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]
+        },
+        "weight_files": {
+          "type": "array", "minItems": 1,
+          "items": {"$ref": "#/$defs/artifact_weight_file"}
+        },
+        "evidence": {"$ref": "#/$defs/evidence_reference"}
+      }
+    },
+    "v12_implementation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "role", "name", "version", "source_commit", "source_url",
+        "local_image", "model_artifact", "api_protocol", "streaming_semantics",
+        "runtime_components"
+      ],
+      "properties": {
+        "id": {"enum": ["native", "sglang"]},
+        "role": {"enum": ["native", "sglang"]},
+        "name": {"type": "string", "minLength": 2},
+        "version": {"type": "string", "minLength": 1},
+        "source_commit": {"type": "string", "minLength": 7},
+        "source_url": {"type": "string", "minLength": 8},
+        "local_image": {"$ref": "#/$defs/local_image"},
+        "registry_image": {"$ref": "#/$defs/registry_image"},
+        "model_artifact": {"$ref": "#/$defs/model_artifact"},
+        "api_protocol": {"type": "string", "minLength": 3},
+        "streaming_semantics": {"type": "string", "minLength": 3},
+        "runtime_components": {
+          "type": "array", "minItems": 1,
+          "items": {"type": "string", "minLength": 2}
+        }
+      }
+    },
+    "implementation": {
+      "oneOf": [
+        {"$ref": "#/$defs/legacy_implementation"},
+        {"$ref": "#/$defs/v12_implementation"}
+      ]
+    },
+    "legacy_methodology": {
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -221,6 +384,37 @@
         "environment_controls": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 5}}
       }
     },
+    "v12_methodology": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "clock_source", "ttfa_definition", "rtf_definition", "throughput_definition",
+        "memory_definition", "power_definition", "energy_definition",
+        "sampling_interval_ms", "run_order", "statistical_method", "environment_controls"
+      ],
+      "properties": {
+        "clock_source": {"type": "string", "minLength": 4},
+        "ttfa_definition": {"type": "string", "minLength": 10},
+        "rtf_definition": {"type": "string", "minLength": 10},
+        "throughput_definition": {"type": "string", "minLength": 10},
+        "memory_definition": {"type": "string", "minLength": 10},
+        "power_definition": {"type": "string", "minLength": 10},
+        "energy_definition": {"type": "string", "minLength": 10},
+        "sampling_interval_ms": {"$ref": "#/$defs/positive_integer"},
+        "run_order": {"type": "string", "minLength": 8},
+        "statistical_method": {"type": "string", "minLength": 10},
+        "environment_controls": {
+          "type": "array", "minItems": 1,
+          "items": {"type": "string", "minLength": 5}
+        }
+      }
+    },
+    "methodology": {
+      "oneOf": [
+        {"$ref": "#/$defs/legacy_methodology"},
+        {"$ref": "#/$defs/v12_methodology"}
+      ]
+    },
     "evidence_file": {
       "type": "object",
       "additionalProperties": false,
@@ -229,7 +423,7 @@
         "role": {
           "enum": [
             "workload", "client_summary", "client_requests", "client_packets", "raw",
-            "requests", "measurements"
+            "requests", "measurements", "model_artifact", "registry_metadata"
           ]
         },
         "engine_id": {"enum": ["native", "sglang"]},
