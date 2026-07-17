@@ -68,6 +68,16 @@ timestamp, which is later than the client's measured-end event. It fails if a
 sampler dies, the output directory already exists, the selected container is not
 running, cgroup v2 is unavailable, or a required command is missing.
 
+The process-RSS sampler tolerates a process exiting during `/proc` inspection
+without weakening evidence. It makes at most three immediate attempts inside
+the original scheduled sample cycle, freshly enumerating `cgroup.procs` and
+assigning an actual wall/UTC timestamp to every attempt. Per-process rows remain
+buffered until an attempt finishes, so an abandoned attempt never contaminates
+`process-rss.csv`. A retry never starts at or after the cycle deadline, and the
+next-cycle sleep remains anchored to the original cycle start. If no coherent
+attempt succeeds, only the final partial attempt is emitted with
+`sample_complete=0`; the qualifying reducer rejects that run.
+
 The collector can be used directly for a diagnostic command:
 
 ```bash
@@ -125,8 +135,11 @@ anything other than unknown. No sensor value is estimated or imputed.
 The reducer fixtures require no Docker or GPU:
 
 ```bash
+bash benchmarks/tools/tests/test-process-rss-sampler.sh
 bash benchmarks/tools/tests/test-reduce-spark-run.sh
 ```
 
-They cover the known idle-adjusted energy calculation and rejection of a fifth
-phase event, a gap above 200 ms, and a competing CUDA process.
+They cover coherent retry after a short-lived PID, bounded persistent failure,
+cycle-deadline enforcement, the known idle-adjusted energy calculation, and
+rejection of a fifth phase event, a gap above 200 ms, and a competing CUDA
+process.
