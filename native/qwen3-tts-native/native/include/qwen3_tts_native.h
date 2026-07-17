@@ -13,7 +13,7 @@
 extern "C" {
 #endif
 
-#define QWEN3_TTS_TALKER_ABI_VERSION 1U
+#define QWEN3_TTS_TALKER_ABI_VERSION 2U
 #define QWEN3_TTS_CODEC_CODEBOOKS 16U
 
 enum {
@@ -107,6 +107,24 @@ typedef struct Qwen3TtsCodecFrameInfo {
     float predictor_gpu_milliseconds;
     float talker_gpu_milliseconds;
 } Qwen3TtsCodecFrameInfo;
+
+/* Opaque borrowed CUDA event. The producer retains ownership; consumers may
+ * wait on it but must never record or destroy it. */
+typedef void* Qwen3TtsCudaEventHandle;
+
+/* Additive ABI-v2 view of one predictor frame on the CUDA device. The caller
+ * initializes struct_size and reserved before begin. The view and its event
+ * remain valid until the matching finish call. Exactly one lease may be in
+ * flight per session. */
+typedef struct Qwen3TtsDeviceFrameViewV2 {
+    uint32_t struct_size;
+    uint32_t code_count;
+    const uint16_t* device_codes;
+    Qwen3TtsCudaEventHandle ready_event;
+    uint64_t lease_id;
+    int32_t device_index;
+    uint32_t reserved;
+} Qwen3TtsDeviceFrameViewV2;
 
 typedef enum Qwen3TtsTalkerPhase {
     QWEN3_TTS_TALKER_CREATED = 0,
@@ -285,6 +303,38 @@ QWEN3_TTS_API int32_t qwen3_tts_session_next_frame(
     Qwen3TtsSamplingConfig predictor_sampling,
     uint16_t* output_codes,
     size_t output_code_capacity,
+    uint16_t* next_semantic_token,
+    Qwen3TtsCodecFrameInfo* frame_info,
+    char* error,
+    size_t error_capacity
+);
+
+/* Enqueue one predictor frame and the following semantic-token step without a
+ * host synchronization. The returned device codes become readable only after
+ * ready_event. The session must be completed with the matching lease ID before
+ * another begin, prefill, or reset operation.
+ *
+ * The function uses the session's current semantic token. device_codes and
+ * ready_event are borrowed, read-only values owned by the Talker session. */
+QWEN3_TTS_API int32_t qwen3_tts_session_next_frame_begin_v2(
+    Qwen3TtsSessionHandle handle,
+    int32_t trailing_text_token_id,
+    Qwen3TtsSamplingConfig talker_sampling,
+    Qwen3TtsSamplingConfig predictor_sampling,
+    Qwen3TtsDeviceFrameViewV2* output,
+    char* error,
+    size_t error_capacity
+);
+
+/* Complete a matching begin operation and commit the next semantic token.
+ * consumer_done_event may be null when no external CUDA work will access the
+ * borrowed frame after this function returns. Otherwise it must be a recorded,
+ * consumer-owned CUDA event on the same device. The Talker stream waits on it
+ * before any later frame can overwrite device_codes. */
+QWEN3_TTS_API int32_t qwen3_tts_session_next_frame_finish_v2(
+    Qwen3TtsSessionHandle handle,
+    uint64_t lease_id,
+    Qwen3TtsCudaEventHandle consumer_done_event,
     uint16_t* next_semantic_token,
     Qwen3TtsCodecFrameInfo* frame_info,
     char* error,
