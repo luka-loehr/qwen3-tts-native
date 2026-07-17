@@ -16,7 +16,7 @@ download a model separately and do not mount model files into the container.
 ## 1. Select the immutable image
 
 ```bash
-IMAGE='docker.io/luka-loehr/qwen3-tts-native@sha256:<PUBLISHED_DIGEST>'
+IMAGE='ghcr.io/luka-loehr/qwen3-tts-native@sha256:<PUBLISHED_DIGEST>'
 ```
 
 `<PUBLISHED_DIGEST>` is deliberately a placeholder while registry publication

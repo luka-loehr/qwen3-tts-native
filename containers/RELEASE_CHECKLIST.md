@@ -48,7 +48,7 @@ published as a shortcut around an incomplete gate.
 - [ ] Only the pinned cuBLAS/cuBLASLt runtime payload is added from the CUDA
       devel image.
 - [ ] Python, Node.js, PyTorch, SGLang, vLLM, TensorRT, cuDNN, NPP, cuSPARSE,
-      NCCL, compilers, and development packages are absent.
+      NCCL, compilers, build tools, and development packages are absent.
 - [ ] The image runs as UID/GID `10001`, never root.
 - [ ] The root filesystem is read-only with only a bounded `/tmp` tmpfs.
 - [ ] All Linux capabilities are dropped and no-new-privileges is enabled.
@@ -73,13 +73,19 @@ published as a shortcut around an incomplete gate.
 - [ ] The candidate is pushed directly as exactly one `linux/arm64` platform.
 - [ ] Registry credentials were never passed as build arguments or copied into
       a layer.
-- [ ] The remote manifest contains BuildKit SBOM and provenance attestations.
+- [ ] Build metadata records the pushed OCI index digest, and a remote
+      `imagetools inspect` of the candidate tag returns that exact digest.
+- [ ] The immutable GHCR digest contains a BuildKit SPDX SBOM from the
+      digest-pinned scanner and maximum SLSA provenance; its invocation was
+      reviewed for accidental secret disclosure.
 - [ ] A current vulnerability scan reports no unresolved critical or high
       release blocker.
 - [ ] The candidate digest is signed and the signature verifies.
 - [ ] Registry compressed size is no more than 6.0 GB.
 - [ ] Locally unpacked image size is no more than 10.0 GB.
-- [ ] A clean Spark pull by digest succeeds without a cached model layer.
+- [ ] A separate Spark Docker daemon with no candidate or model-layer cache
+      pulls the immutable GHCR digest successfully, and the pre-pull inventory,
+      pull log, and image inspection are preserved.
 
 ### Keyless GHCR signing
 
