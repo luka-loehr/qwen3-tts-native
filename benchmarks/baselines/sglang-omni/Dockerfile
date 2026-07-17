@@ -44,13 +44,23 @@ RUN cd /opt/sglang-omni \
     && git diff --check \
     && test "$(git diff --name-only)" = "pyproject.toml"
 
-# Install the complete stock SGLang-Omni dependency set after applying the sole
-# ARM64 packaging patch. Its compute-critical versions (Torch, Transformers,
-# SGLang, CUDA relay packages, and related kernels) are pinned by upstream and
-# by the OCI base. Ancillary packages with upstream range constraints are
-# captured after the build by scripts/capture-provenance.sh.
+# SGLang-Omni 0.1.0's declared transitive dependency graph contains mutually
+# incompatible protobuf constraints. The upstream Spark recipe uses uv, whose
+# resolver installs that declared set and reports the resulting incompatibilities
+# for audit. Pin and hash the exact installer used by the validated Spark build.
+COPY requirements-build.txt /tmp/requirements-build.txt
+RUN python3 -m pip install \
+      --no-cache-dir \
+      --no-deps \
+      --require-hashes \
+      --requirement /tmp/requirements-build.txt
+
+# Install the complete stock dependency declaration after applying the sole
+# ARM64 packaging patch. Compute-critical versions are pinned by upstream and
+# the OCI base. Resolved ancillary versions and `pip check` are captured by the
+# provenance script; the immutable comparator image digest is the runtime pin.
 WORKDIR /opt/sglang-omni
-RUN python3 -m pip install --no-cache-dir --no-build-isolation -e .
+RUN UV_NO_CACHE=1 uv pip install --system --no-build-isolation -e .
 
 COPY requirements-qwen.txt /tmp/requirements-qwen.txt
 RUN python3 -m pip install \
@@ -62,7 +72,7 @@ RUN python3 -m pip install \
 
 COPY qwen3_tts_1_7b_voicedesign.yaml /opt/baseline/qwen3_tts_1_7b_voicedesign.yaml
 
-RUN python3 -c 'import platform; from importlib.metadata import version; from sglang_omni.models.qwen3_tts.compat import apply_qwen_tts_transformers_compatibility_patches; apply_qwen_tts_transformers_compatibility_patches(); import librosa, qwen_tts, sglang_omni, torch, transformers; assert platform.machine() in {"aarch64", "arm64"}; assert version("sglang") == "0.5.12.post1"; assert version("sglang-omni") == "0.1.0"; assert version("qwen-tts") == "0.1.1"; assert version("transformers") == "5.6.0"; assert version("torch").split("+")[0] == "2.11.0"'
+RUN python3 -c 'import platform; from importlib.metadata import version; from sglang_omni.models.qwen3_tts.compat import apply_qwen_tts_transformers_compatibility_patches; apply_qwen_tts_transformers_compatibility_patches(); import librosa, qwen_tts, sglang_omni, torch, transformers; assert platform.machine() in {"aarch64", "arm64"}; assert version("uv") == "0.11.16"; assert version("sglang") == "0.5.12.post1"; assert version("sglang-omni") == "0.1.0"; assert version("qwen-tts") == "0.1.1"; assert version("transformers") == "5.6.0"; assert version("torch").split("+")[0] == "2.11.0"'
 
 EXPOSE 8000
 CMD ["sgl-omni", "--help"]

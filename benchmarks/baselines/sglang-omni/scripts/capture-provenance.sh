@@ -14,6 +14,9 @@ docker image inspect "${image}" > "${output_dir}/image-inspect.json"
 docker buildx imagetools inspect "${base}" > "${output_dir}/base-image-manifest.txt"
 docker run --rm --entrypoint python3 "${image}" -m pip freeze --all \
   > "${output_dir}/pip-freeze.txt"
+docker run --rm --entrypoint /bin/bash "${image}" \
+  -lc 'python3 -m pip check || true' \
+  > "${output_dir}/pip-check.txt"
 docker run --rm --entrypoint dpkg-query "${image}" \
   -W '-f=${Package}\t${Version}\n' sox libsox-fmt-all \
   > "${output_dir}/system-packages.txt"
