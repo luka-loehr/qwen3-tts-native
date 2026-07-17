@@ -95,9 +95,11 @@ published image is exposed.
 
 ## Deployment security model
 
-The server is an inference backend, not an internet edge. It binds to loopback
-by default and intentionally does not implement TLS termination or a concrete
-identity provider. A production operator must:
+The server is an inference backend, not an internet edge. The standalone binary
+binds to loopback by default. The production image listens on all container
+interfaces and must be published only to host loopback or an explicitly private
+service network. Neither form implements TLS termination or a concrete identity
+provider. A production operator must:
 
 - run only an accepted image by immutable digest, never an unqualified mutable
   tag;

@@ -152,7 +152,7 @@ docker run --rm \
   --env QWEN3_TTS_MAX_VOICE_DESCRIPTION_BYTES=2048 \
   --env QWEN3_TTS_MAX_DURATION_SECONDS=60 \
   --env RUST_LOG=qwen3_tts_server=info \
-  'docker.io/luka-loehr/qwen3-tts-native@sha256:<published-digest>'
+  'docker.io/luka-loehr/qwen3-tts-native@sha256:<PUBLISHED_DIGEST>'
 ```
 
 Registry publication is pending; replace the explicit placeholder with the

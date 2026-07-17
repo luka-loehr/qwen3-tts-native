@@ -10,7 +10,7 @@ The inference path is implemented in Rust and CUDA. It does not use Python,
 Node.js, PyTorch, SGLang, or vLLM at runtime.
 
 > **Publication status:** the production image is still being qualified. Any
-> `sha256:<published-digest>` value in these documents is an explicit
+> `sha256:<PUBLISHED_DIGEST>` value in these documents is an explicit
 > placeholder, not a published artifact. Release automation must replace it
 > with the accepted registry digest before announcing a release.
 
@@ -18,12 +18,22 @@ Node.js, PyTorch, SGLang, or vLLM at runtime.
 
 | Document | Purpose |
 | --- | --- |
+| [Project README](../README.md) | Scope, capabilities, published image, verified performance, and repository map. |
 | [Quickstart](QUICKSTART.md) | Pull, run, verify, and call the digest-pinned container. |
 | [API](API.md) | Human-readable HTTP and multipart streaming contract. |
 | [OpenAPI](openapi.yaml) | Machine-readable OpenAPI 3.1 description of the HTTP surface. |
 | [Configuration](CONFIGURATION.md) | Environment variables, defaults, intrinsic limits, and deployment boundaries. |
 | [Operations](OPERATIONS.md) | Health, metrics, cancellation, shutdown, security, and troubleshooting. |
 | [Architecture](ARCHITECTURE.md) | Implemented Rust/CUDA components, request lifecycle, scheduling, and data flow. |
+| [Container guide](../containers/README.md) | Immutable inputs, reproducible image build, runtime contents, and hardening. |
+| [Benchmark protocol](../benchmarks/README.md) | Qualification rules, metric definitions, telemetry, and evidence policy. |
+| [Benchmark report](../reports/README.md) | Fail-closed evidence validation and deterministic PDF generation. |
+| [Contributing](../CONTRIBUTING.md) | Development workflow, required checks, evidence rules, and review expectations. |
+| [Security](../SECURITY.md) | Vulnerability reporting and the deployment security model. |
+| [Changelog](../CHANGELOG.md) | Versioned project changes and release evidence links. |
+| [Code of Conduct](../CODE_OF_CONDUCT.md) | Community participation standards and enforcement. |
+| [License](../LICENSE) | Apache License 2.0 for the application source. |
+| [Model provenance](../licenses/README.md) | Model identity, licensing, and third-party notice inventory. |
 
 ## Supported deployment
 

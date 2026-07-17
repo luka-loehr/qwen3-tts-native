@@ -32,9 +32,9 @@ the runtime or production image.
 - A versioned native C ABI beneath the HTTP service.
 - Reproducible benchmark evidence, model provenance, third-party license
   reports, a CycloneDX SBOM, and BuildKit provenance/attestation support.
-- A hardened `linux/arm64` container that runs as an unprivileged user with a
-  read-only root filesystem, no Linux capabilities, and the pinned model
-  weights included.
+- A `linux/arm64` container that runs as an unprivileged user, includes the
+  pinned model weights, and supports the documented hardened run profile with
+  a read-only root filesystem and no Linux capabilities.
 
 The project intentionally supports **VoiceDesign only**. It does not include
 voice cloning, reference audio, speaker enrolment, the Base or CustomVoice
@@ -98,7 +98,6 @@ digest:
 
 ```bash
 IMAGE=docker.io/luka-loehr/qwen3-tts-native
-RELEASE_TAG=<PUBLISHED_RELEASE_TAG>
 DIGEST=sha256:<PUBLISHED_DIGEST>
 
 docker pull "$IMAGE@$DIGEST"
@@ -114,9 +113,10 @@ docker run --rm \
   "$IMAGE@$DIGEST"
 ```
 
-`RELEASE_TAG` is shown for human release identification; production execution
-uses the digest. Do not mount alternate weights over `/opt/qwen3-tts/model`, as
-that would invalidate the model identity recorded in the OCI metadata.
+Production execution uses the immutable digest. The human-readable release tag
+is recorded in the release notes and OCI labels. Do not mount alternate weights
+over `/opt/qwen3-tts/model`, as that would invalidate the model identity
+recorded in the OCI metadata.
 
 Wait for the complete native warm-up:
 
@@ -173,16 +173,18 @@ sampling controls, limits, packet headers, request IDs, and cancellation.
 | Method and path | Purpose |
 | --- | --- |
 | `GET /health/live` | Process and event-loop liveness. |
-| `GET /health/ready` | Shared engine loaded, full native path warmed, and capacity healthy. |
+| `GET /health/ready` | Shared engine loaded, full native path warmed, and engine healthy. |
 | `GET /v1/capabilities` | VoiceDesign-only languages, formats, and limits. |
 | `POST /v1/voice-design/speech` | Progressive multipart PCM or buffered WAV synthesis. |
 | `POST /v1/audio/speech` | Conservative buffered-WAV compatibility endpoint. |
 | `DELETE /v1/requests/{request-id}` | Bounded cancellation of an admitted request. |
-| `GET /metrics` | Prompt-free Prometheus counters and latency metrics. |
+| `GET /metrics` | Prompt-free Prometheus request counters and engine-health gauge. |
 
-The service binds to `127.0.0.1:8080` by default. It deliberately does not
-terminate TLS or provide an identity provider. Public deployments must place
-it behind an authenticated, rate-limited proxy with request and response
+The standalone server binary binds to `127.0.0.1:8080` by default. The
+production image listens on `0.0.0.0:8080` inside its container; the hardened
+run command above publishes that port to host loopback only. The service does
+not terminate TLS or provide an identity provider. Public deployments must
+place it behind an authenticated, rate-limited proxy with request and response
 timeouts. Review [SECURITY.md](SECURITY.md) before exposing the service.
 
 ## Verified performance
@@ -300,11 +302,15 @@ post-build release gates.
 | `native/qwen3-tts-runtime` | Scheduler, native backend, versioned C ABI, and lifecycle tests. |
 | `native/qwen3-tts-server` | Bounded Rust HTTP transport, healthcheck, metrics, streaming, and WAV output. |
 | `native/qwen3-tts-bench` | Real-runtime qualification harness and report helpers. |
+| `native/qwen3-tts-http-bench` | Standalone external HTTP client for synchronized Native and SGLang measurements. |
 | `benchmarks` | Corpora, deterministic fixtures, protocols, and immutable result records. |
+| `reports` | Fail-closed evidence validation and deterministic black-and-white PDF generation. |
+| `docs` | Quickstart, API, configuration, operations, architecture, and OpenAPI documentation. |
 | `containers` | Reproducible builder, hardened runtime image, and release checklist. |
 | `licenses` | Model provenance and third-party notices. |
 | `tools/release-metadata` | Pinned license and CycloneDX metadata pipeline. |
 | `notes` | Architecture, model-contract, artifact, codec, and toolchain decisions. |
+| Root community files | Contribution, security, conduct, changelog, and Apache-2.0 license policies. |
 
 ## Contributing and security
 
