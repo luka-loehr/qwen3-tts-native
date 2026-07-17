@@ -1,51 +1,121 @@
-# Qwen3-TTS Native Runtime Contract
+# Qwen3-TTS Native Runtime
 
-This crate owns the public request lifecycle and packet invariants for the
-native Qwen3-TTS 1.7B VoiceDesign engine.
+This crate owns the public request lifecycle and connects the real native
+Qwen3-TTS 1.7B VoiceDesign talker to the real neural speech-tokenizer decoder.
+It exposes progressive 24 kHz mono signed 16-bit PCM through a versioned C ABI.
 
-It currently provides:
+There is no placeholder inference path in the exported library. Test-only
+scripted backends exercise scheduler failure and backpressure behavior without
+being reachable through the public engine entry points.
 
-- a versioned C ABI contract with caller-owned PCM output buffers;
-- the official ten-language identifier set plus `Auto`;
-- official talker and predictor sampling defaults;
-- a bounded packet queue for explicit backpressure;
-- one GPU-worker scheduler with additive batch hooks for prefill and generation;
-- preallocated per-request PCM pools recycled after caller polling;
-- terminal request-state enforcement and cancellation rules;
-- contiguous frame, sample, and packet accounting;
-- per-request TTFA, GPU-time, memory, and output metrics.
+## Implemented runtime
 
-The crate intentionally does **not** provide placeholder or fixture neural
-inference. Engine entry points declared in the C header are connected only after
-the real talker/predictor and speech-tokenizer decoder pass reference parity.
+- Real `NativeBackend` with one shared talker model and one shared codec model.
+- Independently owned talker/codec sessions per request.
+- Bounded request concurrency and PCM ring buffers.
+- Adjacent request prefill coalescing through `start_batch`.
+- Concurrent session stepping through `step_batch`.
+- One-frame first packet and up to four frames in subsequent packets.
+- Exact contiguous frame, sample, and packet accounting.
+- Explicit backpressure without dropping or overwriting audio.
+- Cancellation, terminal-state enforcement, and deterministic retirement.
+- Per-request queue, prefill, TTFA, wall, GPU-time, output, and memory metrics.
+- Panic containment and typed status mapping at every exported FFI boundary.
 
-The scheduler accepts a `StreamingBackend` implementation, coalesces ready
-sessions through `start_batch` and `step_batch`, and never substitutes a test
-backend in production. Test-only scripted backends verify request orchestration,
-hard generation limits, exact PCM write bounds, cancellation, and ring-buffer
-backpressure without making neural-model claims.
+## Public C ABI
 
-## Ownership
+The complete contract is declared in
+[`include/qwen3_tts_runtime.h`](include/qwen3_tts_runtime.h). The exported
+surface contains exactly:
 
-`qwen3_tts_request_start_v1` copies UTF-8 text and instruction data. The engine
-owns immutable weights and request caches. `qwen3_tts_request_poll_v1` copies
-mono 24 kHz signed 16-bit PCM into a caller-owned buffer; internal pinned ring
-buffers are never exposed. One thread polls a request while cancellation may be
-requested from another thread.
+- `qwen3_tts_runtime_abi_version_v1`;
+- `qwen3_tts_engine_create_v1` / `qwen3_tts_engine_destroy_v1`;
+- `qwen3_tts_request_start_v1`;
+- `qwen3_tts_request_poll_v1`;
+- `qwen3_tts_request_cancel_v1`;
+- `qwen3_tts_request_metrics_v1`;
+- `qwen3_tts_request_destroy_v1`.
+
+Callers provide versioned structures, PCM storage, and error buffers. A poll
+preflights the complete packet capacity before touching the queue. An
+undersized buffer therefore returns an error without consuming the packet.
+
+The library distinguishes successful delivery, would-block, end-of-stream,
+invalid input, invalid UTF-8, unsupported language, model, allocation, CUDA,
+state, cancellation, and internal failures.
+
+## Library layout
+
+The runtime loads these native components:
+
+- `libqwen3_tts_cuda.so`;
+- `libqwen3_tts_codec_cuda.so`.
+
+By default they are resolved beside `libqwen3_tts_runtime.so` using `dladdr`.
+Set `QWEN3_TTS_LIBRARY_DIR` to an explicit directory when the three libraries
+are not co-located.
+
+The engine receives a model-root path containing the prepared VoiceDesign and
+speech-tokenizer files. Weights are not embedded in the runtime library.
+
+## Ownership and threading
+
+`qwen3_tts_request_start_v1` copies the UTF-8 text and instruction. The caller
+may release those input buffers when the function returns.
+
+An active request retains the engine core, so it remains valid if the caller
+destroys the public engine handle first. Destroying a request cancels it when
+necessary and waits for bounded retirement. One thread may poll a request while
+another requests cancellation. A request handle must not be polled concurrently
+by multiple threads.
+
+The engine owns shared immutable weights. Each active request owns its mutable
+CUDA streams, cuBLAS handles, KV caches, decoder state, RNG state, cursors, and
+PCM slots. Request teardown releases those allocations exactly once.
 
 ## Packet contract
 
-The default packet contains four codec frames, or 7,680 samples (320 ms). A
-short final packet is allowed. Frame indices, sample offsets, and packet sequence
-numbers must remain contiguous. Backpressure is signaled rather than dropping or
-overwriting audio.
+Each codec frame represents 1,920 samples, or 80 ms at 24 kHz. The default
+follow-up packet contains four frames (7,680 samples, 320 ms). A short final
+packet is allowed.
 
-## Real native E2E smoke
+For every delivered packet:
 
-`native_e2e_smoke` connects the real native 1.7B VoiceDesign talker to the real
-neural speech-tokenizer decoder and writes mono 24 kHz signed 16-bit PCM as a
-WAV file. It validates contiguous frame/sample positions, exact sample counts,
-the final-packet flag, and basic PCM amplitude statistics.
+- `sequence` increases by one;
+- `first_codec_frame` equals all previously delivered frames;
+- `first_sample` equals `first_codec_frame * 1920`;
+- `sample_count` equals `codec_frames * 1920`;
+- caller storage after `sample_count` remains untouched;
+- the final packet is followed by end-of-stream.
+
+## Verification
+
+The Rust suite covers scheduler bounds, ABI layouts, failure mapping, panic
+containment, backpressure, cancellation, retirement, start batching, and exact
+delivery metrics. The strict C harness additionally covers malformed structure
+sizes, malformed UTF-8, cancellation/destruction, undersized-buffer preflight,
+engine destruction before a live request, packet continuity, and WAV output.
+
+The public concurrency harness runs 24 warmups and 200 measured requests at
+each of B1, B3, and B6. The qualifying run completed all 600 requests without a
+failure:
+
+| Concurrency | TTFA p95 | Request RTF p50 | Aggregate RTF |
+| ---: | ---: | ---: | ---: |
+| 1 | 78.24 ms | 0.765 | 0.767 |
+| 3 | 186.42 ms | 1.800 | 0.601 |
+| 6 | 364.62 ms | 3.557 | 0.594 |
+
+The complete evidence is stored in
+[`../../benchmarks/results/native-runtime-public-c-abi-qualification.json`](../../benchmarks/results/native-runtime-public-c-abi-qualification.json).
+Aggregate throughput is faster than real time at every tested level. B3/B6
+per-request RTF and the stricter B1 RTF target below 0.50 remain open.
+
+## Direct native smoke
+
+`native_e2e_smoke` bypasses the scheduler and connects one incremental talker
+session directly to one incremental decoder session. It is useful for model and
+packet diagnosis:
 
 ```text
 cargo run --release --locked --bin native_e2e_smoke -- \
@@ -56,21 +126,24 @@ cargo run --release --locked --bin native_e2e_smoke -- \
   --text "Guten Morgen." \
   --instruction "A calm adult male voice with natural articulation." \
   --language German \
-  --max-frames 40 \
+  --max-frames 256 \
   --packet-frames 4 \
   --seed 0 \
   --greedy \
   --report /tmp/native-e2e.json
 ```
 
-This command uses the incremental talker session directly. It decodes the first
-codec frame immediately, then groups follow-up frames into packets no larger
-than `--packet-frames`. The JSON report records caller-observed first-audio
-latency, every packet arrival, inter-packet gaps, talker and decoder timings,
-contiguous frame/sample positions, PCM statistics, and end-of-stream state.
+`--max-frames` is an emergency ceiling, not a target duration. A low value can
+cut speech mid-word. Quality runs must allow natural model end-of-sequence and
+must treat a request that reaches the ceiling as truncated.
 
-The command remains a non-qualifying single-request smoke. Release evidence
-must come from the public runtime ABI and the separate qualification harness,
-including warmup, at least 200 completed requests at each concurrency level 1,
-3, and 6, bounded backpressure, cancellation and recovery, p95 first audio
-below 200 ms, and real-time factor below 1.
+## Current boundaries
+
+- This crate is a library, not an HTTP or gRPC service.
+- It is not connected to the Ephraim backend, frontend, or production TTS
+  container.
+- There is no production runtime image yet.
+- Talker generation and codec decoding still execute sequentially within one
+  packet; overlapping those stages is the next performance milestone.
+- The checked functional WAV proves transport and PCM validity, not complete
+  multilingual intelligibility or voice-quality qualification.

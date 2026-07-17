@@ -1,8 +1,23 @@
 .cargo-cache/
 artifacts/
+models/
+outputs/
 build/
-native/qwen3-tts-native/build-*/
-native/qwen3-tts-native/target/
+**/build/
+**/build-*/
+**/target/
+
+.env
+.env.*
+!.env.example
+.DS_Store
+
+*.a
+*.cubin
+*.engine
+*.o
+*.so
+*.safetensors
 
 *.pcm
 *.plan

@@ -131,10 +131,10 @@ typedef struct Qwen3TtsRequestMetricsV1 {
 QWEN3_TTS_RUNTIME_API uint32_t qwen3_tts_runtime_abi_version_v1(void);
 
 /*
- * The engine/request functions below define the final ownership contract. The
- * implementation is connected only after real talker and codec parity pass.
- * Input UTF-8 is copied by request_start. poll copies s16 mono PCM into the
- * caller buffer and never exposes internal ring-buffer pointers.
+ * The engine/request functions below implement the public ownership contract
+ * over the native talker and codec backend. Input UTF-8 is copied by
+ * request_start. poll copies s16 mono PCM into the caller buffer and never
+ * exposes internal ring-buffer pointers.
  */
 QWEN3_TTS_RUNTIME_API int32_t qwen3_tts_engine_create_v1(
     const uint8_t* model_root_utf8,
