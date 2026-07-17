@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# shellcheck source=benchmarks/tools/lib/process-rss-sampler.sh
+source "$script_dir/lib/process-rss-sampler.sh"
+
 usage() {
   cat >&2 <<'USAGE'
 Usage:
@@ -114,6 +118,7 @@ page_size=$(getconf PAGESIZE)
   exit 70
 }
 sample_interval_nanoseconds=$((sample_interval_ms * 1000000))
+process_rss_maximum_attempts=3
 
 wall_time_unix_ns() {
   local value
@@ -163,6 +168,7 @@ mkdir -p "$output_dir"
   printf 'started_wall_time_unix_ns=%s\n' "$(wall_time_unix_ns)"
   printf 'sample_interval_ms=%s\n' "$sample_interval_ms"
   printf 'maximum_qualifying_gap_ms=200\n'
+  printf 'process_rss_maximum_attempts=%s\n' "$process_rss_maximum_attempts"
   printf 'idle_baseline_seconds=%s\n' "$idle_baseline_seconds"
   printf 'gpu_index=%s\n' "$gpu_index"
   printf 'page_size_bytes=%s\n' "$page_size"
@@ -233,67 +239,14 @@ sampler_pids+=("$!")
 
 (
   while :; do
-    sample_ns=$(wall_time_unix_ns) || exit $?
-    sample_utc=$(timestamp_utc)
-    mapfile -t process_ids <"$cgroup_dir/cgroup.procs"
-    listed=${#process_ids[@]}
-    sampled=0
-    read_failures=0
-    rss_sum=0
-    for process_id in "${process_ids[@]}"; do
-      if [[ ! "$process_id" =~ ^[1-9][0-9]*$ ]]; then
-        read_failures=$((read_failures + 1))
-        continue
-      fi
-      status_path="/proc/$process_id/status"
-      stat_path="/proc/$process_id/stat"
-      if ! IFS= read -r stat_line_before 2>/dev/null <"$stat_path"; then
-        if [[ -d "/proc/$process_id" ]]; then
-          read_failures=$((read_failures + 1))
-        else
-          listed=$((listed - 1))
-        fi
-        continue
-      fi
-      if ! process_name=$(awk '$1 == "Name:" { sub(/^[^:]+:[[:space:]]*/, ""); print; exit }' \
-        "$status_path" 2>/dev/null) ||
-        ! rss_kib=$(awk '$1 == "VmRSS:" { print $2; exit }' "$status_path" 2>/dev/null) ||
-        ! IFS= read -r stat_line_after 2>/dev/null <"$stat_path"; then
-        if [[ -d "/proc/$process_id" ]]; then
-          read_failures=$((read_failures + 1))
-        else
-          listed=$((listed - 1))
-        fi
-        continue
-      fi
-      stat_rest_before=${stat_line_before##*) }
-      stat_rest_after=${stat_line_after##*) }
-      start_ticks_before=$(awk '{ print $20 }' <<<"$stat_rest_before")
-      start_ticks_after=$(awk '{ print $20 }' <<<"$stat_rest_after")
-      if [[ ! "$rss_kib" =~ ^[0-9]+$ || ! "$start_ticks_before" =~ ^[0-9]+$ ||
-        "$start_ticks_before" != "$start_ticks_after" ]]; then
-        if [[ -d "/proc/$process_id" ]]; then
-          read_failures=$((read_failures + 1))
-        else
-          listed=$((listed - 1))
-        fi
-        continue
-      fi
-      rss_bytes=$((rss_kib * 1024))
-      printf '%s,%s,%s,%s,' "$sample_ns" "$sample_utc" "$process_id" "$start_ticks_before"
-      csv_quote "$process_name"
-      printf ',%s\n' "$rss_bytes"
-      rss_sum=$((rss_sum + rss_bytes))
-      sampled=$((sampled + 1))
-    done
-    sample_complete=0
-    ((listed > 0 && read_failures == 0 && listed == sampled)) && sample_complete=1
-    printf '%s,%s,%s,%s,%s,%s\n' \
-      "$sample_ns" "$sample_utc" "$listed" "$sampled" "$rss_sum" "$sample_complete" \
-      >>"$output_dir/process-rss-total.csv"
-    sleep_until_next_sample "$sample_ns"
+    cycle_started_ns=$(wall_time_unix_ns) || exit $?
+    sample_process_rss_cycle \
+      "$cgroup_dir/cgroup.procs" /proc "$cycle_started_ns" "$sample_interval_nanoseconds" \
+      "$output_dir/process-rss.csv" "$output_dir/process-rss-total.csv" \
+      "$process_rss_maximum_attempts" || exit $?
+    sleep_until_next_sample "$cycle_started_ns"
   done
-) >>"$output_dir/process-rss.csv" &
+) &
 sampler_pids+=("$!")
 
 (
