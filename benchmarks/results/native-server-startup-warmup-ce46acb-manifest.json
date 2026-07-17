@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "operation": "qwen3-tts-native-http-server-startup-warmup-provenance",
+  "qualifying_run": true,
+  "gate_passed": true,
+  "source": {
+    "repository": "https://github.com/luka-loehr/qwen3-tts-native",
+    "commit": "ce46acbc929cba8c1e199c337d4fea015198a224"
+  },
+  "model": {
+    "id": "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+    "revision": "5ecdb67327fd37bb2e042aab12ff7391903235d3",
+    "artifact_manifest_sha256": "9bb96a8d24bbb2d8933245e27083b8e7290346b776306dcb8a8f3aed68594527"
+  },
+  "artifacts": {
+    "report": {
+      "path_in_repository": "benchmarks/results/native-server-startup-warmup-ce46acb.json",
+      "sha256": "dcab3cc835412335f48d8aa395fcff6d70b4290b9cf43b7f74f089a2f46241b1"
+    },
+    "server_sha256": "253a7b5f95a82b0f06295248f0fecd337d23b4feeb22ff659c1bcf9443125c7d",
+    "healthcheck_sha256": "48e2ea44c018a0621f94c7bee9f37421add0196613b61281be09eff33a87f907",
+    "talker_library_sha256": "c91d6306402d00520a5f5688a8e0bfce1779011fc205a0ba1a5399304f6b9d84",
+    "codec_library_sha256": "2262aea07134842b73cf7df66f5f321736341183b05f4a573bca3a8808670594",
+    "streaming_response_sha256": "33031ad434544c1a1665943bfc90d7e9c5486cbeefdcbd147b47e905a8330f49",
+    "buffered_wav_sha256": "314ca4b6aa6e8469143b2456649d57dd586d685b434dac05adefe79e2785c054"
+  }
+}
