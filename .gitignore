@@ -6,6 +6,8 @@ build/
 **/build/
 **/build-*/
 **/target/
+**/__pycache__/
+*.py[cod]
 
 .env
 .env.*
@@ -22,3 +24,6 @@ build/
 *.pcm
 *.plan
 *.wav
+
+reports/tmp/pdfs/*
+!reports/tmp/pdfs/.gitkeep

@@ -1,0 +1,385 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/luka-loehr/qwen3-tts-native/reports/evidence.schema.json",
+  "title": "Qwen3 TTS Native versus SGLang benchmark evidence manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "evidence_kind",
+    "report",
+    "system",
+    "model",
+    "workload",
+    "implementations",
+    "methodology",
+    "evidence_files",
+    "limitations"
+  ],
+  "properties": {
+    "schema_version": {"enum": ["1.0", "1.1"]},
+    "evidence_kind": {"enum": ["production", "test_fixture"]},
+    "test_fixture_notice": {"type": "string", "minLength": 20},
+    "report": {"$ref": "#/$defs/report"},
+    "system": {"$ref": "#/$defs/system"},
+    "model": {"$ref": "#/$defs/model"},
+    "workload": {"$ref": "#/$defs/workload"},
+    "implementations": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "items": {"$ref": "#/$defs/implementation"}
+    },
+    "methodology": {"$ref": "#/$defs/methodology"},
+    "evidence_files": {
+      "type": "array",
+      "minItems": 3,
+      "items": {"$ref": "#/$defs/evidence_file"}
+    },
+    "run_resources": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/run_resource"}
+    },
+    "limitations": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"type": "string", "minLength": 8}
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"evidence_kind": {"const": "test_fixture"}}},
+      "then": {"required": ["test_fixture_notice"]},
+      "else": {
+        "required": ["run_resources"],
+        "properties": {"schema_version": {"const": "1.1"}},
+        "not": {"required": ["test_fixture_notice"]}
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "positive_integer": {"type": "integer", "minimum": 1},
+    "nonnegative_number": {"type": "number", "minimum": 0},
+    "report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["benchmark_id", "title", "generated_at", "authors"],
+      "properties": {
+        "benchmark_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{2,63}$"},
+        "title": {"type": "string", "minLength": 12},
+        "generated_at": {"type": "string", "format": "date-time"},
+        "authors": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 2}}
+      }
+    },
+    "system": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "host_model", "hostname_alias", "os", "kernel", "architecture", "cpu",
+        "accelerator", "driver_version", "cuda_version", "physical_unified_memory_bytes",
+        "power_measurement_source", "notes"
+      ],
+      "properties": {
+        "host_model": {"type": "string", "minLength": 2},
+        "hostname_alias": {"type": "string", "minLength": 2},
+        "os": {"type": "string", "minLength": 2},
+        "kernel": {"type": "string", "minLength": 2},
+        "architecture": {"type": "string", "minLength": 2},
+        "cpu": {"type": "string", "minLength": 2},
+        "accelerator": {"type": "string", "minLength": 2},
+        "driver_version": {"type": "string", "minLength": 1},
+        "cuda_version": {"type": "string", "minLength": 1},
+        "physical_unified_memory_bytes": {"$ref": "#/$defs/positive_integer"},
+        "power_measurement_source": {"type": "string", "minLength": 3},
+        "notes": {"type": "array", "items": {"type": "string", "minLength": 3}}
+      }
+    },
+    "weight_file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "bytes"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "bytes": {"$ref": "#/$defs/positive_integer"}
+      }
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository", "revision", "variant", "parameter_count", "precision",
+        "manifest_sha256", "weight_files"
+      ],
+      "properties": {
+        "repository": {"type": "string", "minLength": 3},
+        "revision": {"type": "string", "minLength": 7},
+        "variant": {"type": "string", "minLength": 3},
+        "parameter_count": {"$ref": "#/$defs/positive_integer"},
+        "precision": {"type": "string", "minLength": 2},
+        "manifest_sha256": {"$ref": "#/$defs/sha256"},
+        "weight_files": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/weight_file"}}
+      }
+    },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "concurrency", "repetitions_per_request"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^B[0-9]+$"},
+        "concurrency": {"$ref": "#/$defs/positive_integer"},
+        "repetitions_per_request": {"$ref": "#/$defs/positive_integer"}
+      }
+    },
+    "generation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["temperature", "top_p", "top_k", "max_codec_frames"],
+      "properties": {
+        "temperature": {"type": "number", "exclusiveMinimum": 0},
+        "top_p": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
+        "top_k": {"$ref": "#/$defs/positive_integer"},
+        "max_codec_frames": {"$ref": "#/$defs/positive_integer"}
+      }
+    },
+    "workload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "corpus_sha256", "seed", "sample_rate_hz", "channels", "sample_format",
+        "response_mode", "warmup_requests_per_engine", "minimum_measured_requests_per_profile",
+        "profiles", "language_policy"
+      ],
+      "properties": {
+        "corpus_sha256": {"$ref": "#/$defs/sha256"},
+        "seed": {"type": "integer", "minimum": 0},
+        "sample_rate_hz": {"$ref": "#/$defs/positive_integer"},
+        "channels": {"$ref": "#/$defs/positive_integer"},
+        "sample_format": {"enum": ["pcm_s16le"]},
+        "response_mode": {"enum": ["streaming", "buffered"]},
+        "warmup_requests_per_engine": {"type": "integer", "minimum": 0},
+        "minimum_measured_requests_per_profile": {"$ref": "#/$defs/positive_integer"},
+        "minimum_rounds_per_subject": {"$ref": "#/$defs/positive_integer"},
+        "profiles": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/profile"}},
+        "language_policy": {"type": "string", "minLength": 4},
+        "voice_description_sha256": {"$ref": "#/$defs/sha256"},
+        "generation": {"$ref": "#/$defs/generation"}
+      }
+    },
+    "implementation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "role", "name", "version", "source_commit", "source_url",
+        "container_image", "image_digest", "image_size_bytes", "startup_ms",
+        "model_repository", "model_revision", "model_precision", "model_manifest_sha256",
+        "api_protocol", "streaming_semantics", "runtime_components", "command_sha256"
+      ],
+      "properties": {
+        "id": {"enum": ["native", "sglang"]},
+        "role": {"enum": ["native", "sglang"]},
+        "name": {"type": "string", "minLength": 2},
+        "version": {"type": "string", "minLength": 1},
+        "source_commit": {"type": "string", "minLength": 7},
+        "source_url": {"type": "string", "minLength": 8},
+        "container_image": {"type": "string", "minLength": 3},
+        "image_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "image_size_bytes": {"$ref": "#/$defs/positive_integer"},
+        "startup_ms": {"$ref": "#/$defs/nonnegative_number"},
+        "model_repository": {"type": "string", "minLength": 3},
+        "model_revision": {"type": "string", "minLength": 7},
+        "model_precision": {"type": "string", "minLength": 2},
+        "model_manifest_sha256": {"$ref": "#/$defs/sha256"},
+        "api_protocol": {"type": "string", "minLength": 3},
+        "streaming_semantics": {"type": "string", "minLength": 3},
+        "runtime_components": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 2}},
+        "command_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "methodology": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "clock_source", "ttfa_definition", "rtf_definition", "throughput_definition",
+        "memory_definition", "power_definition", "energy_definition", "startup_definition",
+        "sampling_interval_ms", "run_order", "statistical_method", "environment_controls"
+      ],
+      "properties": {
+        "clock_source": {"type": "string", "minLength": 4},
+        "ttfa_definition": {"type": "string", "minLength": 10},
+        "rtf_definition": {"type": "string", "minLength": 10},
+        "throughput_definition": {"type": "string", "minLength": 10},
+        "memory_definition": {"type": "string", "minLength": 10},
+        "power_definition": {"type": "string", "minLength": 10},
+        "energy_definition": {"type": "string", "minLength": 10},
+        "startup_definition": {"type": "string", "minLength": 10},
+        "sampling_interval_ms": {"$ref": "#/$defs/positive_integer"},
+        "run_order": {"type": "string", "minLength": 8},
+        "statistical_method": {"type": "string", "minLength": 10},
+        "environment_controls": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 5}}
+      }
+    },
+    "evidence_file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "path", "format", "sha256", "bytes"],
+      "properties": {
+        "role": {
+          "enum": [
+            "workload", "client_summary", "client_requests", "client_packets", "raw",
+            "requests", "measurements"
+          ]
+        },
+        "engine_id": {"enum": ["native", "sglang"]},
+        "profile_id": {"type": "string", "pattern": "^B[0-9]+$"},
+        "round": {"$ref": "#/$defs/positive_integer"},
+        "path": {"type": "string", "minLength": 1},
+        "format": {"enum": ["json", "jsonl", "csv", "txt", "log", "stdout", "stderr"]},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "bytes": {"$ref": "#/$defs/positive_integer"}
+      }
+    },
+    "run_resource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "engine_id", "profile_id", "round", "process_rss_peak_bytes",
+        "gpu_unified_memory_peak_bytes", "average_power_w", "peak_power_w",
+        "energy_j", "sampling_interval_ms", "competing_cuda_processes",
+        "telemetry_evidence_paths"
+      ],
+      "properties": {
+        "engine_id": {"enum": ["native", "sglang"]},
+        "profile_id": {"type": "string", "pattern": "^B[0-9]+$"},
+        "round": {"$ref": "#/$defs/positive_integer"},
+        "process_rss_peak_bytes": {"$ref": "#/$defs/positive_integer"},
+        "gpu_unified_memory_peak_bytes": {"$ref": "#/$defs/positive_integer"},
+        "average_power_w": {"$ref": "#/$defs/nonnegative_number"},
+        "peak_power_w": {"$ref": "#/$defs/nonnegative_number"},
+        "energy_j": {"$ref": "#/$defs/nonnegative_number"},
+        "sampling_interval_ms": {"$ref": "#/$defs/positive_integer"},
+        "competing_cuda_processes": {"type": "integer", "minimum": 0},
+        "telemetry_evidence_paths": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "request_record": {
+      "$comment": "JSONL record contract for the canonical requests evidence file.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request_id",
+        "prompt_sha256",
+        "text_sha256",
+        "voice_description_sha256",
+        "language",
+        "text_characters",
+        "text_utf8_bytes",
+        "seed"
+      ],
+      "properties": {
+        "request_id": {"type": "string", "minLength": 1},
+        "prompt_sha256": {"$ref": "#/$defs/sha256"},
+        "text_sha256": {"$ref": "#/$defs/sha256"},
+        "voice_description_sha256": {"$ref": "#/$defs/sha256"},
+        "language": {"type": "string", "minLength": 2},
+        "text_characters": {"$ref": "#/$defs/positive_integer"},
+        "text_utf8_bytes": {"$ref": "#/$defs/positive_integer"},
+        "seed": {"type": "integer", "minimum": 0}
+      }
+    },
+    "measurement_record": {
+      "$comment": "JSONL record contract. The generator additionally enforces corpus membership, exact key equality, RTF arithmetic, packet cardinality, and run-offset consistency.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "engine_id",
+        "request_id",
+        "profile_id",
+        "repeat",
+        "status",
+        "http_status",
+        "ttfa_ms",
+        "total_latency_ms",
+        "audio_duration_ms",
+        "rtf",
+        "packet_count",
+        "packet_intervals_ms",
+        "output_bytes",
+        "process_rss_peak_bytes",
+        "gpu_unified_memory_peak_bytes",
+        "average_power_w",
+        "peak_power_w",
+        "energy_j",
+        "run_elapsed_start_ms",
+        "run_elapsed_end_ms"
+      ],
+      "properties": {
+        "engine_id": {"enum": ["native", "sglang"]},
+        "request_id": {"type": "string", "minLength": 1},
+        "profile_id": {"type": "string", "pattern": "^B[0-9]+$"},
+        "repeat": {"$ref": "#/$defs/positive_integer"},
+        "status": {"enum": ["success", "error", "timeout", "cancelled"]},
+        "http_status": {
+          "oneOf": [
+            {"type": "integer", "minimum": 100, "maximum": 599},
+            {"type": "null"}
+          ]
+        },
+        "ttfa_ms": {"oneOf": [{"$ref": "#/$defs/nonnegative_number"}, {"type": "null"}]},
+        "total_latency_ms": {"oneOf": [{"$ref": "#/$defs/nonnegative_number"}, {"type": "null"}]},
+        "audio_duration_ms": {"oneOf": [{"$ref": "#/$defs/nonnegative_number"}, {"type": "null"}]},
+        "rtf": {"oneOf": [{"$ref": "#/$defs/nonnegative_number"}, {"type": "null"}]},
+        "packet_count": {"oneOf": [{"$ref": "#/$defs/positive_integer"}, {"type": "null"}]},
+        "packet_intervals_ms": {
+          "oneOf": [
+            {"type": "array", "items": {"$ref": "#/$defs/nonnegative_number"}},
+            {"type": "null"}
+          ]
+        },
+        "output_bytes": {"oneOf": [{"$ref": "#/$defs/positive_integer"}, {"type": "null"}]},
+        "process_rss_peak_bytes": {"$ref": "#/$defs/positive_integer"},
+        "gpu_unified_memory_peak_bytes": {"$ref": "#/$defs/positive_integer"},
+        "average_power_w": {"$ref": "#/$defs/nonnegative_number"},
+        "peak_power_w": {"$ref": "#/$defs/nonnegative_number"},
+        "energy_j": {"$ref": "#/$defs/nonnegative_number"},
+        "run_elapsed_start_ms": {"$ref": "#/$defs/nonnegative_number"},
+        "run_elapsed_end_ms": {"$ref": "#/$defs/nonnegative_number"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"status": {"const": "success"}}},
+          "then": {
+            "properties": {
+              "http_status": {"type": "integer", "minimum": 200, "maximum": 299},
+              "ttfa_ms": {"$ref": "#/$defs/nonnegative_number"},
+              "total_latency_ms": {"$ref": "#/$defs/nonnegative_number"},
+              "audio_duration_ms": {"type": "number", "exclusiveMinimum": 0},
+              "rtf": {"$ref": "#/$defs/nonnegative_number"},
+              "packet_count": {"$ref": "#/$defs/positive_integer"},
+              "packet_intervals_ms": {"type": "array", "items": {"$ref": "#/$defs/nonnegative_number"}},
+              "output_bytes": {"$ref": "#/$defs/positive_integer"}
+            }
+          },
+          "else": {
+            "properties": {
+              "ttfa_ms": {"type": "null"},
+              "total_latency_ms": {"type": "null"},
+              "audio_duration_ms": {"type": "null"},
+              "rtf": {"type": "null"},
+              "packet_count": {"type": "null"},
+              "packet_intervals_ms": {"type": "null"},
+              "output_bytes": {"type": "null"}
+            }
+          }
+        }
+      ]
+    }
+  }
+}
