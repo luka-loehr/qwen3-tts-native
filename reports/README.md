@@ -180,6 +180,10 @@ python3 reports/generate_report.py evidence/manifest.json --validate-only
 The PDF uses vector tables and charts. Engine identity is conveyed through
 black-and-white fills, hatch patterns, line styles, and point markers so the
 report remains readable in grayscale and for readers who cannot rely on color.
+The generator pins the four Bitstream Vera files shipped by ReportLab 4.4.9 by
+SHA-256, embeds only the used TrueType subsets, and rejects a render that falls
+back to Helvetica or Courier. The font license is preserved under
+[`licenses/Bitstream-Vera-LICENSE.txt`](../licenses/Bitstream-Vera-LICENSE.txt).
 
 ## Test fixture safety
 
@@ -216,7 +220,9 @@ Before release:
 5. Inspect every page for clipping, overlap, unreadable labels, broken tables,
    missing glyphs, incorrect pagination, and chart ambiguity.
 6. Check the PDF with `pdfinfo` and extract text as a secondary sanity check.
-7. Keep the PDF only after visual review has zero defects.
+7. Check `pdffonts` and require every listed font to report `emb yes`.
+8. Repeat the render with an empty font cache to prove host-font independence.
+9. Keep the PDF only after visual review has zero defects.
 
 Example rendering command:
 

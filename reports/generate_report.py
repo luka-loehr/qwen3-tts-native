@@ -25,6 +25,8 @@ try:
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
     from reportlab.lib.units import mm
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
     from reportlab.pdfgen import canvas as pdfcanvas
     from reportlab.platypus import (
         BaseDocTemplate,
@@ -73,10 +75,57 @@ SGLANG_EXCLUSIVE_SAMPLE_LIMIT = SGLANG_BOUNDARY_CODEC_FRAMES * SAMPLES_PER_CODEC
 SGLANG_EXCLUSIVE_DURATION_LIMIT_SECONDS = (
     SGLANG_EXCLUSIVE_SAMPLE_LIMIT / PRODUCTION_SAMPLE_RATE_HZ
 )
+REPORT_FONT_REGULAR = "QwenReportVera"
+REPORT_FONT_BOLD = "QwenReportVeraBold"
+REPORT_FONT_ITALIC = "QwenReportVeraItalic"
+REPORT_FONT_BOLD_ITALIC = "QwenReportVeraBoldItalic"
 
 
 class EvidenceError(ValueError):
     """Raised when any structural or semantic evidence check fails."""
+
+
+def _register_report_fonts() -> None:
+    font_directory = Path(pdfcanvas.__file__).resolve().parents[1] / "fonts"
+    font_files = {
+        REPORT_FONT_REGULAR: (
+            "Vera.ttf",
+            "c4c45690b345435b2cba52ecabe275f05e49b389b39fe68ad03afbb551288d3d",
+        ),
+        REPORT_FONT_BOLD: (
+            "VeraBd.ttf",
+            "cc037385e4d55bfde89b13e03091ee93bf40c0c52ddd391ff031ab276f13b8e9",
+        ),
+        REPORT_FONT_ITALIC: (
+            "VeraIt.ttf",
+            "2adc684d518f45232c4ad1f56522f5a82a6904c31940373e1b7030beee20fb3a",
+        ),
+        REPORT_FONT_BOLD_ITALIC: (
+            "VeraBI.ttf",
+            "fca0d4eeac1ced7e75e1b2274c869a351d2d83b5ed1f61d249e7bcc477c33ebe",
+        ),
+    }
+    registered = set(pdfmetrics.getRegisteredFontNames())
+    for name, (filename, expected_sha256) in font_files.items():
+        path = font_directory / filename
+        if not path.is_file():
+            _fail("fonts", f"pinned ReportLab font is unavailable: {filename}")
+        observed_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+        if observed_sha256 != expected_sha256:
+            _fail(
+                "fonts",
+                f"pinned ReportLab font digest mismatch for {filename}: "
+                f"expected {expected_sha256}, observed {observed_sha256}",
+            )
+        if name not in registered:
+            pdfmetrics.registerFont(TTFont(name, str(path), validate=0))
+    pdfmetrics.registerFontFamily(
+        REPORT_FONT_REGULAR,
+        normal=REPORT_FONT_REGULAR,
+        bold=REPORT_FONT_BOLD,
+        italic=REPORT_FONT_ITALIC,
+        boldItalic=REPORT_FONT_BOLD_ITALIC,
+    )
 
 
 @dataclass(frozen=True)
@@ -2034,16 +2083,17 @@ def _validate_client_packet(raw: Any, path: str, engine: str) -> dict[str, Any]:
     _integer(item["sequence"], f"{path}.sequence")
     _number(item["arrival_ms"], f"{path}.arrival_ms")
     _nullable_number(item["inter_arrival_ms"], f"{path}.inter_arrival_ms")
-    if _integer(item["payload_bytes"], f"{path}.payload_bytes", 1) % 2 != 0:
-        _fail(f"{path}.payload_bytes", "PCM16 payload length must be even")
+    payload_bytes = _integer(item["payload_bytes"], f"{path}.payload_bytes", 1)
     _sha256(item["payload_sha256"], f"{path}.payload_sha256")
-    _integer(item["byte_offset"], f"{path}.byte_offset")
+    byte_offset = _integer(item["byte_offset"], f"{path}.byte_offset")
     for field in ("first_codec_frame", "first_sample", "sample_count", "codec_frames"):
         if item[field] is not None:
             _integer(item[field], f"{path}.{field}")
     _boolean(item["is_first"], f"{path}.is_first")
     _nullable_boolean(item["is_final"], f"{path}.is_final")
     if engine == "native":
+        if payload_bytes % 2 != 0:
+            _fail(f"{path}.payload_bytes", "PCM16 payload length must be even")
         for field in (
             "first_codec_frame",
             "first_sample",
@@ -2062,19 +2112,32 @@ def _validate_client_packet(raw: Any, path: str, engine: str) -> dict[str, Any]:
             )
         if item["sample_count"] * 2 != item["payload_bytes"]:
             _fail(f"{path}.payload_bytes", "does not match native sample_count")
-    elif any(
-        item[field] is not None
-        for field in (
-            "first_codec_frame",
-            "first_sample",
-            "sample_count",
-            "codec_frames",
-            "is_final",
-        )
-    ):
-        _fail(
-            path, "SGLang raw transport arrivals must keep model packet metadata null"
-        )
+    else:
+        if any(
+            item[field] is not None
+            for field in ("first_codec_frame", "codec_frames", "is_final")
+        ):
+            _fail(
+                path,
+                "SGLang raw transport arrivals must keep model packet metadata null",
+            )
+        aligned = byte_offset % 2 == 0 and payload_bytes % 2 == 0
+        if aligned:
+            if item["first_sample"] != byte_offset // 2:
+                _fail(
+                    f"{path}.first_sample",
+                    "aligned SGLang transport arrival must report its PCM sample offset",
+                )
+            if item["sample_count"] != payload_bytes // 2:
+                _fail(
+                    f"{path}.sample_count",
+                    "aligned SGLang transport arrival must report its PCM sample count",
+                )
+        elif item["first_sample"] is not None or item["sample_count"] is not None:
+            _fail(
+                path,
+                "unaligned SGLang transport arrival must keep sample metadata null",
+            )
     return item
 
 
@@ -2933,6 +2996,23 @@ def _number_text(value: float | int, digits: int = 3) -> str:
     return f"{float(value):.{digits}f}"
 
 
+def _sentence(value: str) -> str:
+    text = value.rstrip()
+    return text if text.endswith((".", "!", "?")) else f"{text}."
+
+
+def _validate_pdf_font_embedding(path: Path) -> None:
+    payload = path.read_bytes()
+    if b"/FontFile2" not in payload:
+        _fail("output.fonts", "rendered PDF contains no embedded TrueType font")
+    for fallback in (b"/BaseFont /Helvetica", b"/BaseFont /Courier"):
+        if fallback in payload:
+            _fail(
+                "output.fonts",
+                f"rendered PDF contains forbidden Base14 fallback {fallback.decode()}",
+            )
+
+
 class ProfileLineChart(Flowable):  # type: ignore[misc]
     """Compact vector line chart with monochrome lines and distinct markers."""
 
@@ -2965,7 +3045,7 @@ class ProfileLineChart(Flowable):  # type: ignore[misc]
         c.setLineWidth(0.6)
         c.line(left, bottom, left, bottom + chart_h)
         c.line(left, bottom, left + chart_w, bottom)
-        c.setFont("Helvetica", 6.8)
+        c.setFont(REPORT_FONT_REGULAR, 6.8)
         for tick in range(5):
             value = maximum * tick / 4
             y = bottom + chart_h * tick / 4
@@ -2978,14 +3058,14 @@ class ProfileLineChart(Flowable):  # type: ignore[misc]
         c.saveState()
         c.translate(9, bottom + chart_h / 2)
         c.rotate(90)
-        c.setFont("Helvetica", 7)
+        c.setFont(REPORT_FONT_REGULAR, 7)
         c.drawCentredString(0, 0, _ascii_hyphens(self.y_label))
         c.restoreState()
         count = max(len(self.categories), 1)
         step = chart_w / count
         x_positions = [left + step * (index + 0.5) for index in range(count)]
         for x, label in zip(x_positions, self.categories):
-            c.setFont("Helvetica", 7)
+            c.setFont(REPORT_FONT_REGULAR, 7)
             c.drawCentredString(x, bottom - 13, _ascii_hyphens(label))
 
         def draw_series(values: Sequence[float], dashed: bool, square: bool) -> None:
@@ -3009,7 +3089,7 @@ class ProfileLineChart(Flowable):  # type: ignore[misc]
         draw_series(self.native, dashed=False, square=False)
         draw_series(self.sglang, dashed=True, square=True)
         legend_y = self.height - 10
-        c.setFont("Helvetica", 7)
+        c.setFont(REPORT_FONT_REGULAR, 7)
         c.setFillColor(colors.black)
         c.circle(left + 3, legend_y, 3, stroke=1, fill=1)
         c.drawString(left + 10, legend_y - 2, "Native")
@@ -3071,7 +3151,7 @@ class PatternBarChart(Flowable):  # type: ignore[misc]
         c.setLineWidth(0.6)
         c.line(left, bottom, left, bottom + chart_h)
         c.line(left, bottom, left + chart_w, bottom)
-        c.setFont("Helvetica", 6.8)
+        c.setFont(REPORT_FONT_REGULAR, 6.8)
         for tick in range(5):
             value = maximum * tick / 4
             y = bottom + chart_h * tick / 4
@@ -3084,7 +3164,7 @@ class PatternBarChart(Flowable):  # type: ignore[misc]
         c.saveState()
         c.translate(9, bottom + chart_h / 2)
         c.rotate(90)
-        c.setFont("Helvetica", 7)
+        c.setFont(REPORT_FONT_REGULAR, 7)
         c.drawCentredString(0, 0, _ascii_hyphens(self.y_label))
         c.restoreState()
         count = max(len(self.categories), 1)
@@ -3107,12 +3187,12 @@ class PatternBarChart(Flowable):  # type: ignore[misc]
             )
             self._hatched_bar(center + 2, bottom, bar_width, sglang_height)
             c.setFillColor(colors.black)
-            c.setFont("Helvetica", 7)
+            c.setFont(REPORT_FONT_REGULAR, 7)
             c.drawCentredString(center, bottom - 14, _ascii_hyphens(label))
         legend_y = self.height - 10
         c.setFillColor(colors.black)
         c.rect(left, legend_y - 4, 10, 8, stroke=1, fill=1)
-        c.setFont("Helvetica", 7)
+        c.setFont(REPORT_FONT_REGULAR, 7)
         c.drawString(left + 15, legend_y - 2, "Native")
         self._hatched_bar(left + 64, legend_y - 4, 10, 8)
         c.setFillColor(colors.black)
@@ -3121,11 +3201,11 @@ class PatternBarChart(Flowable):  # type: ignore[misc]
 
 def _styles() -> dict[str, Any]:
     sample = getSampleStyleSheet()
-    return {
+    styles = {
         "title": ParagraphStyle(
             "ReportTitle",
             parent=sample["Title"],
-            fontName="Helvetica-Bold",
+            fontName=REPORT_FONT_BOLD,
             fontSize=25,
             leading=30,
             alignment=TA_LEFT,
@@ -3135,7 +3215,7 @@ def _styles() -> dict[str, Any]:
         "subtitle": ParagraphStyle(
             "ReportSubtitle",
             parent=sample["Normal"],
-            fontName="Helvetica",
+            fontName=REPORT_FONT_REGULAR,
             fontSize=11,
             leading=16,
             textColor=colors.HexColor("#333333"),
@@ -3144,7 +3224,7 @@ def _styles() -> dict[str, Any]:
         "h1": ParagraphStyle(
             "H1",
             parent=sample["Heading1"],
-            fontName="Helvetica-Bold",
+            fontName=REPORT_FONT_BOLD,
             fontSize=17,
             leading=21,
             textColor=colors.black,
@@ -3155,7 +3235,7 @@ def _styles() -> dict[str, Any]:
         "h2": ParagraphStyle(
             "H2",
             parent=sample["Heading2"],
-            fontName="Helvetica-Bold",
+            fontName=REPORT_FONT_BOLD,
             fontSize=12,
             leading=15,
             textColor=colors.black,
@@ -3166,7 +3246,7 @@ def _styles() -> dict[str, Any]:
         "body": ParagraphStyle(
             "Body",
             parent=sample["BodyText"],
-            fontName="Helvetica",
+            fontName=REPORT_FONT_REGULAR,
             fontSize=8.5,
             leading=12,
             textColor=colors.black,
@@ -3175,7 +3255,7 @@ def _styles() -> dict[str, Any]:
         "small": ParagraphStyle(
             "Small",
             parent=sample["BodyText"],
-            fontName="Helvetica",
+            fontName=REPORT_FONT_REGULAR,
             fontSize=6.8,
             leading=9,
             textColor=colors.black,
@@ -3183,7 +3263,7 @@ def _styles() -> dict[str, Any]:
         "caption": ParagraphStyle(
             "Caption",
             parent=sample["BodyText"],
-            fontName="Helvetica-Oblique",
+            fontName=REPORT_FONT_ITALIC,
             fontSize=7,
             leading=9,
             textColor=colors.HexColor("#333333"),
@@ -3194,7 +3274,7 @@ def _styles() -> dict[str, Any]:
         "table_header": ParagraphStyle(
             "TableHeader",
             parent=sample["BodyText"],
-            fontName="Helvetica-Bold",
+            fontName=REPORT_FONT_BOLD,
             fontSize=7,
             leading=8.5,
             textColor=colors.white,
@@ -3202,7 +3282,7 @@ def _styles() -> dict[str, Any]:
         "table_cell": ParagraphStyle(
             "TableCell",
             parent=sample["BodyText"],
-            fontName="Helvetica",
+            fontName=REPORT_FONT_REGULAR,
             fontSize=6.7,
             leading=8.5,
             textColor=colors.black,
@@ -3210,12 +3290,15 @@ def _styles() -> dict[str, Any]:
         "mono": ParagraphStyle(
             "Mono",
             parent=sample["BodyText"],
-            fontName="Courier",
+            fontName=REPORT_FONT_REGULAR,
             fontSize=5.8,
             leading=7.3,
             textColor=colors.black,
         ),
     }
+    for style in styles.values():
+        style.bulletFontName = REPORT_FONT_REGULAR
+    return styles
 
 
 def _paragraph(value: Any, style: Any) -> Any:
@@ -3245,6 +3328,7 @@ def _table(
         converted, colWidths=list(widths), repeatRows=repeat_rows, hAlign="LEFT"
     )
     commands = [
+        ("FONTNAME", (0, 0), (-1, -1), REPORT_FONT_REGULAR),
         ("BACKGROUND", (0, 0), (-1, repeat_rows - 1), colors.black),
         ("TEXTCOLOR", (0, 0), (-1, repeat_rows - 1), colors.white),
         ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#777777")),
@@ -3321,6 +3405,7 @@ def _build_story(bundle: Bundle, doc_width: float) -> list[Any]:
         warning.setStyle(
             TableStyle(
                 [
+                    ("FONTNAME", (0, 0), (-1, -1), REPORT_FONT_REGULAR),
                     ("BACKGROUND", (0, 0), (-1, -1), colors.black),
                     ("ALIGN", (0, 0), (-1, -1), "CENTER"),
                     ("BOX", (0, 0), (-1, -1), 1, colors.black),
@@ -3531,8 +3616,10 @@ def _build_story(bundle: Bundle, doc_width: float) -> list[Any]:
             ),
             Spacer(1, 10),
             _paragraph(
-                f"Native streaming semantics: {engines['native']['streaming_semantics']}. "
-                f"SGLang streaming semantics: {engines['sglang']['streaming_semantics']}.",
+                "Native streaming semantics: "
+                f"{_sentence(engines['native']['streaming_semantics'])} "
+                "SGLang streaming semantics: "
+                f"{_sentence(engines['sglang']['streaming_semantics'])}",
                 styles["body"],
             ),
             _section_title(2, "Methodology and fairness controls", styles),
@@ -4271,6 +4358,7 @@ def build_pdf(bundle: Bundle, output: Path, overwrite: bool = False) -> Path:
             "ReportLab is required for PDF generation. Use reports/requirements-report.txt "
             f"or the bundled PDF runtime. Import error: {REPORTLAB_IMPORT_ERROR}"
         )
+    _register_report_fonts()
     if output.exists() and not overwrite:
         _fail("output", f"already exists: {output}; pass --overwrite to replace it")
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -4322,9 +4410,9 @@ def build_pdf(bundle: Bundle, output: Path, overwrite: bool = False) -> Path:
             page_height - 16 * mm,
         )
         c.setFillColor(colors.black)
-        c.setFont("Helvetica-Bold", 7)
+        c.setFont(REPORT_FONT_BOLD, 7)
         c.drawString(left_margin, page_height - 12.8 * mm, report_title[:88])
-        c.setFont("Helvetica", 6.5)
+        c.setFont(REPORT_FONT_REGULAR, 6.5)
         footer = f"{benchmark_id} | manifest {bundle.manifest_sha256[:12]} | Page {document.page}"
         c.drawString(left_margin, 9 * mm, footer)
         c.line(left_margin, 12 * mm, page_width - right_margin, 12 * mm)
@@ -4339,7 +4427,7 @@ def build_pdf(bundle: Bundle, output: Path, overwrite: bool = False) -> Path:
                 fill=1,
             )
             c.setFillColor(colors.white)
-            c.setFont("Helvetica-Bold", 7)
+            c.setFont(REPORT_FONT_BOLD, 7)
             c.drawCentredString(
                 page_width / 2, page_height - 19.5 * mm, TEST_FIXTURE_BANNER
             )
@@ -4351,6 +4439,7 @@ def build_pdf(bundle: Bundle, output: Path, overwrite: bool = False) -> Path:
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             kwargs["invariant"] = 1
             kwargs["pageCompression"] = 1
+            kwargs["initialFontName"] = REPORT_FONT_REGULAR
             super().__init__(*args, **kwargs)
 
     story = _build_story(bundle, page_width - left_margin - right_margin)
@@ -4358,6 +4447,7 @@ def build_pdf(bundle: Bundle, output: Path, overwrite: bool = False) -> Path:
         doc.build(story, canvasmaker=InvariantCanvas)
         if not build_path.is_file() or build_path.stat().st_size < 1024:
             _fail("output", "ReportLab did not produce a valid PDF-sized artifact")
+        _validate_pdf_font_embedding(build_path)
         try:
             os.replace(build_path, output)
         except OSError:

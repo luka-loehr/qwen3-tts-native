@@ -12,16 +12,17 @@ document.
 
 ## Publication state
 
-This is a buildable scaffold. It is **not publication-ready** while
-`PENDING_EVIDENCE` appears anywhere in the source. Quantitative claims, run
-statistics, optional registry digests, artifact hashes, workload identity, and
-evidence-manifest identity must come from the accepted production bundle. They
-must never be copied from an exploratory run, rounded dashboard, or hand-edited
-spreadsheet.
+This directory is the publication source for release `v0.1.0`. It is
+**not publication-ready** while `PENDING_EVIDENCE` appears anywhere in the
+source. Quantitative claims, run statistics, optional registry digests,
+artifact hashes, workload identity, and evidence-manifest identity must come
+from the accepted production bundle. They must never be copied from an
+exploratory run, rounded dashboard, or hand-edited spreadsheet.
 
 `make release-check` is designed to fail until the evidence placeholders have
-been replaced and the two run-data files exist. A successful PDF build alone
-does not make the paper releasable.
+been replaced and the two run-data files exist. The committed release PDF is
+valid only when that gate passes and the PDF was rebuilt from this exact source
+tree. A successful draft PDF build alone does not make the paper releasable.
 
 ## Source layout
 
@@ -30,6 +31,7 @@ research/paper/
   main.tex                         Paper entry point
   references.bib                   Verified primary literature
   sections/                        One English file per paper section
+  sections/appendix.tex            Artifact, API, and reproducibility acceptance
   data/evidence_placeholders.tex   Sole machine-replaceable TeX data boundary
   data/*.dat                       Final manifest-derived monochrome plot data
   tables/                          Table presentation only; no embedded results

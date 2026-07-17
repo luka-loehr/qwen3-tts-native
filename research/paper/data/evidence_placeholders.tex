@@ -1,74 +1,69 @@
-% This file is the only machine-replaceable TeX evidence boundary.
-% It intentionally contains no measured values.
-% PENDING_EVIDENCE
+% Generated deterministically from validated schema-v1.2 production evidence.
+% Do not edit by hand. Re-run research/paper/tools/finalize_evidence.py.
 
 \newif\ifFinalEvidenceAvailable
-\FinalEvidenceAvailablefalse
+\FinalEvidenceAvailabletrue
 
-\newcommand{\PaperEvidenceState}{PENDING\_EVIDENCE}
-\newcommand{\NativeCommit}{\PendingEvidence}
-\newcommand{\StockCommit}{\PendingEvidence}
-\newcommand{\NativeLocalImageId}{\PendingEvidence}
-\newcommand{\NativeImageDigest}{\PendingEvidence}
-\newcommand{\StockLocalImageId}{\PendingEvidence}
-\newcommand{\StockImageDigest}{\PendingEvidence}
-\newcommand{\NativeModelArtifactEvidenceSha}{\PendingEvidence}
-\newcommand{\StockModelArtifactEvidenceSha}{\PendingEvidence}
-\newcommand{\EvidenceManifestSha}{\PendingEvidence}
-\newcommand{\WorkloadSha}{\PendingEvidence}
-\newcommand{\ModelRevision}{\PendingEvidence}
-\newcommand{\EvidenceTimestamp}{\PendingEvidence}
+\newcommand{\PaperEvidenceState}{VALIDATED PRODUCTION}
+\newcommand{\NativeCommit}{\code{d5457a6c\allowbreak{}a3fc87df\allowbreak{}2190aa8e\allowbreak{}cd0fb36a\allowbreak{}5215a632}}
+\newcommand{\StockCommit}{\code{8e272bcb\allowbreak{}8832ef1a\allowbreak{}3865ec48\allowbreak{}255d36f4\allowbreak{}871ec885}}
+\newcommand{\NativeLocalImageId}{\code{sha256:b\allowbreak{}71655316\allowbreak{}1f7b5de4\allowbreak{}1d1cad9c\allowbreak{}a512d213\allowbreak{}fad72b28\allowbreak{}2a368194\allowbreak{}778aad30\allowbreak{}cf9c000}}
+\newcommand{\NativeImageDigest}{N/A}
+\newcommand{\StockLocalImageId}{\code{sha256:9\allowbreak{}930cc808\allowbreak{}840e9bac\allowbreak{}03577f66\allowbreak{}4fda8b44\allowbreak{}735eb1e5\allowbreak{}31c56fec\allowbreak{}8e9ad14c\allowbreak{}9eb41d2}}
+\newcommand{\StockImageDigest}{N/A}
+\newcommand{\NativeModelArtifactEvidenceSha}{\code{76728aae\allowbreak{}aaec6ce3\allowbreak{}297a96de\allowbreak{}f800c138\allowbreak{}efd247a7\allowbreak{}5b9771cb\allowbreak{}73ac7438\allowbreak{}200365f5}}
+\newcommand{\StockModelArtifactEvidenceSha}{\code{f28c7898\allowbreak{}475547ad\allowbreak{}2cee7ed6\allowbreak{}0431439e\allowbreak{}1709139e\allowbreak{}2daa94a8\allowbreak{}3c576696\allowbreak{}f00ab715}}
+\newcommand{\EvidenceManifestSha}{\code{1ecc13f9\allowbreak{}6a07bd96\allowbreak{}42a93a81\allowbreak{}0c1d4e68\allowbreak{}21b450cb\allowbreak{}c1a6679d\allowbreak{}0ef60552\allowbreak{}b5994682}}
+\newcommand{\WorkloadSha}{\code{56a85f56\allowbreak{}d7473529\allowbreak{}a9287cac\allowbreak{}1981dc85\allowbreak{}1a29cecf\allowbreak{}18c48e46\allowbreak{}e7d3974e\allowbreak{}1aa2e0cb}}
+\newcommand{\ModelRevision}{\code{5ecdb673\allowbreak{}27fd37bb\allowbreak{}2e042aab\allowbreak{}12ff7391\allowbreak{}903235d3}}
+\newcommand{\EvidenceTimestamp}{\code{2026-07-\allowbreak{}17T23:18\allowbreak{}:36Z}}
 
 % BEGIN GENERATED:benchmark-result-rows
 \newcommand{\BenchmarkResultRows}{%
-  Native & 1 & B1 & 1 & \PendingEvidence & \PendingEvidence & \PendingEvidence & \PendingEvidence \\
-  Native & 1 & B3 & 3 & \PendingEvidence & \PendingEvidence & \PendingEvidence & \PendingEvidence \\
-  Native & 1 & B6 & 6 & \PendingEvidence & \PendingEvidence & \PendingEvidence & \PendingEvidence \\
-  Stock SGLang & 1 & B1 & 1 & \PendingEvidence & \PendingEvidence & \PendingEvidence & \PendingEvidence \\
-  Stock SGLang & 1 & B3 & 3 & \PendingEvidence & \PendingEvidence & \PendingEvidence & \PendingEvidence \\
-  Stock SGLang & 1 & B6 & 6 & \PendingEvidence & \PendingEvidence & \PendingEvidence & \PendingEvidence \\
-  Stock SGLang & 2 & B1 & 1 & \PendingEvidence & \PendingEvidence & \PendingEvidence & \PendingEvidence \\
-  Stock SGLang & 2 & B3 & 3 & \PendingEvidence & \PendingEvidence & \PendingEvidence & \PendingEvidence \\
-  Stock SGLang & 2 & B6 & 6 & \PendingEvidence & \PendingEvidence & \PendingEvidence & \PendingEvidence \\
-  Native & 2 & B1 & 1 & \PendingEvidence & \PendingEvidence & \PendingEvidence & \PendingEvidence \\
-  Native & 2 & B3 & 3 & \PendingEvidence & \PendingEvidence & \PendingEvidence & \PendingEvidence \\
-  Native & 2 & B6 & 6 & \PendingEvidence & \PendingEvidence & \PendingEvidence & \PendingEvidence \\
+  Native & 1 & B1 & 1 & 200 & 86.364 & 93.889 & 0.7997 \\
+  Native & 1 & B3 & 3 & 210 & 200.305 & 216.809 & 0.6414 \\
+  Native & 1 & B6 & 6 & 240 & 393.430 & 406.045 & 0.6174 \\
+  Stock SGLang & 1 & B1 & 1 & 200 & 2256.829 & 2691.506 & 0.4971 \\
+  Stock SGLang & 1 & B3 & 3 & 210 & 2294.895 & 2720.932 & 0.1864 \\
+  Stock SGLang & 1 & B6 & 6 & 240 & 2423.521 & 2873.489 & 0.1024 \\
+  Native & 2 & B1 & 1 & 200 & 86.730 & 95.582 & 0.8026 \\
+  Native & 2 & B3 & 3 & 210 & 201.398 & 215.551 & 0.6417 \\
+  Native & 2 & B6 & 6 & 240 & 391.702 & 405.384 & 0.6166 \\
+  Stock SGLang & 2 & B1 & 1 & 200 & 2212.903 & 2703.914 & 0.4995 \\
+  Stock SGLang & 2 & B3 & 3 & 210 & 2210.979 & 2814.635 & 0.1969 \\
+  Stock SGLang & 2 & B6 & 6 & 240 & 2349.131 & 3145.884 & 0.1124 \\
 }
 % END GENERATED:benchmark-result-rows
 
 % BEGIN GENERATED:resource-result-rows
 \newcommand{\ResourceResultRows}{%
-  Native & 1 & B1 & \PendingEvidence & \PendingEvidence & \PendingEvidence & \PendingEvidence \\
-  Native & 1 & B3 & \PendingEvidence & \PendingEvidence & \PendingEvidence & \PendingEvidence \\
-  Native & 1 & B6 & \PendingEvidence & \PendingEvidence & \PendingEvidence & \PendingEvidence \\
-  Stock SGLang & 1 & B1 & \PendingEvidence & \PendingEvidence & \PendingEvidence & \PendingEvidence \\
-  Stock SGLang & 1 & B3 & \PendingEvidence & \PendingEvidence & \PendingEvidence & \PendingEvidence \\
-  Stock SGLang & 1 & B6 & \PendingEvidence & \PendingEvidence & \PendingEvidence & \PendingEvidence \\
-  Stock SGLang & 2 & B1 & \PendingEvidence & \PendingEvidence & \PendingEvidence & \PendingEvidence \\
-  Stock SGLang & 2 & B3 & \PendingEvidence & \PendingEvidence & \PendingEvidence & \PendingEvidence \\
-  Stock SGLang & 2 & B6 & \PendingEvidence & \PendingEvidence & \PendingEvidence & \PendingEvidence \\
-  Native & 2 & B1 & \PendingEvidence & \PendingEvidence & \PendingEvidence & \PendingEvidence \\
-  Native & 2 & B3 & \PendingEvidence & \PendingEvidence & \PendingEvidence & \PendingEvidence \\
-  Native & 2 & B6 & \PendingEvidence & \PendingEvidence & \PendingEvidence & \PendingEvidence \\
+  Native & 1 & B1 & 1.860 & 4.747 & 32.288 & 872.845 \\
+  Native & 1 & B3 & 1.863 & 4.967 & 36.972 & 868.377 \\
+  Native & 1 & B6 & 1.869 & 5.293 & 37.296 & 824.306 \\
+  Stock SGLang & 1 & B1 & 4.890 & 101.401 & 36.701 & 711.102 \\
+  Stock SGLang & 1 & B3 & 4.785 & 101.401 & 32.633 & 196.744 \\
+  Stock SGLang & 1 & B6 & 4.791 & 101.417 & 33.446 & 114.430 \\
+  Native & 2 & B1 & 1.869 & 5.094 & 32.861 & 846.716 \\
+  Native & 2 & B3 & 1.869 & 5.174 & 36.739 & 854.261 \\
+  Native & 2 & B6 & 1.870 & 5.293 & 37.164 & 829.147 \\
+  Stock SGLang & 2 & B1 & 4.997 & 101.024 & 36.492 & 690.597 \\
+  Stock SGLang & 2 & B3 & 5.023 & 101.108 & 32.008 & 222.728 \\
+  Stock SGLang & 2 & B6 & 5.033 & 101.278 & 33.326 & 127.742 \\
 }
 % END GENERATED:resource-result-rows
 
 % BEGIN GENERATED:container-result-rows
 \newcommand{\ContainerResultRows}{%
-  Native & \PendingEvidence & \PendingEvidence & \PendingEvidence & \PendingEvidence \\
-  Stock SGLang & \PendingEvidence & \PendingEvidence & \PendingEvidence & \PendingEvidence \\
+  Native & 4.834 & N/A & 2030999489 & 3.783 \\
+  Stock SGLang & 27.319 & N/A & 2087233793 & 4.206 \\
 }
 % END GENERATED:container-result-rows
 
 % BEGIN GENERATED:verified-result-summary
 \newcommand{\VerifiedResultSummary}{%
-  The validated comparison results have not yet been inserted. No speed,
-  latency, memory, energy, image size, or reliability conclusion is claimed in
-  this scaffold.}
+  Across the six validated runs per engine, Native completed 1300/1300 measured requests and stock SGLang completed 1300/1300. For B1, combined-round TTFA p95 was 94.768 ms for Native and 2694.890 ms for stock SGLang; aggregate RTF was 0.8011 and 0.4983, respectively. For B3, combined-round TTFA p95 was 216.143 ms for Native and 2793.626 ms for stock SGLang; aggregate RTF was 0.6416 and 0.1915, respectively. For B6, combined-round TTFA p95 was 405.617 ms for Native and 2929.505 ms for stock SGLang; aggregate RTF was 0.6170 and 0.1072, respectively. Native recorded natural EOS for 1300/1300 successful requests; stock SGLang retained unknown EOS for 1300/1300 successful requests.}
 \newcommand{\VerifiedAbstractResult}{%
-  Quantitative claims are withheld from this scaffold until all 12 runs and
-  their raw evidence pass the publication gates.}
+  In the validated two-round comparison, Native completed 1300/1300 measured requests and stock SGLang completed 1300/1300. Combined-round aggregate RTF at B1, B3, and B6 was 0.8011, 0.6416, 0.6170 for Native and 0.4983, 0.1915, 0.1072 for stock SGLang, respectively.}
 \newcommand{\VerifiedConclusionResult}{%
-  Final quantitative conclusions remain withheld until the production
-  manifest and all digest-bound evidence have been validated.}
+  The accepted evidence contains 2600 successful measured responses across twelve runs. For B1, combined-round TTFA p95 was 94.768 ms for Native and 2694.890 ms for stock SGLang; aggregate RTF was 0.8011 and 0.4983, respectively. For B3, combined-round TTFA p95 was 216.143 ms for Native and 2793.626 ms for stock SGLang; aggregate RTF was 0.6416 and 0.1915, respectively. For B6, combined-round TTFA p95 was 405.617 ms for Native and 2929.505 ms for stock SGLang; aggregate RTF was 0.6170 and 0.1072, respectively. The Native series preserved explicit natural-EOS classification, while stock SGLang retained unknown EOS as required by its transport contract.}
 % END GENERATED:verified-result-summary
