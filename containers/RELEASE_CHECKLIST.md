@@ -164,7 +164,7 @@ cosign verify \
 - [ ] Cold-load peak host RSS is no more than 4.2 GiB.
 - [ ] Post-load steady host RSS is measured and reviewed against 768 MiB.
 - [ ] B6 CUDA device allocation is no more than 4.65 GB.
-- [ ] Warm streaming TTFA p95 is below 200 ms.
+- [ ] Warm B1 streaming TTFA p95 is below 200 ms.
 - [ ] B1 request RTF remains below 1.0.
 - [ ] Container TTFA and RTF regress no more than 3 percent against the same
       commit run directly on the Spark.
