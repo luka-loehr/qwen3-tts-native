@@ -49,16 +49,21 @@ not be rewritten with hand-entered measurements.
 
 ## Build
 
-The preferred toolchain is TeX Live 2025 with `latexmk`, PDFLaTeX, and BibTeX:
+The preferred publication toolchain is TeX Live 2025 with `latexmk`, PDFLaTeX,
+and BibTeX. The Makefile also supports Tectonic as a deterministic local-build
+fallback when `latexmk` is unavailable:
 
 ```bash
 cd research/paper
 make pdf
 ```
 
-The PDF is written to `build/main.pdf`. The command uses
-`-interaction=nonstopmode`, `-halt-on-error`, and `-file-line-error`; a warning
-must not be resolved by deleting content or suppressing evidence checks.
+The PDF is written to `build/main.pdf`. The `latexmk` path uses
+`-interaction=nonstopmode`, `-halt-on-error`, and `-file-line-error`; the
+Tectonic path retains its log and bibliography intermediates for the same
+post-build inspection. A warning must not be resolved by deleting content or
+suppressing evidence checks. Release source remains PDFLaTeX-compatible and
+must still pass an arXiv-compatible clean archive rebuild.
 
 Once the production manifest and all referenced evidence are available:
 
