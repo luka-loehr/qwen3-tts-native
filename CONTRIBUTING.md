@@ -57,6 +57,31 @@ Keep commands executable, use repository-relative links, and distinguish
 current behavior from planned work. Do not describe a planned release, image,
 benchmark, feature, platform, or quality result as completed.
 
+### Public contracts and release documentation
+
+An HTTP contract change must update the implementation tests,
+[`docs/openapi.yaml`](docs/openapi.yaml), [`docs/API.md`](docs/API.md), the
+server README, and every affected root or quickstart example in the same
+change. State defaults and invalid field combinations explicitly. Keep the
+canonical VoiceDesign fields (`text`, `voice_description`, `language`,
+`stream`, and `output_format`) distinct from the narrower compatibility
+endpoint fields (`input`, `voice`, and `response_format`). Never describe a
+textual voice description as a speaker name, reference sample, or clone.
+
+Before an image is published and accepted, use conspicuous placeholders for
+the registry reference, tag, and digest. After acceptance, installation and
+run examples must name the actual registry image and immutable digest; mutable
+tags may be shown only as secondary convenience aliases. Do not make an image
+public, claim that it can be pulled, or replace a placeholder merely because a
+local candidate exists.
+
+Release-facing performance text must identify whether evidence came from a
+direct source build, a local candidate image, or a clean pull of an exact
+registry digest. Link the raw machine-readable evidence and preserve its source
+commit, hardware, model identity, workload, and limitations. A final release
+claim requires the digest-specific gates; an earlier direct-runtime result may
+remain documented only when it is clearly labelled as a baseline.
+
 ## Repository safety
 
 Never commit or attach any of the following:
@@ -180,6 +205,18 @@ Required for every change:
 
 Documentation-only changes may stop at Tier 0 when they do not alter commands,
 contracts, release metadata, benchmark interpretation, or generated files.
+
+At minimum, finish a documentation-only change with:
+
+```bash
+git diff --check
+git status --short
+```
+
+Inspect every changed repository-relative link and every command block against
+the current tree. If the change modifies an API contract, executable command,
+release process, or benchmark interpretation, it is not a prose-only change;
+run the canonical repository verification and any affected higher tier.
 
 ### Tier 1: local component tests
 
