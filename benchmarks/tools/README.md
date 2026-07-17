@@ -141,5 +141,5 @@ bash benchmarks/tools/tests/test-reduce-spark-run.sh
 
 They cover coherent retry after a short-lived PID, bounded persistent failure,
 cycle-deadline enforcement, the known idle-adjusted energy calculation, and
-rejection of a fifth phase event, a gap above 200 ms, and a competing CUDA
-process.
+rejection of an incomplete process-RSS sample, a fifth phase event, a gap above
+200 ms, and a competing CUDA process.
