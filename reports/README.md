@@ -244,3 +244,7 @@ The generated report includes:
 
 The report does not infer missing values, interpolate failed measurements,
 classify unknown SGLang EOS, or silently compare unequal workloads.
+Every accepted qualifying-run inventory must include the exact captured
+process-RSS sampler dependency at
+`provenance/lib/process-rss-sampler.sh`; a missing, mutated, non-regular, or
+symlinked dependency invalidates the bundle.
