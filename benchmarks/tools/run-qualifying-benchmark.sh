@@ -326,13 +326,40 @@ if [[ "$engine" == sglang ]]; then
   client_command+=(--sglang-model "$sglang_model")
 fi
 
+server_log_since_unix_seconds=$(date --utc +%s)
+capture_status=0
 "$copied_capture" \
   --output-dir "$staging_dir/raw" \
   --container "$container_name" \
   --idle-baseline-seconds "$idle_baseline_seconds" \
   --sample-interval-ms "$sample_interval_ms" \
   --gpu-index "$gpu_index" \
-  -- "${client_command[@]}"
+  -- "${client_command[@]}" || capture_status=$?
+server_log_until_unix_seconds=$(date --utc +%s)
+((server_log_until_unix_seconds += 1))
+
+jq -n \
+  --arg schema_version qwen3-tts-server-log-window/v1 \
+  --arg container_name "$container_name" --arg container_id "$container_id" \
+  --argjson since_unix_seconds "$server_log_since_unix_seconds" \
+  --argjson until_unix_seconds "$server_log_until_unix_seconds" '
+  {
+    schema_version: $schema_version,
+    container: {name: $container_name, id: $container_id},
+    since_unix_seconds: $since_unix_seconds,
+    until_unix_seconds: $until_unix_seconds
+  }
+' >"$staging_dir/provenance/server-log-window.json"
+
+if ! docker logs \
+  --timestamps \
+  --since "$server_log_since_unix_seconds" \
+  --until "$server_log_until_unix_seconds" \
+  "$container_name" \
+  >"$staging_dir/provenance/server.log" 2>&1; then
+  die "failed to capture bounded container logs"
+fi
+((capture_status == 0)) || exit "$capture_status"
 
 for path in \
   "$staging_dir/client/summary.json" "$staging_dir/client/requests.jsonl" \
