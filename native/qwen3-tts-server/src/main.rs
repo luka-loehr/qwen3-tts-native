@@ -51,12 +51,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     server.validate().map_err(invalid_config)?;
     runtime.max_text_bytes = u32::try_from(server.max_text_bytes)?;
     runtime.max_instruct_bytes = u32::try_from(server.max_voice_description_bytes)?;
+    let warmup_max_codec_frames = server.max_codec_frames();
 
     let native_config = NativeEngineConfig {
         talker_library,
         codec_library,
         model_root,
         runtime,
+        warmup_max_codec_frames,
     };
     let engine =
         tokio::task::spawn_blocking(move || NativeRuntimeEngine::load(&native_config)).await??;

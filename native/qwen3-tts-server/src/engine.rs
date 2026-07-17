@@ -149,6 +149,7 @@ pub struct NativeEngineConfig {
     pub codec_library: PathBuf,
     pub model_root: PathBuf,
     pub runtime: EngineConfig,
+    pub warmup_max_codec_frames: u32,
 }
 
 pub struct NativeRuntimeEngine {
@@ -176,11 +177,11 @@ impl NativeRuntimeEngine {
             scheduler: Mutex::new(scheduler),
             healthy: Arc::new(AtomicBool::new(true)),
         };
-        engine.warm_up()?;
+        engine.warm_up(config.warmup_max_codec_frames)?;
         Ok(engine)
     }
 
-    fn warm_up(&self) -> Result<(), EngineError> {
+    fn warm_up(&self, max_codec_frames: u32) -> Result<(), EngineError> {
         let request = self.start(EngineSynthesisRequest {
             input: RequestInput {
                 text: "Ready.".to_owned(),
@@ -188,7 +189,7 @@ impl NativeRuntimeEngine {
                 language: Language::English,
             },
             generation: GenerationConfig {
-                max_codec_frames: 1,
+                max_codec_frames,
                 seed: 0,
                 ..GenerationConfig::default()
             },
@@ -209,32 +210,32 @@ impl NativeRuntimeEngine {
                 ));
             }
         };
-        if !packet.is_final
-            || packet.codec_frames != 1
-            || packet.sample_count != qwen3_tts_runtime::SAMPLES_PER_CODEC_FRAME
-            || packet.pcm_s16le.len()
-                != qwen3_tts_runtime::SAMPLES_PER_CODEC_FRAME as usize * size_of::<i16>()
+        if packet.codec_frames == 0
+            || packet.codec_frames > max_codec_frames
+            || packet.sample_count
+                != packet
+                    .codec_frames
+                    .saturating_mul(qwen3_tts_runtime::SAMPLES_PER_CODEC_FRAME)
+            || packet.pcm_s16le.len() != packet.sample_count as usize * size_of::<i16>()
         {
             return Err(EngineError::new(
                 EngineErrorKind::Internal,
-                "native startup warm-up produced an invalid final audio packet",
+                "native startup warm-up produced an invalid audio packet",
             ));
         }
 
-        match request.poll(Duration::from_secs(30))? {
-            EnginePoll::EndOfStream(EngineFinishReason::Length) => {}
-            EnginePoll::EndOfStream(EngineFinishReason::Stop) => {
-                return Err(EngineError::new(
-                    EngineErrorKind::Internal,
-                    "native startup warm-up unexpectedly reached model EOS",
-                ));
+        if packet.is_final {
+            match request.poll(Duration::from_secs(30))? {
+                EnginePoll::EndOfStream(EngineFinishReason::Length | EngineFinishReason::Stop) => {}
+                EnginePoll::Packet(_) | EnginePoll::WouldBlock => {
+                    return Err(EngineError::new(
+                        EngineErrorKind::Internal,
+                        "native startup warm-up did not terminate after its final packet",
+                    ));
+                }
             }
-            EnginePoll::Packet(_) | EnginePoll::WouldBlock => {
-                return Err(EngineError::new(
-                    EngineErrorKind::Internal,
-                    "native startup warm-up did not reach its one-frame boundary",
-                ));
-            }
+        } else {
+            request.cancel()?;
         }
         if !request.wait_retired(Duration::from_secs(5)) {
             return Err(EngineError::new(
@@ -243,9 +244,10 @@ impl NativeRuntimeEngine {
             ));
         }
         let metrics = request.metrics();
-        if metrics.generated_codec_frames != 1
-            || metrics.emitted_packets != 1
-            || metrics.emitted_samples != u64::from(qwen3_tts_runtime::SAMPLES_PER_CODEC_FRAME)
+        if metrics.generated_codec_frames < u64::from(packet.codec_frames)
+            || metrics.emitted_packets == 0
+            || metrics.emitted_samples < u64::from(packet.sample_count)
+            || metrics.first_audio_microseconds == 0
         {
             return Err(EngineError::new(
                 EngineErrorKind::Internal,
