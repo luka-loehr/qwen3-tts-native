@@ -155,3 +155,10 @@ design remains deliberately outside this research milestone.
 
 Research artifacts should be promoted into another system only after latency,
 memory, cancellation, concurrency, energy, and audio-quality gates pass.
+
+## License
+
+The application source in this repository is licensed under the Apache License
+2.0. See [`LICENSE`](LICENSE). Embedded or redistributed third-party material,
+including the pinned Qwen3-TTS model and NVIDIA CUDA runtime, remains subject to
+its respective license and attribution; see [`licenses/`](licenses/).
