@@ -181,6 +181,54 @@ when this evidence does not exist.
 
 ## Assemble once
 
+### Recommended one-shot production finalization
+
+Copy `production-declarations.example.json` outside the repository, replace
+every `PENDING_...` value with an exact observed or release-authorized claim,
+and review the English prose. The declarations intentionally omit workload
+digests and seeds, local Docker IDs and sizes, model-artifact claims, and
+optional registry-image claims. `prepare_production_metadata.py` derives those
+fields only from the canonical workload, the complete checksum inventories of
+all twelve runs, and the digest-bound files under `artifacts/`.
+
+After all twelve qualifying runs are present, finalize the complete evidence
+boundary with one command from the repository root:
+
+```bash
+python3 reports/tools/finalize_production_evidence.py \
+  --declarations /absolute/path/to/reviewed-production-declarations.json \
+  --evidence-root /absolute/path/to/evidence-root \
+  --paper-root /absolute/path/to/qwen3-tts-native/research/paper
+```
+
+The command performs the complete manifest assembler validation, the complete
+production report validation and PDF build, and the paper evidence finalizer
+before publishing any result. It then creates, without overwrite:
+
+- `evidence-root/production-metadata.json`;
+- `evidence-root/manifest.json`;
+- `evidence-root/<benchmark-id>-report.pdf`; and
+- the three managed files under `research/paper/data/`.
+
+An unresolved declaration placeholder, missing or extra run, checksum drift,
+inconsistent image identity, invalid model or registry artifact, report error,
+or paper protocol mismatch rejects the operation. Hidden staging files are
+removed on failure. If publishing fails after staging, the command removes only
+the create-new files it owns and restores the original pending paper boundary.
+It refuses an already finalized paper or any existing output, so reruns cannot
+silently replace accepted evidence.
+
+To inspect only the expanded metadata before finalization, use:
+
+```bash
+python3 reports/tools/prepare_production_metadata.py \
+  --declarations /absolute/path/to/reviewed-production-declarations.json \
+  --evidence-root /absolute/path/to/evidence-root \
+  --output /absolute/path/to/production-metadata.json
+```
+
+The lower-level commands remain available for forensic or stepwise review:
+
 ```bash
 python3 reports/tools/assemble_production_manifest.py \
   --config /absolute/path/to/production-metadata.json \
