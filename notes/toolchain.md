@@ -42,10 +42,8 @@
 
 ## Filesystem changes
 
-All research files live under:
-
-`/home/administrator/codex playground`
-
-Docker image layers live in Docker's managed storage. No system service, host
-package database, backend checkout, frontend checkout, or production container
-configuration was changed.
+During research, temporary files were isolated in a dedicated Spark-side
+playground and separate Git worktrees. Those locations are not runtime inputs
+and are removed as part of the release-host cleanup. Docker image layers remain
+inside Docker-managed storage. The research phase did not modify the backend
+checkout, frontend checkout, or production container configuration.

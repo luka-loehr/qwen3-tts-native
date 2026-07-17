@@ -59,8 +59,8 @@ read-only BuildKit contexts are required.
 The model context is the validated regular-file artifact directory:
 
 ```text
-/home/administrator/codex-playground-artifacts/
-  qwen3-tts-1.7b-voice-design-bf16-indexed
+/absolute/path/to/
+  qwen3-tts-1.7b-voice-design-bf16-indexed/
 ```
 
 The build checks the manifest and both weight hashes, runs the full native
@@ -108,7 +108,7 @@ VERSION=v0.1.0-vd1.7b-cu13.0.3-sm121
 VCS_REF="$(git rev-parse HEAD)"
 BUILD_DATE="$(git show -s --format=%cI HEAD)"
 SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
-MODEL_CONTEXT=/home/administrator/codex-playground-artifacts/qwen3-tts-1.7b-voice-design-bf16-indexed
+MODEL_CONTEXT=/absolute/path/to/qwen3-tts-1.7b-voice-design-bf16-indexed
 RELEASE_CONTEXT=/absolute/path/to/release-metadata
 BUILD_METADATA=/absolute/new/path/release-build-metadata.json
 test ! -e "$BUILD_METADATA"
