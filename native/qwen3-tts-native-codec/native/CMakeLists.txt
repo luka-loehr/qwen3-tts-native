@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.24)
 
 project(qwen3_tts_codec_cuda VERSION 0.1.0 LANGUAGES CXX CUDA)
 
+include(CTest)
+
 find_package(CUDAToolkit 13.0 REQUIRED)
 
 add_library(qwen3_tts_codec_cuda SHARED
@@ -30,3 +32,17 @@ target_compile_options(qwen3_tts_codec_cuda PRIVATE
 )
 
 target_link_libraries(qwen3_tts_codec_cuda PRIVATE CUDA::cudart CUDA::cublas)
+
+if(BUILD_TESTING)
+    add_executable(qwen3_tts_codec_abi_v2_contract
+        tests/abi_v2_contract.cpp
+    )
+    target_include_directories(qwen3_tts_codec_abi_v2_contract PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_compile_features(qwen3_tts_codec_abi_v2_contract PRIVATE cxx_std_17)
+    add_test(
+        NAME qwen3_tts_codec_abi_v2_contract
+        COMMAND qwen3_tts_codec_abi_v2_contract
+    )
+endif()
