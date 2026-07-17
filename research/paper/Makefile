@@ -1,4 +1,5 @@
 LATEXMK ?= latexmk
+TECTONIC ?= tectonic
 PYTHON ?= python3
 BUILD_DIR ?= build
 MAIN := main
@@ -9,8 +10,16 @@ all: pdf
 
 pdf: static-check
 	@mkdir -p "$(BUILD_DIR)"
-	$(LATEXMK) -pdf -interaction=nonstopmode -halt-on-error -file-line-error \
-		-outdir="$(BUILD_DIR)" "$(MAIN).tex"
+	@if command -v "$(LATEXMK)" >/dev/null 2>&1; then \
+		"$(LATEXMK)" -pdf -interaction=nonstopmode -halt-on-error \
+			-file-line-error -outdir="$(BUILD_DIR)" "$(MAIN).tex"; \
+	elif command -v "$(TECTONIC)" >/dev/null 2>&1; then \
+		"$(TECTONIC)" --keep-intermediates --keep-logs \
+			--outdir "$(BUILD_DIR)" "$(MAIN).tex"; \
+	else \
+		echo 'required paper compiler unavailable: install latexmk or tectonic' >&2; \
+		exit 1; \
+	fi
 
 finalize-evidence:
 	@test -n "$(MANIFEST)" || { \
