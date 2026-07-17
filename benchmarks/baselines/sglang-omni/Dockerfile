@@ -52,8 +52,10 @@ COPY requirements-build.txt /tmp/requirements-build.txt
 RUN python3 -m pip install \
       --no-cache-dir \
       --no-deps \
+      --force-reinstall \
       --require-hashes \
-      --requirement /tmp/requirements-build.txt
+      --requirement /tmp/requirements-build.txt \
+    && test "$(uv --version)" = "uv 0.11.16 (aarch64-unknown-linux-gnu)"
 
 # Install the complete stock dependency declaration after applying the sole
 # ARM64 packaging patch. Compute-critical versions are pinned by upstream and
