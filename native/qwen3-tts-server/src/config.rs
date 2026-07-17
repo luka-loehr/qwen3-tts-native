@@ -118,6 +118,11 @@ impl ServerConfig {
             .saturating_mul(qwen3_tts_runtime::SAMPLES_PER_CODEC_FRAME as usize)
             .saturating_mul(size_of::<i16>())
     }
+
+    #[must_use]
+    pub fn max_codec_frames(&self) -> u32 {
+        duration_to_frames(self.max_duration_seconds)
+    }
 }
 
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]

@@ -876,9 +876,7 @@ impl NativeTalkerModel {
                 .session_pool
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            pool.iter()
-                .rposition(|entry| entry.memory.max_sequence_length as usize == capacity)
-                .map(|index| pool.swap_remove(index))
+            smallest_adequate_session_index(&pool, capacity).map(|index| pool.swap_remove(index))
         };
 
         if let Some(pooled) = pooled {
@@ -1001,6 +999,17 @@ impl NativeTalkerModel {
         };
         i32::try_from(token).context("text token exceeds i32")
     }
+}
+
+fn smallest_adequate_session_index(
+    pool: &[PooledSession],
+    required_capacity: usize,
+) -> Option<usize> {
+    pool.iter()
+        .enumerate()
+        .filter(|(_, entry)| entry.memory.max_sequence_length as usize >= required_capacity)
+        .min_by_key(|(_, entry)| entry.memory.max_sequence_length)
+        .map(|(index, _)| index)
 }
 
 impl NativeTalkerSession {
@@ -1401,6 +1410,18 @@ fn ensure_native_success(status: i32, error: &[c_char]) -> Result<()> {
 mod tests {
     use super::*;
 
+    fn pooled_session(capacity: u32) -> PooledSession {
+        PooledSession {
+            handle: ptr::null_mut(),
+            memory: SessionMemory {
+                talker_kv_bytes: 0,
+                predictor_kv_bytes: 0,
+                workspace_bytes: 0,
+                max_sequence_length: capacity,
+            },
+        }
+    }
+
     #[test]
     fn ffi_layouts_match_the_c_abi() {
         assert_eq!(std::mem::size_of::<NativeSamplingConfig>(), 20);
@@ -1463,5 +1484,25 @@ mod tests {
     #[test]
     fn session_capacity_rejects_integer_overflow() {
         assert!(session_capacity(usize::MAX, 1, usize::MAX).is_err());
+    }
+
+    #[test]
+    fn pooled_session_reuse_selects_the_smallest_adequate_capacity() {
+        let pool = vec![
+            pooled_session(64),
+            pooled_session(256),
+            pooled_session(128),
+            pooled_session(192),
+        ];
+        assert_eq!(smallest_adequate_session_index(&pool, 100), Some(2));
+        assert_eq!(smallest_adequate_session_index(&pool, 129), Some(3));
+        assert_eq!(smallest_adequate_session_index(&pool, 256), Some(1));
+    }
+
+    #[test]
+    fn pooled_session_reuse_rejects_only_undersized_sessions() {
+        let pool = vec![pooled_session(32), pooled_session(64)];
+        assert_eq!(smallest_adequate_session_index(&pool, 65), None);
+        assert_eq!(smallest_adequate_session_index(&[], 1), None);
     }
 }
