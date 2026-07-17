@@ -6,19 +6,23 @@ readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib.sh
 source "$SCRIPT_DIR/lib.sh"
 
-[[ $# -eq 4 ]] || release_die "usage: $0 RELEASE_RECORD SUPPLY_RECEIPT GPU_RECEIPT EVIDENCE_DIR"
+[[ $# -eq 5 ]] || release_die \
+  "usage: $0 RELEASE_RECORD SUPPLY_RECEIPT CLEAN_GPU_RECEIPT FINAL_GPU_RECEIPT EVIDENCE_DIR"
 readonly RELEASE_RECORD=$1
 readonly SUPPLY_RECEIPT=$2
-readonly GPU_RECEIPT=$3
-readonly EVIDENCE_DIR=$4
+readonly CLEAN_GPU_RECEIPT=$3
+readonly FINAL_GPU_RECEIPT=$4
+readonly EVIDENCE_DIR=$5
 release_read_record "$RELEASE_RECORD"
 release_require_file "$SUPPLY_RECEIPT"
-release_require_file "$GPU_RECEIPT"
+release_require_file "$CLEAN_GPU_RECEIPT"
+release_require_file "$FINAL_GPU_RECEIPT"
 release_require_command docker
 release_require_command jq
 
 readonly DIGEST="$(release_record_value "$RELEASE_RECORD" '.digest')"
 readonly VERSION="$(release_record_value "$RELEASE_RECORD" '.release_version')"
+readonly SOURCE_REVISION="$(release_record_value "$RELEASE_RECORD" '.source_revision')"
 readonly CANDIDATE_TAG="$(release_record_value "$RELEASE_RECORD" '.candidate_tag')"
 readonly GIT_TAG="$(release_record_value "$RELEASE_RECORD" '.git_tag')"
 readonly REFERENCE="$RELEASE_IMAGE@$DIGEST"
@@ -31,10 +35,55 @@ jq -e --arg digest "$DIGEST" '
   and .source_secrets == "none" and .high_critical_vulnerabilities == 0
 ' "$SUPPLY_RECEIPT" >/dev/null || release_die "supply-chain receipt does not authorize this digest"
 jq -e --arg digest "$DIGEST" '
-  .schema == "qwen3-tts-native/clean-pull-gpu-acceptance/v1" and .digest == $digest
+  .schema == "qwen3-tts-native/clean-pull-gpu-acceptance/v2" and .digest == $digest
   and .pull == "anonymous-empty-store" and .hardened_runtime == "passed"
   and .gpu == "passed" and .streaming_pcm == "passed"
-' "$GPU_RECEIPT" >/dev/null || release_die "GPU receipt does not authorize this digest"
+  and (.readiness_seconds | type == "number" and . <= 20)
+  and .cold_start.status == "passed"
+  and .cold_start.process_rss_limit_bytes == 4509715660
+  and (.cold_start.process_rss_peak_bytes | type == "number")
+  and .cold_start.process_rss_peak_bytes <= .cold_start.process_rss_limit_bytes
+  and .post_ready_steady_rss.status == "measured_for_review"
+  and .buffered_wav.status == "passed"
+  and .cancellation == "passed" and .prompt_free_metrics == "passed"
+  and .language_natural_eos.status == "passed" and .language_natural_eos.completed == 11
+  and .restart.status == "passed" and .graceful_sigterm.status == "passed"
+' "$CLEAN_GPU_RECEIPT" >/dev/null || release_die "clean-pull GPU receipt does not authorize this digest"
+jq -e \
+  --arg digest "$DIGEST" \
+  --arg version "$VERSION" \
+  --arg source_revision "$SOURCE_REVISION" '
+    .schema == "qwen3-tts-native/final-gpu-acceptance/v1"
+    and .status == "passed"
+    and .digest == $digest
+    and .release_version == $version
+    and .source_revision == $source_revision
+    and .clean_acceptance.cold_start_process_rss_peak_bytes <= .clean_acceptance.cold_start_process_rss_limit_bytes
+    and .clean_acceptance.post_ready_steady_rss_status == "measured_for_review"
+    and .clean_acceptance.buffered_wav_sox == "passed"
+    and .clean_acceptance.cancellation == "passed"
+    and .clean_acceptance.prompt_free_metrics == "passed"
+    and .clean_acceptance.language_natural_eos == "11/11"
+    and .clean_acceptance.restart_readiness == "passed"
+    and .clean_acceptance.graceful_sigterm == "passed"
+    and .b1.planned_completed_successful_requests == 200
+    and .b1.warmups == 24 and .b1.failed_requests == 0
+    and .b1.natural_eos_requests == 200
+    and (.b1.aggregate_rtf | type == "number" and . < 1)
+    and (.b1.ttfa_p95_ms | type == "number" and . < 200)
+    and (.b6.planned_completed_successful_requests | type == "number" and . >= 240)
+    and .b6.warmups == 24 and .b6.failed_requests == 0
+    and .b6.natural_eos_requests == .b6.planned_completed_successful_requests
+    and .b6.gpu_unified_memory_limit_bytes == 6000000000
+    and .b6.gpu_unified_memory_peak_bytes <= .b6.gpu_unified_memory_limit_bytes
+    and .internal_request_memory.substituted_for_observed_total == false
+    and (.internal_request_memory.b1_peak_request_device_bytes | type == "number")
+    and (.internal_request_memory.b6_peak_request_device_bytes | type == "number")
+    and .telemetry.configured_interval_ms == 100
+    and .telemetry.maximum_allowed_observed_gap_ms == 200
+    and .telemetry.competing_cuda_processes == 0
+  ' "$FINAL_GPU_RECEIPT" >/dev/null ||
+  release_die "final digest-bound B1/B6 GPU receipt does not authorize promotion"
 
 release_require_new_directory "$EVIDENCE_DIR"
 "$COSIGN_BIN" verify \
@@ -62,6 +111,7 @@ jq -n --arg digest "$DIGEST" --arg version "$VERSION" '{
   digest: $digest,
   version_tag: $version,
   latest: "same-digest",
-  cosign: "verified"
+  cosign: "verified",
+  final_gpu_acceptance: "verified"
 }' >"$EVIDENCE_DIR/promotion.json"
 printf 'Promoted %s and latest to %s\n' "$VERSION" "$REFERENCE"

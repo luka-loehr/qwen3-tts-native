@@ -93,7 +93,12 @@ Run `clean-pull-gpu-acceptance.sh` on a separate Spark Docker daemon selected
 by `DOCKER_HOST`. Its daemon ID must differ from the build daemon and its image
 store must be empty. The script supplies an empty temporary Docker config, so
 the pull is genuinely anonymous. It then validates the immutable image under
-the hardened runtime and performs a real VoiceDesign multipart PCM request:
+the hardened runtime. Its version-2 receipt retains 100 ms cold-start and
+post-ready process-RSS samples, enforces readiness within 20 seconds and the
+4.2 GiB cold process-RSS ceiling, validates a buffered WAV with SoX, exercises
+cancellation and prompt-free metrics, requires progressive natural EOS for
+`auto` and all ten explicit languages, and proves restart/readiness plus
+graceful SIGTERM shutdown:
 
 ```bash
 export DOCKER_HOST=unix:///run/qwen3-tts-clean/docker.sock
@@ -103,7 +108,32 @@ export DOCKER_HOST=unix:///run/qwen3-tts-clean/docker.sock
   "$RELEASE_ROOT/gpu-acceptance"
 ```
 
-Finally, promote only after both receipts and the keyless signature verify:
+Post-ready steady RSS is recorded as `measured_for_review`; the receipt does
+not turn the historical 768 MiB review reference into a false automated pass.
+Next bind the same digest to complete qualifying Native B1 and B6 runs:
+
+```bash
+./tools/release-image/verify-final-gpu-acceptance.sh \
+  "$RELEASE_ROOT/build/release-record.json" \
+  "$RELEASE_ROOT/gpu-acceptance/gpu-acceptance.json" \
+  /absolute/path/to/digest-specific/native/B1 \
+  /absolute/path/to/digest-specific/native/B6 \
+  "$RELEASE_ROOT/final-gpu-acceptance"
+```
+
+Both run directories require a complete valid `SHA256SUMS` inventory and the
+exact `ghcr.io/luka-loehr/qwen3-tts-native@sha256:...` image identity with
+matching source/version labels. B1 is exactly 200 successful natural-EOS
+requests after 24 warmups, with aggregate RTF below 1 and TTFA p95 below
+200 ms. B6 is at least 240 successful natural-EOS requests after 24 warmups.
+Both require zero failures, zero competing CUDA processes, a configured 100 ms
+telemetry interval, and no qualifying observed telemetry gap above 200 ms.
+The observed B6 GPU unified-memory peak must not exceed 6,000,000,000 bytes.
+Internal `peak_request_device_bytes` and `peak_request_host_bytes` are reported
+separately and never substituted for observed total memory.
+
+Finally, promote only after the supply-chain, enhanced clean-pull, final B1/B6,
+and keyless-signature receipts verify:
 
 ```bash
 unset DOCKER_HOST
@@ -118,6 +148,7 @@ COSIGN_BIN="$RELEASE_IMAGE_TOOLS_DIR/bin/cosign" \
   "$RELEASE_ROOT/build/release-record.json" \
   "$RELEASE_ROOT/supply-chain/supply-chain-verified.json" \
   "$RELEASE_ROOT/gpu-acceptance/gpu-acceptance.json" \
+  "$RELEASE_ROOT/final-gpu-acceptance/final-gpu-acceptance.json" \
   "$RELEASE_ROOT/promotion"
 docker logout ghcr.io
 ```
