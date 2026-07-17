@@ -1,0 +1,25 @@
+cff-version: 1.2.0
+message: >-
+  If you use this software, please cite the release using the metadata below.
+title: Qwen3-TTS Native
+type: software
+authors:
+  - family-names: Löhr
+    given-names: Luka
+license: Apache-2.0
+repository-code: https://github.com/luka-loehr/qwen3-tts-native
+url: https://github.com/luka-loehr/qwen3-tts-native
+version: 0.1.0
+date-released: 2026-07-17
+abstract: >-
+  A native Rust and CUDA runtime for progressive Qwen3-TTS 1.7B VoiceDesign
+  inference on NVIDIA DGX Spark, with an HTTP API, embedded model artifacts,
+  reproducible qualification evidence, and a hardened ARM64 container image.
+keywords:
+  - text-to-speech
+  - Qwen3-TTS
+  - Rust
+  - CUDA
+  - streaming inference
+  - VoiceDesign
+  - NVIDIA DGX Spark
