@@ -40,7 +40,8 @@ done
 [[ -n "$output_dir" ]]
 mkdir -p "$output_dir" "$(dirname "$output_dir")/client"
 printf '{}\n' >"$(dirname "$output_dir")/client/summary.json"
-printf '{}\n' >"$(dirname "$output_dir")/client/requests.jsonl"
+request_json=${FIXTURE_REQUEST_JSON:-'{}'}
+printf '%s\n' "$request_json" >"$(dirname "$output_dir")/client/requests.jsonl"
 printf '{}\n' >"$(dirname "$output_dir")/client/packets.jsonl"
 printf 'fixture\n' >"$output_dir/command.stdout"
 : >"$output_dir/command.stderr"
@@ -276,6 +277,39 @@ grep -Fqx "$server_log_sha256  provenance/server.log" "$output_dir/SHA256SUMS"
 grep -Fqx \
   "$server_log_window_sha256  provenance/server-log-window.json" \
   "$output_dir/SHA256SUMS"
+
+if FIXTURE_REQUEST_JSON='{"success":true,"samples":489600,"audio_seconds":20.4}' \
+  PATH="$test_path" bash "$fixture_tools/run-qualifying-benchmark.sh" \
+  --output-dir "$temporary_dir/rejected-sglang-boundary" \
+  --engine sglang \
+  --profile B1 \
+  --round 1 \
+  --container fixture-native \
+  --image "$FIXTURE_IMAGE_REFERENCE" \
+  --client "$client" \
+  --workload "$workload" \
+  --endpoint http://127.0.0.1:8000/v1/audio/speech \
+  --requests 200 \
+  --warmups 24 \
+  --idle-baseline-seconds 15 \
+  --evidence-prefix runs/round-01/sglang/B1 \
+  --sglang-model Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign \
+  >"$temporary_dir/rejected-sglang-boundary.stdout" \
+  2>"$temporary_dir/rejected-sglang-boundary.stderr"; then
+  echo "controller accepted stock SGLang audio at the exclusive boundary" >&2
+  exit 1
+fi
+grep -Fq \
+  'stock SGLang successful audio reached the exclusive 255-frame / 489600-sample / 20.40-second boundary' \
+  "$temporary_dir/rejected-sglang-boundary.stderr"
+[[ ! -e "$temporary_dir/rejected-sglang-boundary" ]] || {
+  echo "controller published a stock SGLang boundary run" >&2
+  exit 1
+}
+[[ $(find "$temporary_dir" -maxdepth 1 -type d -name 'rejected-sglang-boundary.failed.*' | wc -l) -eq 1 ]] || {
+  echo "controller did not preserve exactly one failed stock SGLang boundary run" >&2
+  exit 1
+}
 
 if FIXTURE_DOCKER_LOG_FAIL=true PATH="$test_path" \
   bash "$fixture_tools/run-qualifying-benchmark.sh" \
