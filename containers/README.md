@@ -39,6 +39,7 @@ PTX fallback.
 | CUDA devel ARM64 | `nvidia/cuda:13.0.3-devel-ubuntu24.04` at `sha256:2396393dc8a031a6faf810894ec8e40c8d80e2a1177cfda0c2bf81acac9aa240` |
 | CUDA base ARM64 | `nvidia/cuda:13.0.3-base-ubuntu24.04` at `sha256:56d9d8183e2181a20be6b0d3801d1f056a0e75c17706df939ba207b126e1cb9c` |
 | cuBLAS package | `libcublas-13-0=13.1.1.3-1`, inherited from the pinned devel image |
+| OpenSSL security packages | `libssl3t64=3.0.13-0ubuntu3.11` and `openssl=3.0.13-0ubuntu3.11` |
 | Model | `Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign` |
 | Model revision | `5ecdb67327fd37bb2e042aab12ff7391903235d3` |
 | Artifact manifest | `9bb96a8d24bbb2d8933245e27083b8e7290346b776306dcb8a8f3aed68594527` |

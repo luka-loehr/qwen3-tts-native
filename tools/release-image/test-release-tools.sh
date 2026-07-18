@@ -48,6 +48,8 @@ fi
 
 grep -Fq -- '--provenance=mode=max' "$SCRIPT_DIR/build-and-push.sh"
 grep -Fq -- 'docker/buildkit-syft-scanner@sha256:' "$SCRIPT_DIR/build-and-push.sh"
+grep -Fq -- 'libssl3t64=3.0.13-0ubuntu3.11' "$RELEASE_IMAGE_ROOT/containers/Dockerfile.runtime"
+grep -Fq -- 'openssl=3.0.13-0ubuntu3.11' "$RELEASE_IMAGE_ROOT/containers/Dockerfile.runtime"
 grep -Fq -- 'high/critical release blockers' "$SCRIPT_DIR/verify-supply-chain.sh"
 grep -Fq -- 'db update' "$SCRIPT_DIR/verify-supply-chain.sh"
 grep -Fq -- 'provenance contains a credential-like field' "$SCRIPT_DIR/verify-supply-chain.sh"
