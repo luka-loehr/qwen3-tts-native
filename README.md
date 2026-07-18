@@ -11,11 +11,14 @@ handoff, the neural speech decoder, scheduling, and HTTP delivery—runs in
 native Rust and CUDA. Python, Node.js, PyTorch, SGLang, and vLLM are not part of
 the runtime or production image.
 
-> **Release `v0.1.0`:** source, the native service, the hardened image,
-> benchmark report, and research paper are published together in the
-> [`v0.1.0` GitHub release](https://github.com/luka-loehr/qwen3-tts-native/releases/tag/v0.1.0).
-> Deploy only the complete immutable GHCR reference recorded there. A branch,
-> local image, candidate tag, semantic tag, or `latest` alone is not a
+> **Release `v0.2.0`:** source, the native service, and the hardened image are
+> published in the
+> [`v0.2.0` GitHub release](https://github.com/luka-loehr/qwen3-tts-native/releases/tag/v0.2.0).
+> The controlled benchmark report and research paper derive from the
+> [`v0.1.0` release](https://github.com/luka-loehr/qwen3-tts-native/releases/tag/v0.1.0)
+> evidence bundle.
+> Deploy only the complete immutable GHCR reference recorded in the release. A
+> branch, local image, candidate tag, semantic tag, or `latest` alone is not a
 > digest-pinned deployment identity.
 
 ## What this project provides

@@ -189,7 +189,8 @@ Qwen3-TTS-12Hz-1.7B-VoiceDesign talker and its 15-step code predictor. It loads
 the official BF16 Safetensors checkpoint, prepares the official VoiceDesign
 prompt, and incrementally emits one 16-codebook codec frame per call.
 
-The component is intentionally independent of the Ephraim backend and frontend.
+The component is intentionally independent of any surrounding production
+services.
 It emits codec tokens, not PCM audio. The speech-tokenizer decoder and network
 transport are separate integration layers.
 

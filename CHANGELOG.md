@@ -10,7 +10,32 @@ for published releases.
 
 No changes yet.
 
-## [0.1.0] - 2026-07-17
+## [0.2.0] - 2026-07-18
+
+### Changed
+
+- Streaming PCM packets are converted to little-endian bytes with a single
+  pre-sized buffer instead of per-sample appends.
+- Public documentation no longer references unrelated private infrastructure
+  by name, and release dates in `CITATION.cff` and this changelog match the
+  actual `v0.1.0` tag date.
+- Research paper: redesigned architecture and streaming-cadence figures,
+  corrected performance-plot legends, expanded bibliography, and typography
+  polish. Benchmark data and evidence bindings are unchanged and remain from
+  the `v0.1.0` controlled comparison.
+
+### Unchanged by design
+
+- The talker decode GEMMs keep `CUBLAS_COMPUTE_32F`.
+  `CUBLAS_COMPUTE_32F_FAST_16BF` was built and benchmarked on the target GB10
+  and consistently regressed warm B1 aggregate RTF and TTFA by roughly
+  20 percent, so it was reverted before release. The decode GEMM comment in
+  `talker.cu` records this negative result.
+- The speech-codec decoder keeps full FP32 cuBLAS GEMMs. TF32 was evaluated
+  and rejected because it cannot satisfy the decoder parity thresholds
+  (down to 5e-6 maximum absolute error) that gate this repository.
+
+## [0.1.0] - 2026-07-18
 
 ### Added
 

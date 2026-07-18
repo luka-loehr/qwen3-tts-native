@@ -4,7 +4,7 @@
 
 This record covers the model-material pipeline for the native Qwen3-TTS 1.7B
 VoiceDesign research runtime. Work was performed only in the standalone DGX
-Spark playground. It did not modify the Ephraim backend, frontend, production
+Spark playground. It did not modify the host's unrelated production services,
 containers, system package database, or running inference service.
 
 The source material was the official local Hugging Face cache for
