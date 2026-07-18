@@ -1259,6 +1259,9 @@ private:
     ) {
         constexpr float alpha = 1.0f;
         constexpr float beta = 0.0f;
+        // CUBLAS_COMPUTE_32F is deliberate: CUBLAS_COMPUTE_32F_FAST_16BF was
+        // measured on GB10 (2026-07-18, B1/B6 client benchmarks) and regressed
+        // decode TTFA and aggregate RTF by roughly 20 percent.
         check_cublas(
             cublasGemmEx(
                 cublas_,
