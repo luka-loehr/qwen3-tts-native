@@ -151,6 +151,24 @@ struct DecoderWeights {
     const __nv_bfloat16* down_projection = nullptr;
 };
 
+/* Weight-only INT8 image of one decode matrix: int8 data in the same
+ * [out_features x in_features] layout as the BF16 tensor plus one FP32 scale
+ * per output channel. Null data means the BF16 cuBLAS path is used. */
+struct QuantizedTensor {
+    const int8_t* data = nullptr;
+    const float* scales = nullptr;
+};
+
+struct DecoderWeightsInt8 {
+    QuantizedTensor q_projection;
+    QuantizedTensor k_projection;
+    QuantizedTensor v_projection;
+    QuantizedTensor output_projection;
+    QuantizedTensor gate_projection;
+    QuantizedTensor up_projection;
+    QuantizedTensor down_projection;
+};
+
 struct LayerCache {
     DeviceBuffer key;
     DeviceBuffer value;
@@ -540,6 +558,71 @@ public:
             );
         }
 
+        const char* int8_environment = std::getenv("QWEN3_TTS_INT8_DECODE");
+        int8_decode_ = int8_environment != nullptr
+            && (std::strcmp(int8_environment, "1") == 0
+                || std::strcmp(int8_environment, "true") == 0);
+        if (int8_decode_) {
+            const auto quantize = [this](
+                const __nv_bfloat16* weight,
+                int in_features,
+                int out_features
+            ) {
+                DeviceBuffer data(
+                    static_cast<size_t>(in_features) * out_features
+                );
+                DeviceBuffer scales(
+                    static_cast<size_t>(out_features) * sizeof(float)
+                );
+                check_cuda(
+                    qwen3_tts::launch_quantize_weight_rows(
+                        weight,
+                        data.as<int8_t>(),
+                        scales.as<float>(),
+                        in_features,
+                        out_features,
+                        upload_stream_
+                    ),
+                    "quantize decode weight"
+                );
+                QuantizedTensor tensor{data.as<int8_t>(), scales.as<float>()};
+                int8_storage_.push_back(std::move(data));
+                int8_storage_.push_back(std::move(scales));
+                return tensor;
+            };
+            const auto quantize_layers = [this, &quantize](
+                const std::vector<DecoderWeights>& layers,
+                const ModelDimensions& dimensions
+            ) {
+                std::vector<DecoderWeightsInt8> result;
+                result.reserve(layers.size());
+                for (const DecoderWeights& layer : layers) {
+                    result.push_back({
+                        quantize(layer.q_projection, dimensions.hidden, dimensions.query_width),
+                        quantize(layer.k_projection, dimensions.hidden, dimensions.key_value_width),
+                        quantize(layer.v_projection, dimensions.hidden, dimensions.key_value_width),
+                        quantize(layer.output_projection, dimensions.query_width, dimensions.hidden),
+                        quantize(layer.gate_projection, dimensions.hidden, dimensions.intermediate),
+                        quantize(layer.up_projection, dimensions.hidden, dimensions.intermediate),
+                        quantize(layer.down_projection, dimensions.intermediate, dimensions.hidden),
+                    });
+                }
+                return result;
+            };
+            codec_head_int8_ = quantize(codec_head_, kTalkerHidden, kTalkerVocabulary);
+            small_to_predictor_int8_ =
+                quantize(small_to_predictor_, kTalkerHidden, kPredictorHidden);
+            text_fc1_int8_ = quantize(text_fc1_, kTalkerHidden, kTalkerHidden);
+            text_fc2_int8_ = quantize(text_fc2_, kTalkerHidden, kTalkerHidden);
+            for (int group = 0; group < kResidualCodebooks; ++group) {
+                predictor_heads_int8_[group] = quantize(
+                    predictor_heads_[group], kPredictorHidden, kPredictorVocabulary
+                );
+            }
+            talker_layers_int8_ = quantize_layers(talker_layers_, kTalkerDimensions);
+            predictor_layers_int8_ = quantize_layers(predictor_layers_, kPredictorDimensions);
+        }
+
         check_cuda(
             cudaStreamSynchronize(upload_stream_),
             "cudaStreamSynchronize(model weight upload)"
@@ -629,7 +712,16 @@ private:
 
     int device_index_;
     bool finalized_ = false;
+    bool int8_decode_ = false;
     uint64_t weight_bytes_ = 0;
+    std::vector<DeviceBuffer> int8_storage_;
+    std::vector<DecoderWeightsInt8> talker_layers_int8_;
+    std::vector<DecoderWeightsInt8> predictor_layers_int8_;
+    QuantizedTensor codec_head_int8_;
+    QuantizedTensor small_to_predictor_int8_;
+    QuantizedTensor text_fc1_int8_;
+    QuantizedTensor text_fc2_int8_;
+    std::array<QuantizedTensor, kResidualCodebooks> predictor_heads_int8_{};
     std::mutex batch_mutex_;
     std::unique_ptr<BatchWorkspace> batch_;
     cudaStream_t upload_stream_ = nullptr;
@@ -685,6 +777,13 @@ public:
         predictor_layers_ = model_->predictor_layers_;
         predictor_embeddings_ = model_->predictor_embeddings_;
         predictor_heads_ = model_->predictor_heads_;
+        talker_layers_int8_ = model_->talker_layers_int8_;
+        predictor_layers_int8_ = model_->predictor_layers_int8_;
+        predictor_heads_int8_ = model_->predictor_heads_int8_;
+        codec_head_int8_ = model_->codec_head_int8_;
+        small_to_predictor_int8_ = model_->small_to_predictor_int8_;
+        text_fc1_int8_ = model_->text_fc1_int8_;
+        text_fc2_int8_ = model_->text_fc2_int8_;
         check_cuda(cudaSetDevice(device_index_), "cudaSetDevice");
         try {
             check_cuda(
@@ -1464,8 +1563,9 @@ public:
                         "gather residual predictor embedding"
                     );
                 }
-                batch_gemm(
+                batch_gemm_quantized(
                     w,
+                    c0->small_to_predictor_int8_,
                     c0->small_to_predictor_,
                     w.text_input.as<__nv_bfloat16>(),
                     w.hidden.as<__nv_bfloat16>(),
@@ -1500,9 +1600,10 @@ public:
                         ),
                         "predictor final RMSNorm"
                     );
-                    batch_gemm(
+                    batch_gemm_quantized(
                         w,
-                        c0->predictor_heads_[head],
+                        c0->predictor_heads_int8_[head],
+                                    c0->predictor_heads_[head],
                         w.normalized.as<__nv_bfloat16>(),
                         w.logits.as<__nv_bfloat16>(),
                         kPredictorHidden,
@@ -1597,8 +1698,9 @@ public:
                 ),
                 "gather trailing text embedding"
             );
-            batch_gemm(
+            batch_gemm_quantized(
                 w,
+                c0->text_fc1_int8_,
                 c0->text_fc1_,
                 w.text_input.as<__nv_bfloat16>(),
                 w.projection.as<__nv_bfloat16>(),
@@ -1617,8 +1719,9 @@ public:
                 ),
                 "text projection fc1 activation"
             );
-            batch_gemm(
+            batch_gemm_quantized(
                 w,
+                c0->text_fc2_int8_,
                 c0->text_fc2_,
                 w.projection.as<__nv_bfloat16>(),
                 w.attention.as<__nv_bfloat16>(),
@@ -1678,8 +1781,9 @@ public:
                     "copy talker hidden"
                 );
             }
-            batch_gemm(
+            batch_gemm_quantized(
                 w,
+                c0->codec_head_int8_,
                 c0->codec_head_,
                 w.normalized.as<__nv_bfloat16>(),
                 w.logits.as<__nv_bfloat16>(),
@@ -1821,6 +1925,35 @@ public:
     }
 
 private:
+    static void batch_gemm_quantized(
+        BatchWorkspace& w,
+        const QuantizedTensor& quantized,
+        const __nv_bfloat16* weight,
+        const __nv_bfloat16* input,
+        __nv_bfloat16* output,
+        int input_features,
+        int output_features,
+        int rows
+    ) {
+        if (quantized.data != nullptr) {
+            check_cuda(
+                qwen3_tts::launch_int8_gemm_rows(
+                    quantized.data,
+                    quantized.scales,
+                    input,
+                    output,
+                    input_features,
+                    output_features,
+                    rows,
+                    w.stream
+                ),
+                "int8 batch decode GEMM"
+            );
+            return;
+        }
+        batch_gemm(w, weight, input, output, input_features, output_features, rows);
+    }
+
     static void batch_gemm(
         BatchWorkspace& w,
         const __nv_bfloat16* weight,
@@ -1868,12 +2001,17 @@ private:
         int position_slot,
         int span_capacity
     ) {
-        (void)s;
         const int* positions = w.device_positions.as<int>()
             + static_cast<size_t>(position_slot) * BatchWorkspace::kCapacity;
         const int layer_slot_base = predictor ? kTalkerLayers : 0;
+        const std::vector<DecoderWeightsInt8>& int8_layers = predictor
+            ? s[0]->predictor_layers_int8_
+            : s[0]->talker_layers_int8_;
         for (size_t layer_index = 0; layer_index < layers.size(); ++layer_index) {
             const DecoderWeights& layer = layers[layer_index];
+            const DecoderWeightsInt8 quantized = int8_layers.empty()
+                ? DecoderWeightsInt8{}
+                : int8_layers[layer_index];
             check_cuda(
                 qwen3_tts::launch_rms_norm_rows(
                     w.hidden.as<__nv_bfloat16>(),
@@ -1886,8 +2024,9 @@ private:
                 ),
                 "input RMSNorm"
             );
-            batch_gemm(
+            batch_gemm_quantized(
                 w,
+                quantized.q_projection,
                 layer.q_projection,
                 w.normalized.as<__nv_bfloat16>(),
                 w.query.as<__nv_bfloat16>(),
@@ -1895,8 +2034,9 @@ private:
                 dims.query_width,
                 n
             );
-            batch_gemm(
+            batch_gemm_quantized(
                 w,
+                quantized.k_projection,
                 layer.k_projection,
                 w.normalized.as<__nv_bfloat16>(),
                 w.key.as<__nv_bfloat16>(),
@@ -1904,8 +2044,9 @@ private:
                 dims.key_value_width,
                 n
             );
-            batch_gemm(
+            batch_gemm_quantized(
                 w,
+                quantized.v_projection,
                 layer.v_projection,
                 w.normalized.as<__nv_bfloat16>(),
                 w.value.as<__nv_bfloat16>(),
@@ -2004,8 +2145,9 @@ private:
                 ),
                 "causal GQA attention"
             );
-            batch_gemm(
+            batch_gemm_quantized(
                 w,
+                quantized.output_projection,
                 layer.output_projection,
                 w.attention.as<__nv_bfloat16>(),
                 w.projection.as<__nv_bfloat16>(),
@@ -2034,8 +2176,9 @@ private:
                 ),
                 "post-attention RMSNorm"
             );
-            batch_gemm(
+            batch_gemm_quantized(
                 w,
+                quantized.gate_projection,
                 layer.gate_projection,
                 w.normalized.as<__nv_bfloat16>(),
                 w.gate.as<__nv_bfloat16>(),
@@ -2043,8 +2186,9 @@ private:
                 dims.intermediate,
                 n
             );
-            batch_gemm(
+            batch_gemm_quantized(
                 w,
+                quantized.up_projection,
                 layer.up_projection,
                 w.normalized.as<__nv_bfloat16>(),
                 w.up.as<__nv_bfloat16>(),
@@ -2061,8 +2205,9 @@ private:
                 ),
                 "SiLU gate"
             );
-            batch_gemm(
+            batch_gemm_quantized(
                 w,
+                quantized.down_projection,
                 layer.down_projection,
                 w.gate.as<__nv_bfloat16>(),
                 w.projection.as<__nv_bfloat16>(),
@@ -2344,6 +2489,45 @@ private:
         gemm_rows(weight, input, output, input_features, output_features, 1);
     }
 
+    void decode_gemv(
+        const QuantizedTensor& quantized,
+        const __nv_bfloat16* weight,
+        const __nv_bfloat16* input,
+        __nv_bfloat16* output,
+        int input_features,
+        int output_features
+    ) {
+        decode_gemm_rows(quantized, weight, input, output, input_features, output_features, 1);
+    }
+
+    void decode_gemm_rows(
+        const QuantizedTensor& quantized,
+        const __nv_bfloat16* weight,
+        const __nv_bfloat16* input,
+        __nv_bfloat16* output,
+        int input_features,
+        int output_features,
+        int rows
+    ) {
+        if (quantized.data != nullptr) {
+            check_cuda(
+                qwen3_tts::launch_int8_gemm_rows(
+                    quantized.data,
+                    quantized.scales,
+                    input,
+                    output,
+                    input_features,
+                    output_features,
+                    rows,
+                    stream_
+                ),
+                "int8 decode GEMM"
+            );
+            return;
+        }
+        gemm_rows(weight, input, output, input_features, output_features, rows);
+    }
+
     void gemm_rows(
         const __nv_bfloat16* weight,
         const __nv_bfloat16* input,
@@ -2390,7 +2574,14 @@ private:
             kTextVocabulary,
             kTalkerHidden
         );
-        gemv(text_fc1_, embedding, projection_.as<__nv_bfloat16>(), kTalkerHidden, kTalkerHidden);
+        decode_gemv(
+            text_fc1_int8_,
+            text_fc1_,
+            embedding,
+            projection_.as<__nv_bfloat16>(),
+            kTalkerHidden,
+            kTalkerHidden
+        );
         check_cuda(
             qwen3_tts::launch_bias_activation(
                 projection_.as<__nv_bfloat16>(),
@@ -2401,7 +2592,14 @@ private:
             ),
             "text projection fc1 activation"
         );
-        gemv(text_fc2_, projection_.as<__nv_bfloat16>(), output, kTalkerHidden, kTalkerHidden);
+        decode_gemv(
+            text_fc2_int8_,
+            text_fc2_,
+            projection_.as<__nv_bfloat16>(),
+            output,
+            kTalkerHidden,
+            kTalkerHidden
+        );
         check_cuda(
             qwen3_tts::launch_bias_activation(
                 output,
@@ -2946,12 +3144,16 @@ private:
 
     void run_decoder(
         const std::vector<DecoderWeights>& layers,
+        const std::vector<DecoderWeightsInt8>& int8_layers,
         std::vector<LayerCache>& caches,
         const ModelDimensions& dimensions,
         int position
     ) {
         for (size_t layer_index = 0; layer_index < layers.size(); ++layer_index) {
             const DecoderWeights& layer = layers[layer_index];
+            const DecoderWeightsInt8 quantized = int8_layers.empty()
+                ? DecoderWeightsInt8{}
+                : int8_layers[layer_index];
             check_cuda(
                 qwen3_tts::launch_rms_norm(
                     hidden_.as<__nv_bfloat16>(),
@@ -2963,21 +3165,24 @@ private:
                 ),
                 "input RMSNorm"
             );
-            gemv(
+            decode_gemv(
+                quantized.q_projection,
                 layer.q_projection,
                 normalized_.as<__nv_bfloat16>(),
                 query_.as<__nv_bfloat16>(),
                 dimensions.hidden,
                 dimensions.query_width
             );
-            gemv(
+            decode_gemv(
+                quantized.k_projection,
                 layer.k_projection,
                 normalized_.as<__nv_bfloat16>(),
                 key_.as<__nv_bfloat16>(),
                 dimensions.hidden,
                 dimensions.key_value_width
             );
-            gemv(
+            decode_gemv(
+                quantized.v_projection,
                 layer.v_projection,
                 normalized_.as<__nv_bfloat16>(),
                 value_.as<__nv_bfloat16>(),
@@ -3065,7 +3270,8 @@ private:
                 ),
                 "causal GQA attention"
             );
-            gemv(
+            decode_gemv(
+                quantized.output_projection,
                 layer.output_projection,
                 attention_.as<__nv_bfloat16>(),
                 projection_.as<__nv_bfloat16>(),
@@ -3092,14 +3298,16 @@ private:
                 ),
                 "post-attention RMSNorm"
             );
-            gemv(
+            decode_gemv(
+                quantized.gate_projection,
                 layer.gate_projection,
                 normalized_.as<__nv_bfloat16>(),
                 gate_.as<__nv_bfloat16>(),
                 dimensions.hidden,
                 dimensions.intermediate
             );
-            gemv(
+            decode_gemv(
+                quantized.up_projection,
                 layer.up_projection,
                 normalized_.as<__nv_bfloat16>(),
                 up_.as<__nv_bfloat16>(),
@@ -3115,7 +3323,8 @@ private:
                 ),
                 "SiLU gate"
             );
-            gemv(
+            decode_gemv(
+                quantized.down_projection,
                 layer.down_projection,
                 gate_.as<__nv_bfloat16>(),
                 projection_.as<__nv_bfloat16>(),
@@ -3141,7 +3350,9 @@ private:
     }
 
     void run_talker_step(int position, bool emit_logits) {
-        run_decoder(talker_layers_, talker_cache_, kTalkerDimensions, position);
+        run_decoder(
+            talker_layers_, talker_layers_int8_, talker_cache_, kTalkerDimensions, position
+        );
         if (emit_logits) {
             check_cuda(
                 qwen3_tts::launch_rms_norm(
@@ -3165,7 +3376,8 @@ private:
                 "copy talker hidden"
             );
             trace_vector("final_norm", kTalkerLayers, normalized_.as<__nv_bfloat16>(), kTalkerHidden);
-            gemv(
+            decode_gemv(
+                codec_head_int8_,
                 codec_head_,
                 normalized_.as<__nv_bfloat16>(),
                 logits_.as<__nv_bfloat16>(),
@@ -3177,7 +3389,8 @@ private:
     }
 
     void run_predictor_position(const __nv_bfloat16* input, int position, int head) {
-        gemv(
+        decode_gemv(
+            small_to_predictor_int8_,
             small_to_predictor_,
             input,
             hidden_.as<__nv_bfloat16>(),
@@ -3194,7 +3407,13 @@ private:
             ),
             "predictor input projection bias"
         );
-        run_decoder(predictor_layers_, predictor_cache_, kPredictorDimensions, position);
+        run_decoder(
+            predictor_layers_,
+            predictor_layers_int8_,
+            predictor_cache_,
+            kPredictorDimensions,
+            position
+        );
         if (head >= 0) {
             check_cuda(
                 qwen3_tts::launch_rms_norm(
@@ -3207,7 +3426,8 @@ private:
                 ),
                 "predictor final RMSNorm"
             );
-            gemv(
+            decode_gemv(
+                predictor_heads_int8_[head],
                 predictor_heads_[head],
                 normalized_.as<__nv_bfloat16>(),
                 logits_.as<__nv_bfloat16>(),
@@ -3397,6 +3617,13 @@ private:
     uint32_t pending_talker_position_ = 0;
     std::vector<DecoderWeights> talker_layers_;
     std::vector<DecoderWeights> predictor_layers_;
+    std::vector<DecoderWeightsInt8> talker_layers_int8_;
+    std::vector<DecoderWeightsInt8> predictor_layers_int8_;
+    std::array<QuantizedTensor, kResidualCodebooks> predictor_heads_int8_{};
+    QuantizedTensor codec_head_int8_;
+    QuantizedTensor small_to_predictor_int8_;
+    QuantizedTensor text_fc1_int8_;
+    QuantizedTensor text_fc2_int8_;
     std::vector<LayerCache> talker_cache_;
     std::vector<LayerCache> predictor_cache_;
 
