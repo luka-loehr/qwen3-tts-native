@@ -333,4 +333,26 @@ cudaError_t launch_int8_gemm_rows(
     cudaStream_t stream
 );
 
+cudaError_t launch_int8_gemm_rows_add(
+    const int8_t* weight,
+    const float* scales,
+    const __nv_bfloat16* input,
+    __nv_bfloat16* output,
+    int in_features,
+    int out_features,
+    int rows,
+    cudaStream_t stream
+);
+
+cudaError_t launch_int8_gate_up_silu_rows(
+    const int8_t* weight,
+    const float* scales,
+    const __nv_bfloat16* input,
+    __nv_bfloat16* output,
+    int in_features,
+    int out_features,
+    int rows,
+    cudaStream_t stream
+);
+
 }  // namespace qwen3_tts

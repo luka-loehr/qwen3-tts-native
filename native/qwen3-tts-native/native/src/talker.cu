@@ -167,6 +167,9 @@ struct DecoderWeightsInt8 {
     QuantizedTensor gate_projection;
     QuantizedTensor up_projection;
     QuantizedTensor down_projection;
+    /* One [2*intermediate x hidden] tensor, gate rows first, feeding the fused
+     * gate/up/SiLU kernel. gate_projection and up_projection alias its halves. */
+    QuantizedTensor gate_up_fused;
 };
 
 struct LayerCache {
@@ -597,14 +600,55 @@ public:
                 std::vector<DecoderWeightsInt8> result;
                 result.reserve(layers.size());
                 for (const DecoderWeights& layer : layers) {
+                    const size_t half_bytes = static_cast<size_t>(dimensions.hidden)
+                        * dimensions.intermediate;
+                    DeviceBuffer fused_data(2 * half_bytes);
+                    DeviceBuffer fused_scales(
+                        2 * static_cast<size_t>(dimensions.intermediate) * sizeof(float)
+                    );
+                    check_cuda(
+                        qwen3_tts::launch_quantize_weight_rows(
+                            layer.gate_projection,
+                            fused_data.as<int8_t>(),
+                            fused_scales.as<float>(),
+                            dimensions.hidden,
+                            dimensions.intermediate,
+                            upload_stream_
+                        ),
+                        "quantize fused gate weight"
+                    );
+                    check_cuda(
+                        qwen3_tts::launch_quantize_weight_rows(
+                            layer.up_projection,
+                            fused_data.as<int8_t>() + half_bytes,
+                            fused_scales.as<float>() + dimensions.intermediate,
+                            dimensions.hidden,
+                            dimensions.intermediate,
+                            upload_stream_
+                        ),
+                        "quantize fused up weight"
+                    );
+                    const QuantizedTensor gate{
+                        fused_data.as<int8_t>(), fused_scales.as<float>()
+                    };
+                    const QuantizedTensor up{
+                        fused_data.as<int8_t>() + half_bytes,
+                        fused_scales.as<float>() + dimensions.intermediate
+                    };
+                    const QuantizedTensor gate_up{
+                        fused_data.as<int8_t>(), fused_scales.as<float>()
+                    };
+                    int8_storage_.push_back(std::move(fused_data));
+                    int8_storage_.push_back(std::move(fused_scales));
                     result.push_back({
                         quantize(layer.q_projection, dimensions.hidden, dimensions.query_width),
                         quantize(layer.k_projection, dimensions.hidden, dimensions.key_value_width),
                         quantize(layer.v_projection, dimensions.hidden, dimensions.key_value_width),
                         quantize(layer.output_projection, dimensions.query_width, dimensions.hidden),
-                        quantize(layer.gate_projection, dimensions.hidden, dimensions.intermediate),
-                        quantize(layer.up_projection, dimensions.hidden, dimensions.intermediate),
+                        gate,
+                        up,
                         quantize(layer.down_projection, dimensions.intermediate, dimensions.hidden),
+                        gate_up,
                     });
                 }
                 return result;
@@ -2166,25 +2210,40 @@ private:
                     "causal GQA attention"
                 );
             }
-            batch_gemm_quantized(
-                w,
-                quantized.output_projection,
-                layer.output_projection,
-                w.attention.as<__nv_bfloat16>(),
-                w.projection.as<__nv_bfloat16>(),
-                dims.query_width,
-                dims.hidden,
-                n
-            );
-            check_cuda(
-                qwen3_tts::launch_add_in_place(
-                    w.hidden.as<__nv_bfloat16>(),
+            if (quantized.output_projection.data != nullptr) {
+                check_cuda(
+                    qwen3_tts::launch_int8_gemm_rows_add(
+                        quantized.output_projection.data,
+                        quantized.output_projection.scales,
+                        w.attention.as<__nv_bfloat16>(),
+                        w.hidden.as<__nv_bfloat16>(),
+                        dims.query_width,
+                        dims.hidden,
+                        n,
+                        w.stream
+                    ),
+                    "attention residual projection"
+                );
+            } else {
+                batch_gemm(
+                    w,
+                    layer.output_projection,
+                    w.attention.as<__nv_bfloat16>(),
                     w.projection.as<__nv_bfloat16>(),
-                    n * dims.hidden,
-                    w.stream
-                ),
-                "attention residual"
-            );
+                    dims.query_width,
+                    dims.hidden,
+                    n
+                );
+                check_cuda(
+                    qwen3_tts::launch_add_in_place(
+                        w.hidden.as<__nv_bfloat16>(),
+                        w.projection.as<__nv_bfloat16>(),
+                        n * dims.hidden,
+                        w.stream
+                    ),
+                    "attention residual"
+                );
+            }
             check_cuda(
                 qwen3_tts::launch_rms_norm_rows(
                     w.hidden.as<__nv_bfloat16>(),
@@ -2197,54 +2256,80 @@ private:
                 ),
                 "post-attention RMSNorm"
             );
-            batch_gemm_quantized(
-                w,
-                quantized.gate_projection,
-                layer.gate_projection,
-                w.normalized.as<__nv_bfloat16>(),
-                w.gate.as<__nv_bfloat16>(),
-                dims.hidden,
-                dims.intermediate,
-                n
-            );
-            batch_gemm_quantized(
-                w,
-                quantized.up_projection,
-                layer.up_projection,
-                w.normalized.as<__nv_bfloat16>(),
-                w.up.as<__nv_bfloat16>(),
-                dims.hidden,
-                dims.intermediate,
-                n
-            );
-            check_cuda(
-                qwen3_tts::launch_silu_gate(
+            if (quantized.gate_up_fused.data != nullptr) {
+                check_cuda(
+                    qwen3_tts::launch_int8_gate_up_silu_rows(
+                        quantized.gate_up_fused.data,
+                        quantized.gate_up_fused.scales,
+                        w.normalized.as<__nv_bfloat16>(),
+                        w.gate.as<__nv_bfloat16>(),
+                        dims.hidden,
+                        dims.intermediate,
+                        n,
+                        w.stream
+                    ),
+                    "fused gate/up SiLU"
+                );
+                check_cuda(
+                    qwen3_tts::launch_int8_gemm_rows_add(
+                        quantized.down_projection.data,
+                        quantized.down_projection.scales,
+                        w.gate.as<__nv_bfloat16>(),
+                        w.hidden.as<__nv_bfloat16>(),
+                        dims.intermediate,
+                        dims.hidden,
+                        n,
+                        w.stream
+                    ),
+                    "MLP residual projection"
+                );
+            } else {
+                batch_gemm(
+                    w,
+                    layer.gate_projection,
+                    w.normalized.as<__nv_bfloat16>(),
                     w.gate.as<__nv_bfloat16>(),
+                    dims.hidden,
+                    dims.intermediate,
+                    n
+                );
+                batch_gemm(
+                    w,
+                    layer.up_projection,
+                    w.normalized.as<__nv_bfloat16>(),
                     w.up.as<__nv_bfloat16>(),
-                    n * dims.intermediate,
-                    w.stream
-                ),
-                "SiLU gate"
-            );
-            batch_gemm_quantized(
-                w,
-                quantized.down_projection,
-                layer.down_projection,
-                w.gate.as<__nv_bfloat16>(),
-                w.projection.as<__nv_bfloat16>(),
-                dims.intermediate,
-                dims.hidden,
-                n
-            );
-            check_cuda(
-                qwen3_tts::launch_add_in_place(
-                    w.hidden.as<__nv_bfloat16>(),
+                    dims.hidden,
+                    dims.intermediate,
+                    n
+                );
+                check_cuda(
+                    qwen3_tts::launch_silu_gate(
+                        w.gate.as<__nv_bfloat16>(),
+                        w.up.as<__nv_bfloat16>(),
+                        n * dims.intermediate,
+                        w.stream
+                    ),
+                    "SiLU gate"
+                );
+                batch_gemm(
+                    w,
+                    layer.down_projection,
+                    w.gate.as<__nv_bfloat16>(),
                     w.projection.as<__nv_bfloat16>(),
-                    n * dims.hidden,
-                    w.stream
-                ),
-                "MLP residual"
-            );
+                    dims.intermediate,
+                    dims.hidden,
+                    n
+                );
+                check_cuda(
+                    qwen3_tts::launch_add_in_place(
+                        w.hidden.as<__nv_bfloat16>(),
+                        w.projection.as<__nv_bfloat16>(),
+                        n * dims.hidden,
+                        w.stream
+                    ),
+                    "MLP residual"
+                );
+            }
         }
     }
 
