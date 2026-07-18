@@ -245,6 +245,20 @@ cudaError_t launch_rope_rows_at(
     cudaStream_t stream
 );
 
+cudaError_t launch_batch_causal_gqa_attention_fast(
+    const __nv_bfloat16* query,
+    __nv_bfloat16* const* key_bases,
+    __nv_bfloat16* const* value_bases,
+    const int* positions,
+    __nv_bfloat16* output,
+    int rows,
+    int query_heads,
+    int key_value_heads,
+    int head_dimension,
+    int max_sequence_length,
+    cudaStream_t stream
+);
+
 cudaError_t launch_batch_causal_gqa_attention(
     const __nv_bfloat16* query,
     __nv_bfloat16* const* key_bases,

@@ -563,6 +563,114 @@ __global__ void sliding_attention_kernel(
     }
 }
 
+// QWEN3_TTS_CODEC_FAST: position read from device memory so a captured
+// decode graph replays across packets (identical math to the by-value kernels).
+__global__ void apply_rope_ptr_kernel(
+    float* query,
+    float* key,
+    const uint64_t* position_ptr
+) {
+    const uint64_t position = position_ptr[0];
+
+    const size_t item = blockIdx.x * blockDim.x + threadIdx.x;
+    if (item >= 16 * 64) {
+        return;
+    }
+    const size_t head = item / 64;
+    const size_t dimension = item % 64;
+    if (dimension >= 32) {
+        return;
+    }
+    const float exponent = static_cast<float>(2 * dimension) / 64.0F;
+    const float frequency = 1.0F / powf(10000.0F, exponent);
+    const float angle = static_cast<float>(position) * frequency;
+    float sine = 0.0F;
+    float cosine = 0.0F;
+    sincosf(angle, &sine, &cosine);
+    const size_t first = head * 64 + dimension;
+    const size_t second = first + 32;
+    const float q_first = query[first];
+    const float q_second = query[second];
+    const float k_first = key[first];
+    const float k_second = key[second];
+    query[first] = q_first * cosine - q_second * sine;
+    query[second] = q_second * cosine + q_first * sine;
+    key[first] = k_first * cosine - k_second * sine;
+    key[second] = k_second * cosine + k_first * sine;
+}
+
+__global__ void sliding_attention_ptr_kernel(
+    const float* query,
+    const float* key,
+    const float* value,
+    uint32_t layer,
+    const uint64_t* position_ptr,
+    float* kv,
+    float* output
+) {
+    const uint64_t position = position_ptr[0];
+
+    const uint32_t head = threadIdx.x;
+    if (blockIdx.x != 0 || head >= QWEN3_TTS_CODEC_KV_HEADS) {
+        return;
+    }
+    const size_t slot = position % QWEN3_TTS_CODEC_KV_WINDOW;
+    for (size_t dimension = 0; dimension < QWEN3_TTS_CODEC_HEAD_DIM; ++dimension) {
+        const size_t cache_index =
+            ((((static_cast<size_t>(layer) * QWEN3_TTS_CODEC_KV_HEADS + head) *
+                QWEN3_TTS_CODEC_KV_WINDOW +
+               slot) *
+                  QWEN3_TTS_CODEC_HEAD_DIM) +
+             dimension);
+        kv[cache_index] = key[head * 64 + dimension];
+        kv[kNeuralKvElements / 2 + cache_index] = value[head * 64 + dimension];
+    }
+    const uint64_t first_position =
+        position + 1 > QWEN3_TTS_CODEC_KV_WINDOW
+            ? position + 1 - QWEN3_TTS_CODEC_KV_WINDOW
+            : 0;
+    const uint32_t count = static_cast<uint32_t>(position - first_position + 1);
+    float scores[QWEN3_TTS_CODEC_KV_WINDOW];
+    float maximum = -3.402823466e+38F;
+    for (uint32_t index = 0; index < count; ++index) {
+        const size_t source_slot =
+            (first_position + index) % QWEN3_TTS_CODEC_KV_WINDOW;
+        float score = 0.0F;
+        for (size_t dimension = 0; dimension < 64; ++dimension) {
+            const size_t cache_index =
+                ((((static_cast<size_t>(layer) * 16 + head) * 72 + source_slot) * 64) +
+                 dimension);
+            score = fmaf(
+                query[head * 64 + dimension], kv[cache_index], score
+            );
+        }
+        score *= 0.125F;
+        scores[index] = score;
+        maximum = fmaxf(maximum, score);
+    }
+    float denominator = 0.0F;
+    for (uint32_t index = 0; index < count; ++index) {
+        scores[index] = expf(scores[index] - maximum);
+        denominator += scores[index];
+    }
+    for (size_t dimension = 0; dimension < 64; ++dimension) {
+        float result = 0.0F;
+        for (uint32_t index = 0; index < count; ++index) {
+            const size_t source_slot =
+                (first_position + index) % QWEN3_TTS_CODEC_KV_WINDOW;
+            const size_t cache_index =
+                ((((static_cast<size_t>(layer) * 16 + head) * 72 + source_slot) * 64) +
+                 dimension);
+            result = fmaf(
+                scores[index] / denominator,
+                kv[kNeuralKvElements / 2 + cache_index],
+                result
+            );
+        }
+        output[head * 64 + dimension] = result;
+    }
+}
+
 __global__ void scaled_residual_kernel(
     const float* residual,
     const float* update,
@@ -1163,6 +1271,14 @@ struct Qwen3TtsCodecContextV1 {
     bool counts_as_shared_session = false;
     bool fast_mode = false;
     float* repacked_transpose[4] = {nullptr, nullptr, nullptr, nullptr};
+    uint16_t* graph_codes_dev = nullptr;
+    uint64_t* graph_position_dev = nullptr;
+    int16_t* graph_pcm_dev = nullptr;
+    uint16_t* graph_codes_host = nullptr;
+    uint64_t* graph_position_host = nullptr;
+    int16_t* graph_pcm_host = nullptr;
+    cudaGraphExec_t graph_exec[QWEN3_TTS_CODEC_MAX_PACKET_FRAMES + 1] = {};
+    bool graph_ready[QWEN3_TTS_CODEC_MAX_PACKET_FRAMES + 1] = {};
     Qwen3TtsCodecModelV1* model = nullptr;
 };
 
@@ -2161,6 +2277,7 @@ int32_t run_transformer_frame(
     Qwen3TtsCodecContextV1* context,
     const float* input,
     uint64_t position,
+    const uint64_t* position_ptr,
     float* output,
     char* error,
     size_t error_capacity
@@ -2238,20 +2355,22 @@ int32_t run_transformer_frame(
                 return result;
             }
         }
-        apply_rope_kernel<<<4, 256, 0, context->stream>>>(query, key, position);
+        if (position_ptr != nullptr) {
+            apply_rope_ptr_kernel<<<4, 256, 0, context->stream>>>(query, key, position_ptr);
+        } else {
+            apply_rope_kernel<<<4, 256, 0, context->stream>>>(query, key, position);
+        }
         status = cudaGetLastError();
         if (status != cudaSuccess) {
             return cuda_error(error, error_capacity, "launch decoder RoPE", status);
         }
-        sliding_attention_kernel<<<1, 16, 0, context->stream>>>(
-            query,
-            key,
-            value,
-            layer,
-            position,
-            context->neural_kv,
-            attention
-        );
+        if (position_ptr != nullptr) {
+            sliding_attention_ptr_kernel<<<1, 16, 0, context->stream>>>(
+                query, key, value, layer, position_ptr, context->neural_kv, attention);
+        } else {
+            sliding_attention_kernel<<<1, 16, 0, context->stream>>>(
+                query, key, value, layer, position, context->neural_kv, attention);
+        }
         status = cudaGetLastError();
         if (status != cudaSuccess) {
             return cuda_error(error, error_capacity, "launch sliding attention", status);
@@ -2490,6 +2609,18 @@ void release_context(Qwen3TtsCodecContextV1* context) noexcept {
     cudaFree(context->latent_a);
     /* Repacked transpose weights are owned by the process-global cache and
      * intentionally outlive every session. */
+    for (uint32_t graph_index = 0;
+         graph_index <= QWEN3_TTS_CODEC_MAX_PACKET_FRAMES; ++graph_index) {
+        if (context->graph_ready[graph_index]) {
+            cudaGraphExecDestroy(context->graph_exec[graph_index]);
+        }
+    }
+    cudaFree(context->graph_codes_dev);
+    cudaFree(context->graph_position_dev);
+    cudaFree(context->graph_pcm_dev);
+    cudaFreeHost(context->graph_codes_host);
+    cudaFreeHost(context->graph_position_host);
+    cudaFreeHost(context->graph_pcm_host);
     cudaFree(context->decoder_history);
     cudaFree(context->decoder_im2col);
     cudaFree(context->decoder_b);
@@ -2744,6 +2875,30 @@ extern "C" QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_create_v1(
             if (tf32_env != nullptr && tf32_env[0] == '1' && tf32_env[1] == '\0') {
                 cublasSetMathMode(context->cublas, CUBLAS_TF32_TENSOR_OP_MATH);
             }
+        }
+    }
+    if (status == cudaSuccess && context->fast_mode) {
+        status = allocate_device(&context->graph_codes_dev,
+            QWEN3_TTS_CODEC_MAX_PACKET_FRAMES * QWEN3_TTS_CODEC_CODEBOOKS);
+        if (status == cudaSuccess) {
+            status = allocate_device(&context->graph_position_dev,
+                QWEN3_TTS_CODEC_MAX_PACKET_FRAMES);
+        }
+        if (status == cudaSuccess) {
+            status = allocate_device(&context->graph_pcm_dev,
+                QWEN3_TTS_CODEC_MAX_PACKET_SAMPLES);
+        }
+        if (status == cudaSuccess) {
+            status = cudaMallocHost(reinterpret_cast<void**>(&context->graph_codes_host),
+                QWEN3_TTS_CODEC_MAX_PACKET_FRAMES * QWEN3_TTS_CODEC_CODEBOOKS * sizeof(uint16_t));
+        }
+        if (status == cudaSuccess) {
+            status = cudaMallocHost(reinterpret_cast<void**>(&context->graph_position_host),
+                QWEN3_TTS_CODEC_MAX_PACKET_FRAMES * sizeof(uint64_t));
+        }
+        if (status == cudaSuccess) {
+            status = cudaMallocHost(reinterpret_cast<void**>(&context->graph_pcm_host),
+                QWEN3_TTS_CODEC_MAX_PACKET_SAMPLES * sizeof(int16_t));
         }
     }
     if (status == cudaSuccess) {
@@ -3639,6 +3794,7 @@ qwen3_tts_codec_debug_transformer_packet_v1(
             context,
             context->frontend_preconv + static_cast<size_t>(frame) * 1024,
             context->neural_frame_position,
+            nullptr,
             context->transformer_packet + static_cast<size_t>(frame) * 1024,
             error,
             error_capacity
@@ -3871,6 +4027,7 @@ int32_t enqueue_staged_neural_packet(
             context,
             context->frontend_preconv + static_cast<size_t>(frame) * 1024,
             context->neural_frame_position + frame,
+            nullptr,
             context->transformer_packet + static_cast<size_t>(frame) * 1024,
             error,
             error_capacity
@@ -3997,6 +4154,191 @@ int32_t finish_staged_neural_packet(
     return kStatusOk;
 }
 
+int32_t run_graph_decode_body(
+    Qwen3TtsCodecContextV1* context,
+    uint32_t frame_count,
+    char* error,
+    size_t error_capacity
+) noexcept {
+    const size_t sample_count =
+        static_cast<size_t>(frame_count) * QWEN3_TTS_CODEC_SAMPLES_PER_FRAME;
+    cudaError_t status = cudaMemcpyAsync(
+        context->graph_codes_dev, context->graph_codes_host,
+        static_cast<size_t>(frame_count) * QWEN3_TTS_CODEC_CODEBOOKS * sizeof(uint16_t),
+        cudaMemcpyHostToDevice, context->stream);
+    if (status == cudaSuccess) {
+        status = cudaMemcpyAsync(
+            context->graph_position_dev, context->graph_position_host,
+            static_cast<size_t>(frame_count) * sizeof(uint64_t),
+            cudaMemcpyHostToDevice, context->stream);
+    }
+    if (status != cudaSuccess) {
+        return cuda_error(error, error_capacity, "stage decode graph inputs", status);
+    }
+    int32_t pipeline_status = run_frontend_staged_device(
+        context, context->graph_codes_dev, frame_count, error, error_capacity);
+    if (pipeline_status != kStatusOk) {
+        return pipeline_status;
+    }
+    for (uint32_t frame = 0; frame < frame_count; ++frame) {
+        pipeline_status = run_transformer_frame(
+            context,
+            context->frontend_preconv + static_cast<size_t>(frame) * 1024,
+            0,
+            &context->graph_position_dev[frame],
+            context->transformer_packet + static_cast<size_t>(frame) * 1024,
+            error, error_capacity);
+        if (pipeline_status != kStatusOk) {
+            return pipeline_status;
+        }
+    }
+    float* latent = nullptr;
+    size_t latent_positions = 0;
+    pipeline_status = run_latent_upsampling(
+        context, context->transformer_packet, frame_count, nullptr,
+        &latent, &latent_positions, error, error_capacity);
+    if (pipeline_status != kStatusOk) {
+        return pipeline_status;
+    }
+    float* waveform = nullptr;
+    size_t waveform_positions = 0;
+    pipeline_status = run_waveform_decoder(
+        context, latent, latent_positions, 0, nullptr, 0,
+        &waveform, &waveform_positions, error, error_capacity);
+    if (pipeline_status != kStatusOk) {
+        return pipeline_status;
+    }
+    if (waveform_positions != sample_count) {
+        write_error(error, error_capacity, "waveform decoder returned an invalid length");
+        return kStatusState;
+    }
+    waveform_to_pcm_kernel<<<blocks_for(sample_count), 256, 0, context->stream>>>(
+        waveform, sample_count, context->graph_pcm_dev);
+    status = cudaGetLastError();
+    if (status == cudaSuccess) {
+        status = cudaMemcpyAsync(
+            context->graph_pcm_host, context->graph_pcm_dev,
+            sample_count * sizeof(int16_t), cudaMemcpyDeviceToHost, context->stream);
+    }
+    return status == cudaSuccess
+               ? kStatusOk
+               : cuda_error(error, error_capacity, "run decode graph body", status);
+}
+
+// QWEN3_TTS_CODEC_FAST: capture the packet decode once per frame_count and
+// replay it, eliminating the ~20 serial host-driven launches per packet.
+int32_t process_packet_graph(
+    Qwen3TtsCodecContextV1* context,
+    const uint16_t* codec_frames,
+    uint32_t frame_count,
+    int32_t is_final,
+    int16_t* pcm_output,
+    Qwen3TtsCodecPacketResultV1* result,
+    char* error,
+    size_t error_capacity
+) noexcept {
+    const auto end_to_end_start = std::chrono::steady_clock::now();
+    const size_t sample_count =
+        static_cast<size_t>(frame_count) * QWEN3_TTS_CODEC_SAMPLES_PER_FRAME;
+    const uint32_t slot = context->next_ring_slot;
+
+    std::memcpy(
+        context->graph_codes_host, codec_frames,
+        static_cast<size_t>(frame_count) * QWEN3_TTS_CODEC_CODEBOOKS * sizeof(uint16_t));
+    for (uint32_t frame = 0; frame < frame_count; ++frame) {
+        context->graph_position_host[frame] = context->neural_frame_position + frame;
+    }
+
+    cudaError_t status = cudaEventRecord(context->start_event, context->stream);
+    if (status != cudaSuccess) {
+        return cuda_error(error, error_capacity, "start packet timing", status);
+    }
+    if (!context->graph_ready[frame_count]) {
+        const int32_t warm =
+            run_graph_decode_body(context, frame_count, error, error_capacity);
+        if (warm != kStatusOk) {
+            return warm;
+        }
+        status = cudaEventRecord(context->stop_event, context->stream);
+        if (status == cudaSuccess) {
+            status = cudaStreamSynchronize(context->stream);
+        }
+        if (status != cudaSuccess) {
+            return cuda_error(error, error_capacity, "warm decode graph", status);
+        }
+        status = cudaStreamBeginCapture(
+            context->stream, cudaStreamCaptureModeThreadLocal);
+        if (status != cudaSuccess) {
+            return cuda_error(error, error_capacity, "begin decode graph capture", status);
+        }
+        const int32_t captured =
+            run_graph_decode_body(context, frame_count, error, error_capacity);
+        cudaGraph_t graph = nullptr;
+        const cudaError_t end_status =
+            cudaStreamEndCapture(context->stream, &graph);
+        if (captured != kStatusOk) {
+            if (graph != nullptr) {
+                cudaGraphDestroy(graph);
+            }
+            return captured;
+        }
+        if (end_status != cudaSuccess) {
+            return cuda_error(error, error_capacity, "end decode graph capture", end_status);
+        }
+        status = cudaGraphInstantiate(&context->graph_exec[frame_count], graph, 0);
+        cudaGraphDestroy(graph);
+        if (status != cudaSuccess) {
+            return cuda_error(error, error_capacity, "instantiate decode graph", status);
+        }
+        context->graph_ready[frame_count] = true;
+    } else {
+        status = cudaGraphLaunch(context->graph_exec[frame_count], context->stream);
+        if (status == cudaSuccess) {
+            status = cudaEventRecord(context->stop_event, context->stream);
+        }
+        if (status == cudaSuccess) {
+            status = cudaStreamSynchronize(context->stream);
+        }
+        if (status != cudaSuccess) {
+            return cuda_error(error, error_capacity, "launch decode graph", status);
+        }
+    }
+
+    float gpu_milliseconds = 0.0F;
+    status = cudaEventElapsedTime(
+        &gpu_milliseconds, context->start_event, context->stop_event);
+    if (status != cudaSuccess) {
+        return cuda_error(error, error_capacity, "measure packet GPU time", status);
+    }
+    std::memcpy(pcm_output, context->graph_pcm_host, sample_count * sizeof(int16_t));
+
+    const uint64_t first_frame = context->frame_position;
+    const uint64_t first_sample = context->emitted_samples;
+    context->frame_position += frame_count;
+    context->emitted_samples += sample_count;
+    context->neural_frame_position += frame_count;
+    context->kv_ring_head = static_cast<uint32_t>(
+        context->neural_frame_position % QWEN3_TTS_CODEC_KV_WINDOW);
+    context->next_ring_slot = (context->next_ring_slot + 1) % context->ring_slots;
+    context->finalized = is_final != 0;
+
+    const float end_to_end_microseconds =
+        std::chrono::duration<float, std::micro>(
+            std::chrono::steady_clock::now() - end_to_end_start)
+            .count();
+    *result = Qwen3TtsCodecPacketResultV1{
+        first_frame,
+        first_sample,
+        frame_count,
+        static_cast<uint32_t>(sample_count),
+        slot,
+        static_cast<uint32_t>(is_final),
+        gpu_milliseconds * 1000.0F,
+        end_to_end_microseconds,
+    };
+    return kStatusOk;
+}
+
 }  // namespace
 
 extern "C" QWEN3_TTS_CODEC_API int32_t
@@ -4043,6 +4385,11 @@ qwen3_tts_codec_process_packet_v1(
     cudaError_t status = cudaSetDevice(context->device_index);
     if (status != cudaSuccess) {
         return cuda_error(error, error_capacity, "select CUDA device", status);
+    }
+    if (context->fast_mode) {
+        return process_packet_graph(
+            context, codec_frames, frame_count, is_final,
+            pcm_output, result, error, error_capacity);
     }
     const auto end_to_end_start = std::chrono::steady_clock::now();
     const uint32_t slot = context->next_ring_slot;

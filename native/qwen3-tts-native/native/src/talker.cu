@@ -2129,22 +2129,43 @@ private:
                 ),
                 "append value cache"
             );
-            check_cuda(
-                qwen3_tts::launch_batch_causal_gqa_attention(
-                    w.query.as<__nv_bfloat16>(),
-                    key_bases,
-                    value_bases,
-                    positions,
-                    w.attention.as<__nv_bfloat16>(),
-                    n,
-                    dims.query_heads,
-                    dims.key_value_heads,
-                    dims.head_dimension,
-                    span_capacity,
-                    w.stream
-                ),
-                "causal GQA attention"
-            );
+            // The INT8 research mode also opts into the flash-style attention
+            // sweep; the BF16 contract path keeps the exact kernel.
+            if (!int8_layers.empty()) {
+                check_cuda(
+                    qwen3_tts::launch_batch_causal_gqa_attention_fast(
+                        w.query.as<__nv_bfloat16>(),
+                        key_bases,
+                        value_bases,
+                        positions,
+                        w.attention.as<__nv_bfloat16>(),
+                        n,
+                        dims.query_heads,
+                        dims.key_value_heads,
+                        dims.head_dimension,
+                        span_capacity,
+                        w.stream
+                    ),
+                    "causal GQA attention"
+                );
+            } else {
+                check_cuda(
+                    qwen3_tts::launch_batch_causal_gqa_attention(
+                        w.query.as<__nv_bfloat16>(),
+                        key_bases,
+                        value_bases,
+                        positions,
+                        w.attention.as<__nv_bfloat16>(),
+                        n,
+                        dims.query_heads,
+                        dims.key_value_heads,
+                        dims.head_dimension,
+                        span_capacity,
+                        w.stream
+                    ),
+                    "causal GQA attention"
+                );
+            }
             batch_gemm_quantized(
                 w,
                 quantized.output_projection,

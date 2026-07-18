@@ -496,6 +496,104 @@ __global__ void batch_causal_gqa_attention_kernel(
     }
 }
 
+/* Flash-style decode attention: identical math to
+ * batch_causal_gqa_attention_kernel but the softmax statistics are computed
+ * with an online two-phase sweep (cooperative score pass, then per-dimension
+ * value accumulation) using a handful of block synchronizations instead of one
+ * block-wide reduction per KV position. Scores are kept in FP32 throughout,
+ * so the result differs from the exact kernel only by BF16 rounding of the
+ * intermediate score path. Used by the opt-in research decode mode. */
+__global__ void batch_causal_gqa_attention_fast_kernel(
+    const __nv_bfloat16* query,
+    __nv_bfloat16* const* key_bases,
+    __nv_bfloat16* const* value_bases,
+    const int* positions,
+    __nv_bfloat16* output,
+    int query_heads,
+    int key_value_heads,
+    int head_dimension
+) {
+    extern __shared__ float scores[];
+    __shared__ float reduction[kThreads];
+    const int row = blockIdx.x / query_heads;
+    const int query_head = blockIdx.x % query_heads;
+    const int sequence_length = positions[row] + 1;
+    const __nv_bfloat16* key_cache = key_bases[row];
+    const __nv_bfloat16* value_cache = value_bases[row];
+    const int groups = query_heads / key_value_heads;
+    const int key_value_head = query_head / groups;
+    const __nv_bfloat16* query_values = query
+        + (static_cast<size_t>(row) * query_heads + query_head) * head_dimension;
+    const float scale = rsqrtf(static_cast<float>(head_dimension));
+
+    // Phase 1: each thread computes complete dot products for a strided
+    // subset of positions; no synchronization inside the loop.
+    float local_maximum = -__int_as_float(0x7f800000);
+    for (int position = threadIdx.x; position < sequence_length; position += blockDim.x) {
+        const __nv_bfloat16* key = key_cache
+            + (static_cast<size_t>(position) * key_value_heads + key_value_head)
+                * head_dimension;
+        float dot = 0.0f;
+        for (int dimension = 0; dimension < head_dimension; ++dimension) {
+            dot = fmaf(
+                __bfloat162float(query_values[dimension]),
+                __bfloat162float(key[dimension]),
+                dot
+            );
+        }
+        const float scored = dot * scale;
+        scores[position] = scored;
+        local_maximum = fmaxf(local_maximum, scored);
+    }
+    reduction[threadIdx.x] = local_maximum;
+    __syncthreads();
+    for (int stride = blockDim.x / 2; stride > 0; stride /= 2) {
+        if (threadIdx.x < stride) {
+            reduction[threadIdx.x] =
+                fmaxf(reduction[threadIdx.x], reduction[threadIdx.x + stride]);
+        }
+        __syncthreads();
+    }
+    const float maximum = reduction[0];
+    __syncthreads();
+
+    float local_sum = 0.0f;
+    for (int position = threadIdx.x; position < sequence_length; position += blockDim.x) {
+        const float weight = expf(scores[position] - maximum);
+        scores[position] = weight;
+        local_sum += weight;
+    }
+    reduction[threadIdx.x] = local_sum;
+    __syncthreads();
+    for (int stride = blockDim.x / 2; stride > 0; stride /= 2) {
+        if (threadIdx.x < stride) {
+            reduction[threadIdx.x] += reduction[threadIdx.x + stride];
+        }
+        __syncthreads();
+    }
+    const float inverse = 1.0f / reduction[0];
+    __syncthreads();
+
+    // Phase 2: threads own output dimensions; value reads are coalesced
+    // across the thread block at every position.
+    __nv_bfloat16* head_output = output
+        + (static_cast<size_t>(row) * query_heads + query_head) * head_dimension;
+    for (int dimension = threadIdx.x; dimension < head_dimension; dimension += blockDim.x) {
+        float accumulated = 0.0f;
+        for (int position = 0; position < sequence_length; ++position) {
+            const __nv_bfloat16* value = value_cache
+                + (static_cast<size_t>(position) * key_value_heads + key_value_head)
+                    * head_dimension;
+            accumulated = fmaf(
+                scores[position],
+                __bfloat162float(value[dimension]),
+                accumulated
+            );
+        }
+        head_output[dimension] = __float2bfloat16(accumulated * inverse);
+    }
+}
+
 __global__ void rope_rows_at_kernel(
     __nv_bfloat16* values,
     int rows,
@@ -917,6 +1015,28 @@ cudaError_t launch_batch_causal_gqa_attention(
 ) {
     const size_t shared_bytes = static_cast<size_t>(max_sequence_length) * sizeof(float);
     batch_causal_gqa_attention_kernel<<<rows * query_heads, kThreads, shared_bytes, stream>>>(
+        query, key_bases, value_bases, positions, output,
+        query_heads, key_value_heads, head_dimension
+    );
+    return cudaGetLastError();
+}
+
+cudaError_t launch_batch_causal_gqa_attention_fast(
+    const __nv_bfloat16* query,
+    __nv_bfloat16* const* key_bases,
+    __nv_bfloat16* const* value_bases,
+    const int* positions,
+    __nv_bfloat16* output,
+    int rows,
+    int query_heads,
+    int key_value_heads,
+    int head_dimension,
+    int max_sequence_length,
+    cudaStream_t stream
+) {
+    const size_t shared_bytes = static_cast<size_t>(max_sequence_length) * sizeof(float);
+    batch_causal_gqa_attention_fast_kernel<<<
+        rows * query_heads, kThreads, shared_bytes, stream>>>(
         query, key_bases, value_bases, positions, output,
         query_heads, key_value_heads, head_dimension
     );
