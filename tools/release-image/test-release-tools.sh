@@ -51,6 +51,8 @@ grep -Fq -- 'docker/buildkit-syft-scanner@sha256:' "$SCRIPT_DIR/build-and-push.s
 grep -Fq -- 'high/critical release blockers' "$SCRIPT_DIR/verify-supply-chain.sh"
 grep -Fq -- 'db update' "$SCRIPT_DIR/verify-supply-chain.sh"
 grep -Fq -- 'provenance contains a credential-like field' "$SCRIPT_DIR/verify-supply-chain.sh"
+grep -Fq -- 'max-provenance.jq' "$SCRIPT_DIR/verify-supply-chain.sh"
+grep -Fq -- 'normalize-provenance.jq' "$SCRIPT_DIR/verify-supply-chain.sh"
 grep -Fq -- 'image store is not empty' "$SCRIPT_DIR/clean-pull-gpu-acceptance.sh"
 grep -Fq -- '--gpus' "$SCRIPT_DIR/clean-pull-gpu-acceptance.sh"
 grep -Fq -- '--cap-drop=ALL' "$SCRIPT_DIR/clean-pull-gpu-acceptance.sh"
@@ -85,4 +87,42 @@ grep -Fq -- 'samples outside the ten approved names' \
 grep -Fq -- 'FINAL_GPU_RECEIPT' "$SCRIPT_DIR/promote.sh"
 grep -Fq -- 'final_gpu_acceptance: "verified"' "$SCRIPT_DIR/promote.sh"
 grep -Fq -- 'cosign-verification.json' "$SCRIPT_DIR/promote.sh"
+
+jq -n '{
+  SLSA: {
+    buildType: "https://mobyproject.org/buildkit@v1",
+    invocation: {parameters: {}, environment: {}},
+    metadata: {completeness: {parameters: true, environment: true}}
+  }
+}' >"$WORK_DIR/provenance-v02.json"
+jq -e -f "$SCRIPT_DIR/max-provenance.jq" "$WORK_DIR/provenance-v02.json" >/dev/null
+jq -e -f "$SCRIPT_DIR/normalize-provenance.jq" "$WORK_DIR/provenance-v02.json" \
+  >/dev/null
+
+jq -n '{
+  SLSA: {
+    buildDefinition: {
+      buildType: "https://github.com/moby/buildkit/blob/master/docs/attestations/slsa-definitions.md",
+      externalParameters: {configSource: {}, request: {}},
+      internalParameters: {buildConfig: {}, builderPlatform: "linux/arm64"},
+      resolvedDependencies: [{uri: "pkg:docker/example", digest: {sha256: "abc"}}]
+    },
+    runDetails: {
+      metadata: {
+        buildkit_completeness: {request: true, resolvedDependencies: false},
+        buildkit_metadata: {}
+      }
+    }
+  }
+}' >"$WORK_DIR/provenance-v1.json"
+jq -e -f "$SCRIPT_DIR/max-provenance.jq" "$WORK_DIR/provenance-v1.json" >/dev/null
+jq -e -f "$SCRIPT_DIR/normalize-provenance.jq" "$WORK_DIR/provenance-v1.json" \
+  >/dev/null
+
+jq '.SLSA.runDetails.metadata.buildkit_completeness.request = false' \
+  "$WORK_DIR/provenance-v1.json" >"$WORK_DIR/provenance-v1-incomplete.json"
+if jq -e -f "$SCRIPT_DIR/max-provenance.jq" \
+  "$WORK_DIR/provenance-v1-incomplete.json" >/dev/null; then
+  release_die "incomplete SLSA v1 provenance was accepted"
+fi
 printf 'Release-image tool tests passed.\n'
