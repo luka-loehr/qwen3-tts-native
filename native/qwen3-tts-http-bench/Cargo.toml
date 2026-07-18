@@ -1,6 +1,6 @@
 [package]
 name = "qwen3-tts-http-bench"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Reproducible external HTTP benchmark client for Qwen3-TTS VoiceDesign runtimes"
 license = "Apache-2.0"
