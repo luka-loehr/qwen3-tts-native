@@ -1,7 +1,8 @@
 \section{Introduction}
 
 Modern text-to-speech systems increasingly combine a language-model-style
-generator with a learned neural speech codec. Qwen3-TTS follows this pattern
+generator \cite{wang2023valle} with a learned neural speech codec
+\cite{zeghidour2021soundstream,defossez2022encodec}. Qwen3-TTS follows this pattern
 and exposes textual VoiceDesign conditioning alongside multilingual synthesis
 \cite{hu2026qwen3tts}. Its 12-Hz family predicts a hierarchical set of speech
 codes and supports incremental waveform reconstruction. This structure is

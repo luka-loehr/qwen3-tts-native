@@ -33,7 +33,7 @@ research/paper/
   sections/                        One English file per paper section
   sections/appendix.tex            Artifact, API, and reproducibility acceptance
   data/evidence_placeholders.tex   Sole machine-replaceable TeX data boundary
-  data/*.dat                       Final manifest-derived monochrome plot data
+  data/*.dat                       Final manifest-derived vector plot data
   tables/                          Table presentation only; no embedded results
   figures/system_architecture.tex  Vector architecture figure
   figures/performance_summary.tex  Vector benchmark-plot template
