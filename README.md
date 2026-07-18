@@ -225,11 +225,39 @@ have not verified.
 
 ## Verified performance
 
-All results in this section are checked JSON evidence from direct native runs
-on NVIDIA DGX Spark. They are historical **pre-release baselines**, not the
-controlled final-container comparison. The digest-specific release acceptance
-and the controlled Native-versus-stock comparison are documented separately
-in the published evidence bundle and benchmark report.
+### Controlled Native-versus-stock-SGLang comparison
+
+The final schema-1.2 study completed two alternating-order rounds of B1, B3,
+and B6 on one NVIDIA DGX Spark. All 2,600 measured requests succeeded after 24
+warm-ups per cell, with no competing CUDA process. The ranges below span the
+two accepted rounds:
+
+| Profile | Native aggregate RTF | Stock aggregate RTF | Native TTFA p95 | Stock TTFA p95 |
+| ---: | ---: | ---: | ---: | ---: |
+| B1 | 0.800–0.803 | 0.497–0.499 | 93.89–95.58 ms | 2,691.51–2,703.91 ms |
+| B3 | 0.641–0.642 | 0.186–0.197 | 215.55–216.81 ms | 2,720.93–2,814.63 ms |
+| B6 | 0.617–0.618 | 0.102–0.112 | 405.38–406.04 ms | 2,873.49–3,145.88 ms |
+
+Native peaked at 5.68 GB of observed GPU unified memory; stock SGLang peaked
+at 108.90 GB. Stock SGLang achieved better aggregate throughput in every
+profile. Native's measured advantages were progressive time to first audio
+and approximately 19.2 times lower peak GPU unified-memory use. Stock delivery
+was completion-buffered and exposed no authoritative EOS metadata, so its
+TTFA and completion semantics are reported explicitly rather than treated as
+equivalent to Native progressive delivery.
+
+See the
+[validated benchmark report](reports/output/qwen3-tts-native-vs-sglang-stock-dgx-spark-2026-07-17-428307c-report.pdf),
+[English research paper](research/paper/qwen3-tts-native-paper.pdf), and
+[benchmark protocol](benchmarks/README.md) for methodology, energy results,
+limitations, and full traceability.
+
+### Historical native baselines
+
+The remaining results in this section are checked JSON evidence from direct
+native runs on NVIDIA DGX Spark. They are historical pre-release baselines and
+are not substituted for the controlled comparison above or the digest-specific
+release acceptance.
 
 ### Full natural-end-of-sequence endurance
 
@@ -280,11 +308,9 @@ the process and loopback port in under one second.
 
 That historical run used a warm host filesystem cache and coexisted with an
 already running SGLang service. Coexistence is not a performance comparison,
-and this result is not used as the SGLang comparator. A controlled comparison
-may be summarized here only after the complete two-engine, B1/B3/B6,
-two-round production bundle passes the schema-1.2 validator and its generated
-report is committed under `reports/output/`. Until both artifacts exist, no
-comparative result should be inferred from this section.
+and this result is not used as the SGLang comparator. The controlled comparison
+above uses a separate, complete two-engine, B1/B3/B6, two-round production
+bundle that passed the schema-1.2 validator.
 
 Full evidence:
 [`native-server-startup-warmup-ce46acb.json`](benchmarks/results/native-server-startup-warmup-ce46acb.json).
