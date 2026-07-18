@@ -8,6 +8,10 @@ for published releases.
 
 ## [Unreleased]
 
+No changes yet.
+
+## [0.3.0] - 2026-07-18
+
 ### Added
 
 - Cross-request lockstep batched decoding (talker ABI v3). When several
@@ -19,6 +23,28 @@ for published releases.
   still finished and delivered independently. Single-request behavior and the
   session-level ABI are unchanged; libraries predating ABI v3 fall back to
   the per-session decode path.
+- CUDA-graph capture of the lockstep frame: the complete batched
+  predictor-and-talker decode is captured once per session tuple and replayed
+  thereafter, removing per-frame kernel-launch overhead. Session lifecycle
+  events are external graph nodes, so codec staging and finish leases are
+  unchanged.
+- A batched grouped-query-attention kernel that reads per-session spans from
+  device memory, and device-driven sampling indices, making the whole frame
+  replay-safe.
+- Opt-in INT8 weight-only decode (`QWEN3_TTS_INT8_DECODE=1`): every decode
+  GEMM weight is quantized to per-output-channel symmetric INT8 at engine
+  load, directly from the pinned BF16 artifact. Prefill stays BF16. The
+  default engine remains BF16.
+- First-frame priority: a session's first frame bypasses the lockstep
+  rendezvous so first-audio latency does not pay a batching penalty.
+
+### Measured on an idle DGX Spark (all 24 workload languages, natural EOS)
+
+- BF16: single-stream RTF 0.72; aggregate RTF 0.41 (B3) and 0.36 (B6);
+  per-request wall RTF 1.10 (B3) and 1.91 (B6) versus 1.65 and 3.22 for the
+  unbatched v0.2.0 engine.
+- INT8: single-stream RTF 0.47 with TTFA p50 60 ms; aggregate RTF 0.33 (B3)
+  and 0.31 (B6); per-request wall RTF 0.90 (B3) and 1.69 (B6).
 
 ## [0.2.0] - 2026-07-18
 
