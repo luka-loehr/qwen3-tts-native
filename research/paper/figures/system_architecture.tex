@@ -1,27 +1,62 @@
 \begin{tikzpicture}[
-  node distance=4.5mm,
-  box/.style={
-    draw=black,
-    rounded corners=1.5pt,
-    align=center,
-    inner sep=5pt,
-    text width=0.78\linewidth,
-    font=\small
+  font=\footnotesize,
+  stage/.style={
+    draw=black!55, rounded corners=2pt, align=center,
+    inner sep=5pt, text width=3.55cm, minimum height=11.5mm, fill=white
   },
-  arrow/.style={-{Stealth[length=2.2mm]},thick}
+  hoststage/.style={stage, fill=hostfill, draw=papernavy!60},
+  gpustage/.style={stage, fill=gpufill, draw=gpuline!60},
+  client/.style={
+    draw=black!55, rounded corners=2pt, align=center,
+    inner sep=5pt, text width=1.7cm, minimum height=11.5mm, fill=neutralfill
+  },
+  lanelabel/.style={font=\scriptsize\bfseries, anchor=north west},
+  arrow/.style={-{Stealth[length=2.4mm]}, semithick, black!65},
+  flowlabel/.style={font=\scriptsize, black!60, align=center}
 ]
-  \node[box] (request) {HTTP request: text, VoiceDesign description, language, seed, and output mode};
-  \node[box,below=of request] (server) {Rust HTTP server: validation, request identity, admission, cancellation, and response framing};
-  \node[box,below=of server] (scheduler) {Fixed-capacity Rust scheduler: request-local state, bounded PCM rings, and backpressure};
-  \node[box,below=of scheduler] (talker) {VoiceDesign talker and 15-step code predictor on CUDA/cuBLAS};
-  \node[box,below=of talker] (handoff) {CUDA-event-ordered device-to-device handoff of 16 codec codes per frame};
-  \node[box,below=of handoff] (decoder) {Stateful native neural speech decoder on CUDA/cuBLAS};
-  \node[box,below=of decoder] (response) {Progressive 24 kHz PCM multipart stream or bounded buffered WAV response};
+  % Host plane (native Rust process)
+  \node[hoststage] (server) {Rust HTTP server\\[1pt]
+    \scriptsize validation, admission,\\ \scriptsize cancellation, framing};
+  \node[hoststage, right=7mm of server] (scheduler) {Fixed-capacity scheduler\\[1pt]
+    \scriptsize request-local state,\\ \scriptsize bounded PCM rings, backpressure};
+  \node[hoststage, right=7mm of scheduler] (delivery) {Progressive delivery\\[1pt]
+    \scriptsize multipart 24\,kHz PCM\\ \scriptsize or bounded WAV};
 
-  \draw[arrow] (request) -- (server);
+  % GPU plane (CUDA / cuBLAS)
+  \node[gpustage, below=13mm of server.south, anchor=north]
+    (talker) {VoiceDesign talker (1.7B)\\[1pt]
+    \scriptsize + 15-step residual\\ \scriptsize code predictor};
+  \node[gpustage, right=7mm of talker] (handoff) {Event-ordered D2D staging\\[1pt]
+    \scriptsize 16 codec codes per frame,\\ \scriptsize no host round trip};
+  \node[gpustage, right=7mm of handoff] (decoder) {Incremental speech decoder\\[1pt]
+    \scriptsize stateful neural codec,\\ \scriptsize PCM clamped to s16le};
+
+  % Plane backgrounds
+  \begin{scope}[on background layer]
+    \node[fit=(server)(scheduler)(delivery), draw=papernavy!45, fill=hostfill!45,
+          rounded corners=3pt, inner xsep=6pt, inner ysep=11pt] (hostplane) {};
+    \node[fit=(talker)(handoff)(decoder), draw=gpuline!45, fill=gpufill!45,
+          rounded corners=3pt, inner xsep=6pt, inner ysep=11pt] (gpuplane) {};
+  \end{scope}
+  \node[lanelabel, text=papernavy]
+    at ([xshift=2pt,yshift=-1pt]hostplane.north west) {Host --- one native Rust process};
+  \node[lanelabel, text=gpuline]
+    at ([xshift=2pt,yshift=-1pt]gpuplane.north west)
+    {GPU --- CUDA kernels and cuBLAS (\code{sm\_121} SASS)};
+
+  % Client
+  \node[client, left=8mm of hostplane.west, anchor=east] (clientnode) {HTTP\\client};
+
+  % Flow
+  \draw[arrow] (clientnode.east) -- (clientnode.east -| hostplane.west);
   \draw[arrow] (server) -- (scheduler);
-  \draw[arrow] (scheduler) -- (talker);
+  \draw[arrow] (scheduler.south) -- ++(0,-3.2mm) -| ([xshift=8mm]talker.north)
+    node[flowlabel, pos=0.22, below=1pt] {admit, prompt, seed};
   \draw[arrow] (talker) -- (handoff);
   \draw[arrow] (handoff) -- (decoder);
-  \draw[arrow] (decoder) -- (response);
+  \draw[arrow] (decoder.north) -- ++(0,3.2mm) -| ([xshift=-8mm]delivery.south)
+    node[flowlabel, pos=0.22, above=1pt] {PCM into request-owned rings};
+  \draw[arrow, papernavy!80] (delivery.north) -- ++(0,4.5mm) -|
+    node[flowlabel, pos=0.25, above=1pt] {progressive stream}
+    (clientnode.north);
 \end{tikzpicture}

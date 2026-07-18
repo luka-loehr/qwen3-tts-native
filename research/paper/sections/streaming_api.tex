@@ -11,8 +11,21 @@ Progressive responses use \code{multipart/mixed}. The first part is a JSON
 start event, subsequent binary parts contain 24,000-Hz mono signed 16-bit
 little-endian PCM, and exactly one JSON end or error event terminates the
 application stream. Multipart boundaries define application packets; HTTP/1.1
-chunks or HTTP/2 DATA frames do not. A separate buffered mode returns a bounded
-RIFF/WAVE object after synthesis completes.
+chunks or HTTP/2 DATA frames do not. Figure~\ref{fig:streaming-cadence}
+illustrates the packet cadence: the first packet carries one 80-ms codec frame
+to minimize first-audio latency, and subsequent packets carry up to four
+frames. A separate buffered mode returns a bounded RIFF/WAVE object after
+synthesis completes.
+
+\begin{figure}[t]
+  \centering
+  \input{figures/streaming_cadence}
+  \caption{Progressive response layout. The stream is bracketed by JSON start
+  and end events; binary packet widths are drawn proportional to the audio
+  duration they carry (80~ms first, then up to 320~ms each). The figure
+  encodes the framing contract only, not a measured timing.}
+  \label{fig:streaming-cadence}
+\end{figure}
 
 The service also exposes liveness, readiness, capability discovery, bounded
 request cancellation, and prompt-free Prometheus counters. A conservative

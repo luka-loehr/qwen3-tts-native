@@ -10,13 +10,27 @@
 \usepackage{tabularx}
 \usepackage{siunitx}
 \usepackage{graphicx}
+\usepackage{xcolor}
 \usepackage{tikz}
-\usetikzlibrary{arrows.meta,positioning,shapes.geometric}
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric,fit,backgrounds,calc,decorations.pathreplacing}
 \usepackage{pgfplots}
 \pgfplotsset{compat=1.18}
-\usepackage[hidelinks]{hyperref}
+\usepackage[labelfont=bf,font=small,skip=6pt]{caption}
+\usepackage{hyperref}
+
+% Shared palette: colorblind-safe, legible in grayscale print.
+\definecolor{papernavy}{HTML}{1F4E8C}   % native series, links, accents
+\definecolor{papervermilion}{HTML}{C1521E} % stock comparator series
+\definecolor{hostfill}{HTML}{EDF2F9}    % host / Rust plane
+\definecolor{gpufill}{HTML}{EAF5EC}     % GPU / CUDA plane
+\definecolor{gpuline}{HTML}{2E7D46}
+\definecolor{neutralfill}{HTML}{F4F4F4}
 
 \hypersetup{
+  colorlinks=true,
+  linkcolor=papernavy,
+  citecolor=papernavy,
+  urlcolor=papernavy,
   pdftitle={Qwen3-TTS Native: A Rust and CUDA Runtime for Streaming VoiceDesign Inference on NVIDIA DGX Spark},
   pdfauthor={Luka L\"ohr},
   pdfsubject={Native streaming text-to-speech inference},
@@ -26,7 +40,6 @@
 \newcommand{\projectname}{Qwen3-TTS Native}
 \newcommand{\modelname}{Qwen3-TTS-12Hz-1.7B-VoiceDesign}
 \newcommand{\code}[1]{\texttt{#1}}
-\newcommand{\PendingEvidence}{\texttt{PENDING}}
 \newcommand{\EvidenceWarning}{%
   \begin{center}
     \fbox{\parbox{0.92\linewidth}{\centering\small
@@ -38,7 +51,8 @@
 
 \title{\textbf{Qwen3-TTS Native: A Rust and CUDA Runtime for\\
 Streaming VoiceDesign Inference on NVIDIA DGX Spark}}
-\author{Luka L\"ohr}
+\author{Luka L\"ohr\\[3pt]
+  \small\href{https://github.com/luka-loehr/qwen3-tts-native}{\texttt{github.com/luka-loehr/qwen3-tts-native}}}
 \date{July 2026}
 
 \begin{document}

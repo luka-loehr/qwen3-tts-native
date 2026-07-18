@@ -1,5 +1,19 @@
 \section{Related Work}
 
+\paragraph{Neural codec language models.}
+Discrete neural audio codecs such as SoundStream
+\cite{zeghidour2021soundstream} and EnCodec \cite{defossez2022encodec}
+established low-bitrate residual vector-quantized speech representations, and
+VALL-E demonstrated that a language model over such codes can perform
+text-to-speech \cite{wang2023valle}. Later systems emphasize streaming
+generation from codec tokens, including Moshi's full-duplex speech modeling
+\cite{defossez2024moshi} and CosyVoice~2's streaming synthesis
+\cite{du2024cosyvoice2}. Description-conditioned control of voice attributes
+through natural-language annotations was explored by Lyth and King
+\cite{lyth2024parler}; Qwen3-TTS VoiceDesign exposes the same control paradigm.
+These works motivate the model family; this paper contributes only the serving
+implementation.
+
 \paragraph{Qwen3-TTS.}
 The Qwen3-TTS technical report presents a family of multilingual,
 description-controllable text-to-speech models and two speech-tokenizer rates
@@ -11,10 +25,12 @@ changes the trained model nor reproduces those model-quality claims. It studies
 a separate systems question: how to execute the released 1.7B VoiceDesign
 checkpoint through a purpose-built Rust/CUDA path on DGX Spark.
 
-\paragraph{SGLang and the stock comparator.}
-SGLang introduced a programming and runtime system for structured language
-model workloads, including runtime optimizations such as RadixAttention
-\cite{zheng2023sglang}. The comparison in this paper uses the separately
+\paragraph{LLM serving systems and the stock comparator.}
+General-purpose LLM serving frameworks optimize throughput with techniques
+such as paged key-value memory in vLLM \cite{kwon2023vllm} and RadixAttention
+in SGLang \cite{zheng2023sglang}. These systems target broad model coverage
+inside a Python runtime; \projectname{} instead specializes one checkpoint and
+one GPU architecture in a framework-free native binary. The comparison in this paper uses the separately
 versioned SGLang-Omni 0.1.0 Qwen3-TTS serving path, not the experiments reported
 in the original SGLang paper. Its upstream source commit, container base,
 dependency inventory, compatibility patch, and launch configuration are pinned

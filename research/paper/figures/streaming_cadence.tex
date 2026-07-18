@@ -1,0 +1,36 @@
+\begin{tikzpicture}[
+  font=\footnotesize,
+  pkt/.style={draw=black!55, rounded corners=1.5pt, minimum height=8mm, anchor=west},
+  firstpkt/.style={pkt, fill=papernavy!85},
+  laterpkt/.style={pkt, fill=papernavy!20},
+  jsonpkt/.style={pkt, fill=neutralfill, align=center, font=\scriptsize, inner xsep=3pt},
+  lbl/.style={font=\scriptsize, align=center, black!70},
+  brace/.style={decorate, decoration={brace, amplitude=4pt}, black!60, semithick}
+]
+  % Scale: 1 codec frame (80 ms of audio) = 6 mm.
+  \node[jsonpkt] (start) at (0,0) {JSON\\start};
+  \node[firstpkt, minimum width=6mm]  (p1) at ([xshift=2.5mm]start.east) {};
+  \node[laterpkt, minimum width=24mm] (p2) at ([xshift=2.5mm]p1.east) {};
+  \node[laterpkt, minimum width=24mm] (p3) at ([xshift=2.5mm]p2.east) {};
+  \node[laterpkt, minimum width=24mm] (p4) at ([xshift=2.5mm]p3.east) {};
+  \node[lbl, anchor=west] (cont) at ([xshift=2mm]p4.east) {$\cdots$};
+  \node[jsonpkt] (end) at ([xshift=2mm]cont.east) {JSON\\end / error};
+
+  % Staggered top annotations so the labels cannot collide.
+  \draw[brace] ([yshift=1mm]p1.north west) -- ([yshift=1mm]p1.north east);
+  \node[lbl, anchor=south east, xshift=-2mm] at ([yshift=3.2mm]p1.north)
+    {first packet: 1 frame\\= 80 ms audio};
+  \draw[brace] ([yshift=1mm]p2.north west) -- ([yshift=1mm]p4.north east)
+    node[lbl, midway, above=5pt]
+    {subsequent packets: up to 4 frames = 320 ms audio each};
+
+  \draw[brace, decoration={brace, mirror, amplitude=4pt}]
+    ([yshift=-1.5mm]start.south west) -- ([yshift=-1.5mm]end.south east)
+    node[lbl, midway, below=6pt]
+    {one \code{multipart/mixed} application stream; multipart boundaries define
+     packets,\\ not HTTP/1.1 chunks or HTTP/2 DATA frames};
+
+  \draw[-{Stealth[length=2.2mm]}, semithick, black!60]
+    ([xshift=-1mm,yshift=-17mm]start.west) -- ([xshift=4mm,yshift=-17mm]end.east)
+    node[lbl, pos=0.5, below=2pt] {time};
+\end{tikzpicture}

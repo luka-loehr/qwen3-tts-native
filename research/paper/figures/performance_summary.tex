@@ -1,58 +1,71 @@
 \ifFinalEvidenceAvailable
+  \pgfplotsset{
+    perfaxis/.style={
+      width=\linewidth,
+      height=5.6cm,
+      xlabel={Concurrency},
+      xtick={1,3,6},
+      xmin=0.5, xmax=6.5,
+      grid=major,
+      grid style={draw=black!12, densely dotted},
+      axis line style={black!60},
+      legend style={
+        draw=none, fill=none, font=\footnotesize,
+        at={(0.5,-0.32)}, anchor=north, legend columns=2,
+        /tikz/every even column/.append style={column sep=10pt}
+      },
+      tick label style={font=\footnotesize},
+      label style={font=\small}
+    },
+    nativemarks/.style={
+      only marks, papernavy, mark=*, mark size=2.4pt
+    },
+    stockmarks/.style={
+      only marks, papervermilion, mark=square*,
+      mark options={fill=white, draw=papervermilion, line width=0.8pt},
+      mark size=2.4pt
+    }
+  }
   \begin{minipage}[t]{0.49\linewidth}
     \centering
     \begin{tikzpicture}
-      \begin{axis}[
-        width=\linewidth,
-        height=5.2cm,
-        xlabel={Concurrency},
+      \begin{semilogyaxis}[
+        perfaxis,
         ylabel={TTFA p95 (ms)},
-        xtick={1,3,6},
-        grid=major,
-        grid style={draw=black!20},
-        legend style={draw=none,fill=none,font=\footnotesize},
-        legend pos=north west,
-        tick label style={font=\footnotesize},
-        label style={font=\small}
+        ymin=50, ymax=6000,
+        log ticks with fixed point
       ]
-        \addplot[only marks,black,mark=*,mark size=2.2pt]
+        \addplot[nativemarks]
           table[x=concurrency,y=ttfa_p95_ms] {data/native-runs.dat};
         \addlegendentry{Native}
-        \addplot[only marks,black,mark=square*,mark options={fill=white},mark size=2.2pt]
+        \addplot[stockmarks]
           table[x=concurrency,y=ttfa_p95_ms] {data/sglang-runs.dat};
         \addlegendentry{Stock SGLang}
-      \end{axis}
+      \end{semilogyaxis}
     \end{tikzpicture}
   \end{minipage}\hfill
   \begin{minipage}[t]{0.49\linewidth}
     \centering
     \begin{tikzpicture}
       \begin{axis}[
-        width=\linewidth,
-        height=5.2cm,
-        xlabel={Concurrency},
+        perfaxis,
         ylabel={Aggregate RTF},
-        xtick={1,3,6},
-        grid=major,
-        grid style={draw=black!20},
-        legend style={draw=none,fill=none,font=\footnotesize},
-        legend pos=north west,
-        tick label style={font=\footnotesize},
-        label style={font=\small}
+        ymin=0, ymax=1.1
       ]
-        \addplot[only marks,black,mark=*,mark size=2.2pt]
+        \addplot[nativemarks]
           table[x=concurrency,y=aggregate_rtf] {data/native-runs.dat};
         \addlegendentry{Native}
-        \addplot[only marks,black,mark=square*,mark options={fill=white},mark size=2.2pt]
+        \addplot[stockmarks]
           table[x=concurrency,y=aggregate_rtf] {data/sglang-runs.dat};
         \addlegendentry{Stock SGLang}
-        \addplot[black,densely dotted,domain=1:6,samples=2] {1};
+        \addplot[black!55, densely dotted, domain=0.5:6.5, samples=2] {1}
+          node[pos=0.68, above=0.5pt, font=\scriptsize, black!55] {RTF = 1};
       \end{axis}
     \end{tikzpicture}
   \end{minipage}
 \else
   \fbox{\parbox[c][4.5cm][c]{0.94\linewidth}{\centering
     \textbf{Validated benchmark plots pending}\\[6pt]
-    The final black-and-white vector panels are rendered only after all 12
+    The final vector panels are rendered only after all 12
     run records and their digest-bound evidence pass validation.}}
 \fi
