@@ -1423,6 +1423,12 @@ impl NativeTalkerSession {
         if self.model.batch_pump.is_none() {
             return self.begin_device_frame();
         }
+        // First audio must not wait for the lockstep rendezvous: the first
+        // frame of every session runs on the unbatched session-stream path and
+        // the session joins the shared cadence from its second frame.
+        if self.frames_emitted == 0 {
+            return self.begin_device_frame();
+        }
         if self.end_reason.is_some() {
             return Ok(None);
         }
