@@ -8,7 +8,17 @@ for published releases.
 
 ## [Unreleased]
 
-No changes yet.
+### Added
+
+- Cross-request lockstep batched decoding (talker ABI v3). When several
+  requests generate concurrently, one batched native call now performs the
+  talker and 15-step code-predictor decode for every active session, so each
+  shared weight matrix is read from memory once per codec frame instead of
+  once per session. KV caches, sampling state, semantic histories, random
+  states, and lifecycle leases remain request-local, and each session is
+  still finished and delivered independently. Single-request behavior and the
+  session-level ABI are unchanged; libraries predating ABI v3 fall back to
+  the per-session decode path.
 
 ## [0.2.0] - 2026-07-18
 

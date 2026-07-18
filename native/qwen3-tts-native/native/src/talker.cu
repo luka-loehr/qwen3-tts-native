@@ -15,6 +15,7 @@
 #include <cstring>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <new>
 #include <numeric>
 #include <stdexcept>
@@ -183,6 +184,143 @@ constexpr ModelDimensions kPredictorDimensions{
     kPredictorHeadDimension,
     kPredictorQueryWidth,
     kPredictorKeyValueWidth,
+};
+
+/* Shared lockstep-decode workspace. One frame step for up to kCapacity
+ * sessions shares every weight-read GEMM (M = batch rows) while KV caches,
+ * sampling state, histories, and events stay session-local. */
+struct BatchWorkspace {
+    static constexpr int kCapacity = 8;
+    static constexpr int kPositionSlots = kPredictorSequence + 1;
+    static constexpr int kKvPointerCount =
+        (kTalkerLayers + kPredictorLayers) * 2 * kCapacity;
+
+    explicit BatchWorkspace(int device_index) : device_index(device_index) {
+        check_cuda(cudaSetDevice(device_index), "cudaSetDevice(batch workspace)");
+        try {
+            check_cuda(
+                cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking),
+                "cudaStreamCreateWithFlags(batch)"
+            );
+            check_cublas(cublasCreate(&cublas), "cublasCreate(batch)");
+            check_cublas(cublasSetStream(cublas, stream), "cublasSetStream(batch)");
+            check_cublas(
+                cublasSetMathMode(cublas, CUBLAS_DEFAULT_MATH),
+                "cublasSetMathMode(batch)"
+            );
+            const size_t element = sizeof(__nv_bfloat16);
+            hidden = DeviceBuffer(kCapacity * kTalkerHidden * element);
+            normalized = DeviceBuffer(kCapacity * kTalkerHidden * element);
+            query = DeviceBuffer(kCapacity * kPredictorQueryWidth * element);
+            key = DeviceBuffer(kCapacity * kTalkerKeyValueWidth * element);
+            value = DeviceBuffer(kCapacity * kTalkerKeyValueWidth * element);
+            attention = DeviceBuffer(kCapacity * kPredictorQueryWidth * element);
+            projection = DeviceBuffer(kCapacity * kTalkerHidden * element);
+            gate = DeviceBuffer(kCapacity * kTalkerIntermediate * element);
+            up = DeviceBuffer(kCapacity * kTalkerIntermediate * element);
+            logits = DeviceBuffer(kCapacity * kTalkerVocabulary * element);
+            text_input = DeviceBuffer(kCapacity * kTalkerHidden * element);
+            device_positions = DeviceBuffer(
+                static_cast<size_t>(kPositionSlots) * kCapacity * sizeof(int)
+            );
+            device_kv_bases = DeviceBuffer(
+                static_cast<size_t>(kKvPointerCount) * sizeof(__nv_bfloat16*)
+            );
+            device_token_bases = DeviceBuffer(kCapacity * sizeof(const int*));
+            check_cuda(
+                cudaMallocHost(
+                    reinterpret_cast<void**>(&pinned_positions),
+                    static_cast<size_t>(kPositionSlots) * kCapacity * sizeof(int)
+                ),
+                "cudaMallocHost(batch positions)"
+            );
+            check_cuda(
+                cudaMallocHost(
+                    reinterpret_cast<void**>(&pinned_kv_bases),
+                    static_cast<size_t>(kKvPointerCount) * sizeof(__nv_bfloat16*)
+                ),
+                "cudaMallocHost(batch kv bases)"
+            );
+            check_cuda(
+                cudaMallocHost(
+                    reinterpret_cast<void**>(&pinned_token_bases),
+                    kCapacity * sizeof(const int*)
+                ),
+                "cudaMallocHost(batch token bases)"
+            );
+            for (int slot = 0; slot < kCapacity; ++slot) {
+                check_cuda(
+                    cudaEventCreateWithFlags(&join_events[slot], cudaEventDisableTiming),
+                    "cudaEventCreate(batch join)"
+                );
+            }
+        } catch (...) {
+            release();
+            throw;
+        }
+    }
+
+    ~BatchWorkspace() {
+        cudaSetDevice(device_index);
+        if (stream != nullptr) {
+            cudaStreamSynchronize(stream);
+        }
+        release();
+    }
+
+    BatchWorkspace(const BatchWorkspace&) = delete;
+    BatchWorkspace& operator=(const BatchWorkspace&) = delete;
+
+    void release() noexcept {
+        for (int slot = 0; slot < kCapacity; ++slot) {
+            if (join_events[slot] != nullptr) {
+                cudaEventDestroy(join_events[slot]);
+                join_events[slot] = nullptr;
+            }
+        }
+        if (pinned_token_bases != nullptr) {
+            cudaFreeHost(pinned_token_bases);
+            pinned_token_bases = nullptr;
+        }
+        if (pinned_kv_bases != nullptr) {
+            cudaFreeHost(pinned_kv_bases);
+            pinned_kv_bases = nullptr;
+        }
+        if (pinned_positions != nullptr) {
+            cudaFreeHost(pinned_positions);
+            pinned_positions = nullptr;
+        }
+        if (cublas != nullptr) {
+            cublasDestroy(cublas);
+            cublas = nullptr;
+        }
+        if (stream != nullptr) {
+            cudaStreamDestroy(stream);
+            stream = nullptr;
+        }
+    }
+
+    int device_index;
+    cudaStream_t stream = nullptr;
+    cublasHandle_t cublas = nullptr;
+    DeviceBuffer hidden;
+    DeviceBuffer normalized;
+    DeviceBuffer query;
+    DeviceBuffer key;
+    DeviceBuffer value;
+    DeviceBuffer attention;
+    DeviceBuffer projection;
+    DeviceBuffer gate;
+    DeviceBuffer up;
+    DeviceBuffer logits;
+    DeviceBuffer text_input;
+    DeviceBuffer device_positions;
+    DeviceBuffer device_kv_bases;
+    DeviceBuffer device_token_bases;
+    int* pinned_positions = nullptr;
+    __nv_bfloat16** pinned_kv_bases = nullptr;
+    const int** pinned_token_bases = nullptr;
+    std::array<cudaEvent_t, kCapacity> join_events{};
 };
 
 class TalkerModel {
@@ -415,9 +553,19 @@ private:
         };
     }
 
+    BatchWorkspace& batch_workspace() {
+        std::lock_guard<std::mutex> lock(batch_mutex_);
+        if (!batch_) {
+            batch_ = std::make_unique<BatchWorkspace>(device_index_);
+        }
+        return *batch_;
+    }
+
     int device_index_;
     bool finalized_ = false;
     uint64_t weight_bytes_ = 0;
+    std::mutex batch_mutex_;
+    std::unique_ptr<BatchWorkspace> batch_;
     cudaStream_t upload_stream_ = nullptr;
     std::unordered_map<std::string, DeviceTensor> tensors_;
     std::vector<DecoderWeights> talker_layers_;
@@ -986,7 +1134,804 @@ public:
         return current_semantic_token_;
     }
 
+    /* Lockstep batched frame generation. Enqueues one complete codec frame for
+     * every session in one pass so each weight matrix is read once per frame
+     * instead of once per session. KV caches, sampling state, semantic
+     * histories, random states, pinned outputs, and lifecycle events remain
+     * session-local; every session is finished individually through the
+     * existing finish_frame lease. All sessions must belong to `model`. */
+    static void batch_begin_frames(
+        TalkerModel* model,
+        TalkerContext** s,
+        int n,
+        const int* trailing_text_tokens,
+        const Qwen3TtsSamplingConfig* talker_sampling,
+        const Qwen3TtsSamplingConfig* predictor_sampling,
+        Qwen3TtsDeviceFrameViewV2* views
+    ) {
+        if (model == nullptr || s == nullptr || n <= 0 || n > BatchWorkspace::kCapacity) {
+            throw std::runtime_error("invalid batch frame arguments");
+        }
+        BatchWorkspace& w = model->batch_workspace();
+        check_cuda(cudaSetDevice(w.device_index), "cudaSetDevice(batch frame)");
+
+        // Per-session preamble: mirrors begin_frame validation exactly.
+        for (int i = 0; i < n; ++i) {
+            TalkerContext* c = s[i];
+            c->ensure_ready();
+            if (c->model_.get() != model) {
+                throw std::runtime_error("batched session belongs to a different model");
+            }
+            if (c->poisoned_) {
+                throw std::runtime_error("talker session is poisoned and must be destroyed");
+            }
+            if (c->frame_in_flight_) {
+                throw std::runtime_error("a device frame lease is already in flight");
+            }
+            if (c->phase_ != QWEN3_TTS_TALKER_PREFILLED) {
+                throw std::runtime_error("talker must be prefilled before frame generation");
+            }
+            if (c->current_semantic_token_ == kCodecEos) {
+                throw std::runtime_error("EOS must not be expanded into a codec frame");
+            }
+            if (c->current_semantic_token_ >= kTalkerVocabulary) {
+                throw std::runtime_error("semantic token is outside the talker vocabulary");
+            }
+            if (trailing_text_tokens[i] < 0 || trailing_text_tokens[i] >= kTextVocabulary) {
+                throw std::runtime_error("next-frame text token is outside the text vocabulary");
+            }
+            if (c->position_ >= c->max_sequence_length_) {
+                throw std::runtime_error("talker KV cache is full");
+            }
+            if (c->generated_semantic_count_ >= c->max_sequence_length_) {
+                throw std::runtime_error("semantic history exceeds configured sequence capacity");
+            }
+            for (const Qwen3TtsSamplingConfig* config :
+                 {&talker_sampling[i], &predictor_sampling[i]}) {
+                if (config->top_k < 0 || config->top_p <= 0.0f || config->top_p > 1.0f
+                    || config->temperature <= 0.0f || config->repetition_penalty <= 0.0f) {
+                    throw std::runtime_error("invalid sampling configuration");
+                }
+            }
+        }
+
+        // Allocate leases only after every session validated.
+        for (int i = 0; i < n; ++i) {
+            TalkerContext* c = s[i];
+            uint64_t lease_id = c->next_lease_id_++;
+            if (c->next_lease_id_ == 0) {
+                c->next_lease_id_ = 1;
+            }
+            c->frame_in_flight_ = true;
+            c->pending_host_code_copy_ = false;
+            c->pending_lease_id_ = lease_id;
+            c->pending_talker_position_ = static_cast<uint32_t>(c->position_);
+        }
+
+        try {
+            // Order the batch stream after each session's prior work.
+            for (int i = 0; i < n; ++i) {
+                check_cuda(
+                    cudaEventRecord(w.join_events[i], s[i]->stream_),
+                    "cudaEventRecord(batch join)"
+                );
+                check_cuda(
+                    cudaStreamWaitEvent(w.stream, w.join_events[i], 0),
+                    "cudaStreamWaitEvent(batch join)"
+                );
+            }
+
+            // Upload per-batch pointer and position tables once per frame.
+            for (int slot = 0; slot < kPredictorSequence; ++slot) {
+                for (int i = 0; i < n; ++i) {
+                    w.pinned_positions[slot * BatchWorkspace::kCapacity + i] = slot;
+                }
+            }
+            for (int i = 0; i < n; ++i) {
+                w.pinned_positions[kPredictorSequence * BatchWorkspace::kCapacity + i] =
+                    s[i]->position_;
+                w.pinned_token_bases[i] = s[i]->frame_tokens_.as<int>();
+            }
+            for (int layer = 0; layer < kTalkerLayers; ++layer) {
+                for (int i = 0; i < n; ++i) {
+                    w.pinned_kv_bases[(layer * 2) * BatchWorkspace::kCapacity + i] =
+                        s[i]->talker_cache_[layer].key.as<__nv_bfloat16>();
+                    w.pinned_kv_bases[(layer * 2 + 1) * BatchWorkspace::kCapacity + i] =
+                        s[i]->talker_cache_[layer].value.as<__nv_bfloat16>();
+                }
+            }
+            for (int layer = 0; layer < kPredictorLayers; ++layer) {
+                const int slot = kTalkerLayers + layer;
+                for (int i = 0; i < n; ++i) {
+                    w.pinned_kv_bases[(slot * 2) * BatchWorkspace::kCapacity + i] =
+                        s[i]->predictor_cache_[layer].key.as<__nv_bfloat16>();
+                    w.pinned_kv_bases[(slot * 2 + 1) * BatchWorkspace::kCapacity + i] =
+                        s[i]->predictor_cache_[layer].value.as<__nv_bfloat16>();
+                }
+            }
+            check_cuda(
+                cudaMemcpyAsync(
+                    w.device_positions.as<int>(),
+                    w.pinned_positions,
+                    static_cast<size_t>(BatchWorkspace::kPositionSlots)
+                        * BatchWorkspace::kCapacity * sizeof(int),
+                    cudaMemcpyHostToDevice,
+                    w.stream
+                ),
+                "upload batch positions"
+            );
+            check_cuda(
+                cudaMemcpyAsync(
+                    w.device_kv_bases.as<__nv_bfloat16*>(),
+                    w.pinned_kv_bases,
+                    static_cast<size_t>(BatchWorkspace::kKvPointerCount)
+                        * sizeof(__nv_bfloat16*),
+                    cudaMemcpyHostToDevice,
+                    w.stream
+                ),
+                "upload batch kv bases"
+            );
+            check_cuda(
+                cudaMemcpyAsync(
+                    w.device_token_bases.as<const int*>(),
+                    w.pinned_token_bases,
+                    BatchWorkspace::kCapacity * sizeof(const int*),
+                    cudaMemcpyHostToDevice,
+                    w.stream
+                ),
+                "upload batch token bases"
+            );
+
+            TalkerContext* c0 = s[0];
+            const int* const* token_bases = w.device_token_bases.as<const int*>();
+
+            // frame_tokens[0] = current semantic token, per session.
+            for (int i = 0; i < n; ++i) {
+                check_cuda(
+                    qwen3_tts::launch_store_token(
+                        s[i]->frame_tokens_.as<int>(),
+                        0,
+                        s[i]->current_semantic_token_,
+                        w.stream
+                    ),
+                    "store semantic frame token"
+                );
+                check_cuda(
+                    cudaEventRecord(s[i]->predictor_start_, w.stream),
+                    "cudaEventRecord(predictor start)"
+                );
+            }
+
+            // ---- Predictor: 16 lockstep positions ----
+            for (int position = 0; position < kPredictorSequence; ++position) {
+                if (position == 0) {
+                    for (int i = 0; i < n; ++i) {
+                        check_cuda(
+                            cudaMemcpyAsync(
+                                w.text_input.as<__nv_bfloat16>()
+                                    + static_cast<size_t>(i) * kTalkerHidden,
+                                s[i]->last_hidden_.as<__nv_bfloat16>(),
+                                kTalkerHidden * sizeof(__nv_bfloat16),
+                                cudaMemcpyDeviceToDevice,
+                                w.stream
+                            ),
+                            "gather last talker hidden"
+                        );
+                    }
+                } else if (position == 1) {
+                    check_cuda(
+                        qwen3_tts::launch_gather_embedding_rows(
+                            c0->codec_embedding_,
+                            kTalkerVocabulary,
+                            kTalkerHidden,
+                            token_bases,
+                            0,
+                            w.text_input.as<__nv_bfloat16>(),
+                            n,
+                            w.stream
+                        ),
+                        "gather semantic predictor embedding"
+                    );
+                } else {
+                    const int residual = position - 1;
+                    check_cuda(
+                        qwen3_tts::launch_gather_embedding_rows(
+                            c0->predictor_embeddings_[residual - 1],
+                            kPredictorVocabulary,
+                            kTalkerHidden,
+                            token_bases,
+                            residual,
+                            w.text_input.as<__nv_bfloat16>(),
+                            n,
+                            w.stream
+                        ),
+                        "gather residual predictor embedding"
+                    );
+                }
+                batch_gemm(
+                    w,
+                    c0->small_to_predictor_,
+                    w.text_input.as<__nv_bfloat16>(),
+                    w.hidden.as<__nv_bfloat16>(),
+                    kTalkerHidden,
+                    kPredictorHidden,
+                    n
+                );
+                check_cuda(
+                    qwen3_tts::launch_bias_activation_rows(
+                        w.hidden.as<__nv_bfloat16>(),
+                        c0->small_to_predictor_bias_,
+                        n,
+                        kPredictorHidden,
+                        false,
+                        w.stream
+                    ),
+                    "predictor input projection bias"
+                );
+                batch_run_decoder(w, s, n, c0->predictor_layers_, true,
+                                  kPredictorDimensions, position);
+                const int head = position - 1;
+                if (head >= 0) {
+                    check_cuda(
+                        qwen3_tts::launch_rms_norm_rows(
+                            w.hidden.as<__nv_bfloat16>(),
+                            c0->predictor_norm_,
+                            w.normalized.as<__nv_bfloat16>(),
+                            n,
+                            kPredictorHidden,
+                            kRmsEpsilon,
+                            w.stream
+                        ),
+                        "predictor final RMSNorm"
+                    );
+                    batch_gemm(
+                        w,
+                        c0->predictor_heads_[head],
+                        w.normalized.as<__nv_bfloat16>(),
+                        w.logits.as<__nv_bfloat16>(),
+                        kPredictorHidden,
+                        kPredictorVocabulary,
+                        n
+                    );
+                    for (int i = 0; i < n; ++i) {
+                        check_cuda(
+                            qwen3_tts::launch_sample_logits(
+                                w.logits.as<__nv_bfloat16>()
+                                    + static_cast<size_t>(i) * kPredictorVocabulary,
+                                kPredictorVocabulary,
+                                false,
+                                kCodecEos,
+                                s[i]->semantic_history_.as<int>(),
+                                s[i]->generated_semantic_count_,
+                                predictor_sampling[i].do_sample,
+                                predictor_sampling[i].top_k,
+                                predictor_sampling[i].top_p,
+                                predictor_sampling[i].temperature,
+                                predictor_sampling[i].repetition_penalty,
+                                s[i]->random_state_.as<uint64_t>(),
+                                s[i]->sampled_token_.as<int>(),
+                                w.stream
+                            ),
+                            "sample predictor logits"
+                        );
+                        check_cuda(
+                            qwen3_tts::launch_store_sampled_token(
+                                s[i]->frame_tokens_.as<int>(),
+                                position,
+                                s[i]->sampled_token_.as<int>(),
+                                w.stream
+                            ),
+                            "store predictor codebook token"
+                        );
+                        ++s[i]->device_sample_count_;
+                    }
+                }
+            }
+            for (int i = 0; i < n; ++i) {
+                check_cuda(
+                    cudaEventRecord(s[i]->predictor_stop_, w.stream),
+                    "cudaEventRecord(predictor stop)"
+                );
+                check_cuda(
+                    qwen3_tts::launch_pack_frame_codes(
+                        s[i]->frame_tokens_.as<int>(),
+                        s[i]->frame_codes_.as<uint16_t>(),
+                        w.stream
+                    ),
+                    "pack codec frame"
+                );
+                check_cuda(
+                    cudaEventRecord(s[i]->frame_codes_ready_, w.stream),
+                    "cudaEventRecord(frame codes ready)"
+                );
+            }
+
+            // ---- Next talker embedding: codes + trailing text ----
+            check_cuda(
+                qwen3_tts::launch_gather_embedding_rows(
+                    c0->codec_embedding_,
+                    kTalkerVocabulary,
+                    kTalkerHidden,
+                    token_bases,
+                    0,
+                    w.hidden.as<__nv_bfloat16>(),
+                    n,
+                    w.stream
+                ),
+                "gather semantic talker embedding"
+            );
+            for (int residual = 0; residual < kResidualCodebooks; ++residual) {
+                check_cuda(
+                    qwen3_tts::launch_add_embedding_rows(
+                        c0->predictor_embeddings_[residual],
+                        kPredictorVocabulary,
+                        kTalkerHidden,
+                        token_bases,
+                        residual + 1,
+                        w.hidden.as<__nv_bfloat16>(),
+                        n,
+                        w.stream
+                    ),
+                    "add residual codec embedding"
+                );
+            }
+            for (int i = 0; i < n; ++i) {
+                check_cuda(
+                    cudaMemcpyAsync(
+                        w.text_input.as<__nv_bfloat16>()
+                            + static_cast<size_t>(i) * kTalkerHidden,
+                        c0->text_embedding_
+                            + static_cast<size_t>(trailing_text_tokens[i]) * kTalkerHidden,
+                        kTalkerHidden * sizeof(__nv_bfloat16),
+                        cudaMemcpyDeviceToDevice,
+                        w.stream
+                    ),
+                    "gather trailing text embedding"
+                );
+            }
+            batch_gemm(
+                w,
+                c0->text_fc1_,
+                w.text_input.as<__nv_bfloat16>(),
+                w.projection.as<__nv_bfloat16>(),
+                kTalkerHidden,
+                kTalkerHidden,
+                n
+            );
+            check_cuda(
+                qwen3_tts::launch_bias_activation_rows(
+                    w.projection.as<__nv_bfloat16>(),
+                    c0->text_fc1_bias_,
+                    n,
+                    kTalkerHidden,
+                    true,
+                    w.stream
+                ),
+                "text projection fc1 activation"
+            );
+            batch_gemm(
+                w,
+                c0->text_fc2_,
+                w.projection.as<__nv_bfloat16>(),
+                w.attention.as<__nv_bfloat16>(),
+                kTalkerHidden,
+                kTalkerHidden,
+                n
+            );
+            check_cuda(
+                qwen3_tts::launch_bias_activation_rows(
+                    w.attention.as<__nv_bfloat16>(),
+                    c0->text_fc2_bias_,
+                    n,
+                    kTalkerHidden,
+                    false,
+                    w.stream
+                ),
+                "text projection fc2 bias"
+            );
+            check_cuda(
+                qwen3_tts::launch_add_in_place(
+                    w.hidden.as<__nv_bfloat16>(),
+                    w.attention.as<__nv_bfloat16>(),
+                    n * kTalkerHidden,
+                    w.stream
+                ),
+                "add trailing text embedding"
+            );
+
+            // ---- Talker step at each session's own position ----
+            for (int i = 0; i < n; ++i) {
+                check_cuda(
+                    cudaEventRecord(s[i]->start_, w.stream),
+                    "cudaEventRecord(talker start)"
+                );
+            }
+            batch_run_decoder(w, s, n, c0->talker_layers_, false,
+                              kTalkerDimensions, kPredictorSequence);
+            check_cuda(
+                qwen3_tts::launch_rms_norm_rows(
+                    w.hidden.as<__nv_bfloat16>(),
+                    c0->talker_norm_,
+                    w.normalized.as<__nv_bfloat16>(),
+                    n,
+                    kTalkerHidden,
+                    kRmsEpsilon,
+                    w.stream
+                ),
+                "talker final RMSNorm"
+            );
+            for (int i = 0; i < n; ++i) {
+                check_cuda(
+                    cudaMemcpyAsync(
+                        s[i]->last_hidden_.as<__nv_bfloat16>(),
+                        w.normalized.as<__nv_bfloat16>()
+                            + static_cast<size_t>(i) * kTalkerHidden,
+                        kTalkerHidden * sizeof(__nv_bfloat16),
+                        cudaMemcpyDeviceToDevice,
+                        w.stream
+                    ),
+                    "copy talker hidden"
+                );
+            }
+            batch_gemm(
+                w,
+                c0->codec_head_,
+                w.normalized.as<__nv_bfloat16>(),
+                w.logits.as<__nv_bfloat16>(),
+                kTalkerHidden,
+                kTalkerVocabulary,
+                n
+            );
+            for (int i = 0; i < n; ++i) {
+                check_cuda(
+                    cudaEventRecord(s[i]->stop_, w.stream),
+                    "cudaEventRecord(talker stop)"
+                );
+                check_cuda(
+                    qwen3_tts::launch_sample_logits(
+                        w.logits.as<__nv_bfloat16>()
+                            + static_cast<size_t>(i) * kTalkerVocabulary,
+                        kTalkerVocabulary,
+                        true,
+                        kCodecEos,
+                        s[i]->semantic_history_.as<int>(),
+                        s[i]->generated_semantic_count_,
+                        talker_sampling[i].do_sample,
+                        talker_sampling[i].top_k,
+                        talker_sampling[i].top_p,
+                        talker_sampling[i].temperature,
+                        talker_sampling[i].repetition_penalty,
+                        s[i]->random_state_.as<uint64_t>(),
+                        s[i]->sampled_token_.as<int>(),
+                        w.stream
+                    ),
+                    "sample talker logits"
+                );
+                check_cuda(
+                    qwen3_tts::launch_store_sampled_token(
+                        s[i]->semantic_history_.as<int>(),
+                        s[i]->generated_semantic_count_,
+                        s[i]->sampled_token_.as<int>(),
+                        w.stream
+                    ),
+                    "append sampled semantic token"
+                );
+                ++s[i]->device_sample_count_;
+                ++s[i]->generated_semantic_count_;
+                ++s[i]->position_;
+                check_cuda(
+                    cudaMemcpyAsync(
+                        s[i]->host_sampled_token_,
+                        s[i]->sampled_token_.as<int>(),
+                        sizeof(int),
+                        cudaMemcpyDeviceToHost,
+                        w.stream
+                    ),
+                    "copy sampled token to pinned host memory"
+                );
+                check_cuda(
+                    cudaEventRecord(s[i]->semantic_ready_, w.stream),
+                    "cudaEventRecord(semantic ready)"
+                );
+                check_cuda(
+                    cudaStreamWaitEvent(s[i]->stream_, s[i]->semantic_ready_, 0),
+                    "cudaStreamWaitEvent(session rejoin)"
+                );
+            }
+        } catch (...) {
+            for (int i = 0; i < n; ++i) {
+                s[i]->poisoned_ = true;
+                s[i]->frame_in_flight_ = false;
+                s[i]->pending_host_code_copy_ = false;
+                s[i]->pending_lease_id_ = 0;
+            }
+            cudaStreamSynchronize(w.stream);
+            throw;
+        }
+
+        for (int i = 0; i < n; ++i) {
+            Qwen3TtsDeviceFrameViewV2 view{};
+            view.struct_size = sizeof(Qwen3TtsDeviceFrameViewV2);
+            view.code_count = kPredictorSequence;
+            view.device_codes = s[i]->frame_codes_.as<uint16_t>();
+            view.ready_event =
+                reinterpret_cast<Qwen3TtsCudaEventHandle>(s[i]->frame_codes_ready_);
+            view.lease_id = s[i]->pending_lease_id_;
+            view.device_index = s[i]->device_index_;
+            views[i] = view;
+        }
+    }
+
 private:
+    static void batch_gemm(
+        BatchWorkspace& w,
+        const __nv_bfloat16* weight,
+        const __nv_bfloat16* input,
+        __nv_bfloat16* output,
+        int input_features,
+        int output_features,
+        int rows
+    ) {
+        constexpr float alpha = 1.0f;
+        constexpr float beta = 0.0f;
+        check_cublas(
+            cublasGemmEx(
+                w.cublas,
+                CUBLAS_OP_T,
+                CUBLAS_OP_N,
+                output_features,
+                rows,
+                input_features,
+                &alpha,
+                weight,
+                CUDA_R_16BF,
+                input_features,
+                input,
+                CUDA_R_16BF,
+                input_features,
+                &beta,
+                output,
+                CUDA_R_16BF,
+                output_features,
+                CUBLAS_COMPUTE_32F,
+                CUBLAS_GEMM_DEFAULT_TENSOR_OP
+            ),
+            "cublasGemmEx(batch)"
+        );
+    }
+
+    static void batch_run_decoder(
+        BatchWorkspace& w,
+        TalkerContext** s,
+        int n,
+        const std::vector<DecoderWeights>& layers,
+        bool predictor,
+        const ModelDimensions& dims,
+        int position_slot
+    ) {
+        const int* positions = w.device_positions.as<int>()
+            + static_cast<size_t>(position_slot) * BatchWorkspace::kCapacity;
+        const int layer_slot_base = predictor ? kTalkerLayers : 0;
+        for (size_t layer_index = 0; layer_index < layers.size(); ++layer_index) {
+            const DecoderWeights& layer = layers[layer_index];
+            check_cuda(
+                qwen3_tts::launch_rms_norm_rows(
+                    w.hidden.as<__nv_bfloat16>(),
+                    layer.input_norm,
+                    w.normalized.as<__nv_bfloat16>(),
+                    n,
+                    dims.hidden,
+                    kRmsEpsilon,
+                    w.stream
+                ),
+                "input RMSNorm"
+            );
+            batch_gemm(
+                w,
+                layer.q_projection,
+                w.normalized.as<__nv_bfloat16>(),
+                w.query.as<__nv_bfloat16>(),
+                dims.hidden,
+                dims.query_width,
+                n
+            );
+            batch_gemm(
+                w,
+                layer.k_projection,
+                w.normalized.as<__nv_bfloat16>(),
+                w.key.as<__nv_bfloat16>(),
+                dims.hidden,
+                dims.key_value_width,
+                n
+            );
+            batch_gemm(
+                w,
+                layer.v_projection,
+                w.normalized.as<__nv_bfloat16>(),
+                w.value.as<__nv_bfloat16>(),
+                dims.hidden,
+                dims.key_value_width,
+                n
+            );
+            check_cuda(
+                qwen3_tts::launch_head_rms_norm_rows(
+                    w.query.as<__nv_bfloat16>(),
+                    layer.q_norm,
+                    n,
+                    dims.query_heads,
+                    dims.head_dimension,
+                    kRmsEpsilon,
+                    w.stream
+                ),
+                "query head RMSNorm"
+            );
+            check_cuda(
+                qwen3_tts::launch_head_rms_norm_rows(
+                    w.key.as<__nv_bfloat16>(),
+                    layer.k_norm,
+                    n,
+                    dims.key_value_heads,
+                    dims.head_dimension,
+                    kRmsEpsilon,
+                    w.stream
+                ),
+                "key head RMSNorm"
+            );
+            check_cuda(
+                qwen3_tts::launch_rope_rows_at(
+                    w.query.as<__nv_bfloat16>(),
+                    n,
+                    dims.query_heads,
+                    dims.head_dimension,
+                    positions,
+                    kRopeTheta,
+                    w.stream
+                ),
+                "query RoPE"
+            );
+            check_cuda(
+                qwen3_tts::launch_rope_rows_at(
+                    w.key.as<__nv_bfloat16>(),
+                    n,
+                    dims.key_value_heads,
+                    dims.head_dimension,
+                    positions,
+                    kRopeTheta,
+                    w.stream
+                ),
+                "key RoPE"
+            );
+            {
+                __nv_bfloat16* const* key_bases = w.device_kv_bases.as<__nv_bfloat16*>()
+                    + static_cast<size_t>(layer_slot_base + layer_index) * 2
+                        * BatchWorkspace::kCapacity;
+                __nv_bfloat16* const* value_bases =
+                    key_bases + BatchWorkspace::kCapacity;
+                check_cuda(
+                    qwen3_tts::launch_kv_scatter_rows(
+                        w.key.as<__nv_bfloat16>(),
+                        key_bases,
+                        positions,
+                        n,
+                        dims.key_value_width,
+                        w.stream
+                    ),
+                    "append key cache"
+                );
+                check_cuda(
+                    qwen3_tts::launch_kv_scatter_rows(
+                        w.value.as<__nv_bfloat16>(),
+                        value_bases,
+                        positions,
+                        n,
+                        dims.key_value_width,
+                        w.stream
+                    ),
+                    "append value cache"
+                );
+            }
+            for (int i = 0; i < n; ++i) {
+                LayerCache& cache = predictor
+                    ? s[i]->predictor_cache_[layer_index]
+                    : s[i]->talker_cache_[layer_index];
+                const int span = predictor
+                    ? position_slot + 1
+                    : s[i]->position_ + 1;
+                check_cuda(
+                    qwen3_tts::launch_causal_gqa_attention(
+                        w.query.as<__nv_bfloat16>()
+                            + static_cast<size_t>(i) * dims.query_width,
+                        cache.key.as<__nv_bfloat16>(),
+                        cache.value.as<__nv_bfloat16>(),
+                        w.attention.as<__nv_bfloat16>()
+                            + static_cast<size_t>(i) * dims.query_width,
+                        dims.query_heads,
+                        dims.key_value_heads,
+                        dims.head_dimension,
+                        span,
+                        w.stream
+                    ),
+                    "causal GQA attention"
+                );
+            }
+            batch_gemm(
+                w,
+                layer.output_projection,
+                w.attention.as<__nv_bfloat16>(),
+                w.projection.as<__nv_bfloat16>(),
+                dims.query_width,
+                dims.hidden,
+                n
+            );
+            check_cuda(
+                qwen3_tts::launch_add_in_place(
+                    w.hidden.as<__nv_bfloat16>(),
+                    w.projection.as<__nv_bfloat16>(),
+                    n * dims.hidden,
+                    w.stream
+                ),
+                "attention residual"
+            );
+            check_cuda(
+                qwen3_tts::launch_rms_norm_rows(
+                    w.hidden.as<__nv_bfloat16>(),
+                    layer.post_attention_norm,
+                    w.normalized.as<__nv_bfloat16>(),
+                    n,
+                    dims.hidden,
+                    kRmsEpsilon,
+                    w.stream
+                ),
+                "post-attention RMSNorm"
+            );
+            batch_gemm(
+                w,
+                layer.gate_projection,
+                w.normalized.as<__nv_bfloat16>(),
+                w.gate.as<__nv_bfloat16>(),
+                dims.hidden,
+                dims.intermediate,
+                n
+            );
+            batch_gemm(
+                w,
+                layer.up_projection,
+                w.normalized.as<__nv_bfloat16>(),
+                w.up.as<__nv_bfloat16>(),
+                dims.hidden,
+                dims.intermediate,
+                n
+            );
+            check_cuda(
+                qwen3_tts::launch_silu_gate(
+                    w.gate.as<__nv_bfloat16>(),
+                    w.up.as<__nv_bfloat16>(),
+                    n * dims.intermediate,
+                    w.stream
+                ),
+                "SiLU gate"
+            );
+            batch_gemm(
+                w,
+                layer.down_projection,
+                w.gate.as<__nv_bfloat16>(),
+                w.projection.as<__nv_bfloat16>(),
+                dims.intermediate,
+                dims.hidden,
+                n
+            );
+            check_cuda(
+                qwen3_tts::launch_add_in_place(
+                    w.hidden.as<__nv_bfloat16>(),
+                    w.projection.as<__nv_bfloat16>(),
+                    n * dims.hidden,
+                    w.stream
+                ),
+                "MLP residual"
+            );
+        }
+    }
+
     void ensure_ready() const {
         if (!model_->finalized()) {
             throw std::runtime_error("weights have not been finalized");
@@ -2591,6 +3536,55 @@ extern "C" QWEN3_TTS_API int32_t qwen3_tts_session_next_frame_finish_v2(
         frame_info->ended_by_eos = frame.ended_by_eos;
         frame_info->predictor_gpu_milliseconds = frame.predictor_gpu_milliseconds;
         frame_info->talker_gpu_milliseconds = frame.talker_gpu_milliseconds;
+    }, QWEN3_TTS_TALKER_STATUS_STATE, error, error_capacity);
+}
+
+extern "C" QWEN3_TTS_API int32_t qwen3_tts_model_batch_next_frame_begin_v2(
+    Qwen3TtsModelHandle model_handle,
+    Qwen3TtsSessionHandle* sessions,
+    int32_t session_count,
+    const int32_t* trailing_text_token_ids,
+    const Qwen3TtsSamplingConfig* talker_sampling,
+    const Qwen3TtsSamplingConfig* predictor_sampling,
+    Qwen3TtsDeviceFrameViewV2* outputs,
+    char* error,
+    size_t error_capacity
+) {
+    if (sessions == nullptr || session_count <= 0
+        || session_count > QWEN3_TTS_MAX_BATCH_SESSIONS
+        || trailing_text_token_ids == nullptr || talker_sampling == nullptr
+        || predictor_sampling == nullptr || outputs == nullptr) {
+        write_error(error, error_capacity, "batch frame arguments are null or out of range");
+        return QWEN3_TTS_TALKER_STATUS_INVALID_ARGUMENT;
+    }
+    for (int32_t index = 0; index < session_count; ++index) {
+        if (sessions[index] == nullptr
+            || outputs[index].struct_size != sizeof(Qwen3TtsDeviceFrameViewV2)
+            || outputs[index].reserved != 0) {
+            write_error(
+                error,
+                error_capacity,
+                "batch frame outputs have an unsupported size or nonzero reserved field"
+            );
+            return QWEN3_TTS_TALKER_STATUS_INVALID_ARGUMENT;
+        }
+    }
+    return protect([&] {
+        TalkerContext* contexts[QWEN3_TTS_MAX_BATCH_SESSIONS];
+        int trailing[QWEN3_TTS_MAX_BATCH_SESSIONS];
+        for (int32_t index = 0; index < session_count; ++index) {
+            contexts[index] = session(sessions[index]);
+            trailing[index] = trailing_text_token_ids[index];
+        }
+        TalkerContext::batch_begin_frames(
+            model(model_handle).get(),
+            contexts,
+            session_count,
+            trailing,
+            talker_sampling,
+            predictor_sampling,
+            outputs
+        );
     }, QWEN3_TTS_TALKER_STATUS_STATE, error, error_capacity);
 }
 

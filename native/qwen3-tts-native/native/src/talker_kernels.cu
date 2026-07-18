@@ -420,6 +420,120 @@ __global__ void silu_gate_kernel(
     }
 }
 
+__global__ void rope_rows_at_kernel(
+    __nv_bfloat16* values,
+    int rows,
+    int heads,
+    int head_dimension,
+    const int* positions,
+    float theta
+) {
+    const int half = head_dimension / 2;
+    const int pair = blockIdx.x * blockDim.x + threadIdx.x;
+    const int row_pairs = heads * half;
+    const int total_pairs = rows * row_pairs;
+    if (pair >= total_pairs) {
+        return;
+    }
+    const int row = pair / row_pairs;
+    const int row_pair = pair % row_pairs;
+    const int head = row_pair / half;
+    const int dimension = row_pair % half;
+    const int position = positions[row];
+    __nv_bfloat16* base = values
+        + (static_cast<size_t>(row) * heads + head) * head_dimension;
+    const float exponent = static_cast<float>(2 * dimension) / static_cast<float>(head_dimension);
+    const float angle = static_cast<float>(position) * powf(theta, -exponent);
+    const __nv_bfloat16 cosine = __float2bfloat16(cosf(angle));
+    const __nv_bfloat16 sine = __float2bfloat16(sinf(angle));
+    const float first = __bfloat162float(base[dimension]);
+    const float second = __bfloat162float(base[dimension + half]);
+    const __nv_bfloat16 first_cosine =
+        __float2bfloat16(first * __bfloat162float(cosine));
+    const __nv_bfloat16 second_sine =
+        __float2bfloat16(second * __bfloat162float(sine));
+    const __nv_bfloat16 second_cosine =
+        __float2bfloat16(second * __bfloat162float(cosine));
+    const __nv_bfloat16 first_sine =
+        __float2bfloat16(first * __bfloat162float(sine));
+    base[dimension] = __float2bfloat16(
+        __bfloat162float(first_cosine) - __bfloat162float(second_sine)
+    );
+    base[dimension + half] = __float2bfloat16(
+        __bfloat162float(second_cosine) + __bfloat162float(first_sine)
+    );
+}
+
+__global__ void kv_scatter_rows_kernel(
+    const __nv_bfloat16* rows_data,
+    __nv_bfloat16* const* cache_bases,
+    const int* positions,
+    int rows,
+    int width
+) {
+    const int index = blockIdx.x * blockDim.x + threadIdx.x;
+    const int total = rows * width;
+    if (index >= total) {
+        return;
+    }
+    const int row = index / width;
+    const int column = index % width;
+    __nv_bfloat16* destination = cache_bases[row]
+        + static_cast<size_t>(positions[row]) * width;
+    destination[column] = rows_data[static_cast<size_t>(row) * width + column];
+}
+
+__global__ void bias_activation_rows_kernel(
+    __nv_bfloat16* values,
+    const __nv_bfloat16* bias,
+    int rows,
+    int width,
+    bool silu
+) {
+    const int total = rows * width;
+    for (int index = blockIdx.x * blockDim.x + threadIdx.x;
+         index < total;
+         index += blockDim.x * gridDim.x) {
+        float value = __bfloat162float(values[index])
+            + __bfloat162float(bias[index % width]);
+        if (silu) {
+            value *= 1.0f / (1.0f + expf(-value));
+        }
+        values[index] = __float2bfloat16(value);
+    }
+}
+
+__global__ void gather_embedding_rows_kernel(
+    const __nv_bfloat16* table,
+    int vocabulary,
+    int width,
+    const int* const* tokens,
+    int token_offset,
+    __nv_bfloat16* output,
+    int rows,
+    bool add
+) {
+    const int total = rows * width;
+    for (int index = blockIdx.x * blockDim.x + threadIdx.x;
+         index < total;
+         index += blockDim.x * gridDim.x) {
+        const int row = index / width;
+        const int column = index % width;
+        const int token = tokens[row][token_offset];
+        if (token < 0 || token >= vocabulary) {
+            continue;
+        }
+        const __nv_bfloat16 value = table[static_cast<size_t>(token) * width + column];
+        if (add) {
+            output[index] = __float2bfloat16(
+                __bfloat162float(output[index]) + __bfloat162float(value)
+            );
+        } else {
+            output[index] = value;
+        }
+    }
+}
+
 int blocks_for(int width) {
     return (width + kThreads - 1) / kThreads;
 }
@@ -710,6 +824,83 @@ cudaError_t launch_fill_zero(
     cudaStream_t stream
 ) {
     return cudaMemsetAsync(values, 0, static_cast<size_t>(width) * sizeof(*values), stream);
+}
+
+cudaError_t launch_rope_rows_at(
+    __nv_bfloat16* values,
+    int rows,
+    int heads,
+    int head_dimension,
+    const int* positions,
+    float theta,
+    cudaStream_t stream
+) {
+    const int pairs = rows * heads * (head_dimension / 2);
+    rope_rows_at_kernel<<<blocks_for(pairs), kThreads, 0, stream>>>(
+        values, rows, heads, head_dimension, positions, theta
+    );
+    return cudaGetLastError();
+}
+
+cudaError_t launch_kv_scatter_rows(
+    const __nv_bfloat16* rows_data,
+    __nv_bfloat16* const* cache_bases,
+    const int* positions,
+    int rows,
+    int width,
+    cudaStream_t stream
+) {
+    const int total = rows * width;
+    kv_scatter_rows_kernel<<<blocks_for(total), kThreads, 0, stream>>>(
+        rows_data, cache_bases, positions, rows, width
+    );
+    return cudaGetLastError();
+}
+
+cudaError_t launch_bias_activation_rows(
+    __nv_bfloat16* values,
+    const __nv_bfloat16* bias,
+    int rows,
+    int width,
+    bool silu,
+    cudaStream_t stream
+) {
+    bias_activation_rows_kernel<<<blocks_for(rows * width), kThreads, 0, stream>>>(
+        values, bias, rows, width, silu
+    );
+    return cudaGetLastError();
+}
+
+cudaError_t launch_gather_embedding_rows(
+    const __nv_bfloat16* table,
+    int vocabulary,
+    int width,
+    const int* const* tokens,
+    int token_offset,
+    __nv_bfloat16* output,
+    int rows,
+    cudaStream_t stream
+) {
+    gather_embedding_rows_kernel<<<blocks_for(rows * width), kThreads, 0, stream>>>(
+        table, vocabulary, width, tokens, token_offset, output, rows, false
+    );
+    return cudaGetLastError();
+}
+
+cudaError_t launch_add_embedding_rows(
+    const __nv_bfloat16* table,
+    int vocabulary,
+    int width,
+    const int* const* tokens,
+    int token_offset,
+    __nv_bfloat16* output,
+    int rows,
+    cudaStream_t stream
+) {
+    gather_embedding_rows_kernel<<<blocks_for(rows * width), kThreads, 0, stream>>>(
+        table, vocabulary, width, tokens, token_offset, output, rows, true
+    );
+    return cudaGetLastError();
 }
 
 }  // namespace qwen3_tts

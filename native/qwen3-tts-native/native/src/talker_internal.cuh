@@ -211,4 +211,54 @@ cudaError_t launch_add_embedding(
     cudaStream_t stream
 );
 
+cudaError_t launch_rope_rows_at(
+    __nv_bfloat16* values,
+    int rows,
+    int heads,
+    int head_dimension,
+    const int* positions,
+    float theta,
+    cudaStream_t stream
+);
+
+cudaError_t launch_kv_scatter_rows(
+    const __nv_bfloat16* rows_data,
+    __nv_bfloat16* const* cache_bases,
+    const int* positions,
+    int rows,
+    int width,
+    cudaStream_t stream
+);
+
+cudaError_t launch_bias_activation_rows(
+    __nv_bfloat16* values,
+    const __nv_bfloat16* bias,
+    int rows,
+    int width,
+    bool silu,
+    cudaStream_t stream
+);
+
+cudaError_t launch_gather_embedding_rows(
+    const __nv_bfloat16* table,
+    int vocabulary,
+    int width,
+    const int* const* tokens,
+    int token_offset,
+    __nv_bfloat16* output,
+    int rows,
+    cudaStream_t stream
+);
+
+cudaError_t launch_add_embedding_rows(
+    const __nv_bfloat16* table,
+    int vocabulary,
+    int width,
+    const int* const* tokens,
+    int token_offset,
+    __nv_bfloat16* output,
+    int rows,
+    cudaStream_t stream
+);
+
 }  // namespace qwen3_tts

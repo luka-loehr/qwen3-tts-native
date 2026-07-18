@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use anyhow::Error as AnyError;
 use qwen3_tts_native::native_talker::{
-    NativeTalkerModel, NativeTalkerSession, NativeTalkerStatusError,
+    BatchRegistration, NativeTalkerModel, NativeTalkerSession, NativeTalkerStatusError,
     STATUS_ALLOCATION as TALKER_STATUS_ALLOCATION, STATUS_CUDA as TALKER_STATUS_CUDA,
     STATUS_INVALID_ARGUMENT as TALKER_STATUS_INVALID_ARGUMENT, STATUS_MODEL as TALKER_STATUS_MODEL,
     STATUS_STATE as TALKER_STATUS_STATE, SamplingConfig, SessionEndReason, VoiceDesignRequest,
@@ -37,6 +37,9 @@ pub struct NativeBackendSession {
     talker: NativeTalkerSession,
     codec: NativeCodecSession,
     cuda_stager: Option<CudaPacketStager>,
+    /// Held for its lifetime only: participation marker for the lockstep
+    /// batch rendezvous.
+    _batch_registration: Option<BatchRegistration>,
     first_packet: bool,
     peak_request_device_bytes: u64,
     peak_request_host_bytes: u64,
@@ -165,6 +168,7 @@ impl NativeBackend {
 
         Ok(BackendStarted {
             session: NativeBackendSession {
+                _batch_registration: talker.register_batch_participant(),
                 talker: talker_session,
                 codec: codec_session,
                 cuda_stager,
@@ -306,13 +310,16 @@ impl NativeBackend {
         let mut frame_count = 0_usize;
         let mut talker_gpu_microseconds = 0.0_f32;
         while frame_count < requested_frames {
-            let Some(frame) = session.talker.begin_device_frame().map_err(|error| {
-                map_talker_error(
-                    "Talker device-frame generation failed",
-                    error,
-                    RuntimeStatus::State,
-                )
-            })?
+            let Some(frame) = session
+                .talker
+                .begin_device_frame_batched()
+                .map_err(|error| {
+                    map_talker_error(
+                        "Talker device-frame generation failed",
+                        error,
+                        RuntimeStatus::State,
+                    )
+                })?
             else {
                 break;
             };

@@ -5,7 +5,7 @@ use std::path::Path;
 use std::ptr;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail, ensure};
 use libloading::{Library, Symbol};
@@ -217,6 +217,187 @@ type SessionNextFrameFinishV2 = unsafe extern "C" fn(
 struct DeviceFrameApiV2 {
     begin: SessionNextFrameBeginV2,
     finish: SessionNextFrameFinishV2,
+}
+
+type ModelBatchNextFrameBeginV2 = unsafe extern "C" fn(
+    ModelHandle,
+    *mut SessionHandle,
+    i32,
+    *const i32,
+    *const NativeSamplingConfig,
+    *const NativeSamplingConfig,
+    *mut NativeDeviceFrameViewV2,
+    *mut c_char,
+    usize,
+) -> i32;
+
+/// Maximum sessions the native lockstep batch accepts per call. Mirrors
+/// `QWEN3_TTS_MAX_BATCH_SESSIONS` in the C header.
+const MAX_BATCH_SESSIONS: usize = 8;
+
+/// How long the pump waits for stragglers once at least one frame request is
+/// queued and not every registered decode participant has arrived yet. In
+/// steady state every participant finishes the previous lockstep batch at the
+/// same instant, so the pump normally fires on the registered-count check
+/// without consuming this window.
+const BATCH_GATHER_WINDOW: Duration = Duration::from_millis(2);
+
+struct QueuedFrameRequest {
+    session: SessionHandle,
+    trailing_text_token: i32,
+    talker_sampling: NativeSamplingConfig,
+    predictor_sampling: NativeSamplingConfig,
+    responder: std::sync::mpsc::Sender<Result<NativeDeviceFrameViewV2, String>>,
+}
+
+// SAFETY: the requesting thread parks on the response channel until the pump
+// worker has finished touching the session handle, so the handle is never
+// accessed from two threads at once.
+unsafe impl Send for QueuedFrameRequest {}
+
+struct RawModelHandle(ModelHandle);
+
+// SAFETY: after finalization the model handle only exposes immutable weights
+// plus the internally synchronized batch workspace.
+unsafe impl Send for RawModelHandle {}
+
+/// Coalesces concurrent per-session frame requests into single native
+/// lockstep batch calls. Sessions register while they are decode-active so the
+/// pump knows how many requests to expect before firing.
+struct BatchFramePump {
+    sender: Option<std::sync::mpsc::Sender<QueuedFrameRequest>>,
+    worker: Option<std::thread::JoinHandle<()>>,
+    registered: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl BatchFramePump {
+    fn start(model_handle: ModelHandle, begin: ModelBatchNextFrameBeginV2) -> Self {
+        let (sender, receiver) = std::sync::mpsc::channel::<QueuedFrameRequest>();
+        let registered = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let worker_registered = Arc::clone(&registered);
+        let raw_model = RawModelHandle(model_handle);
+        let worker = std::thread::Builder::new()
+            .name("qwen3-tts-batch-pump".to_owned())
+            .spawn(move || {
+                let model = raw_model;
+                while let Ok(first) = receiver.recv() {
+                    let mut batch = vec![first];
+                    let deadline = std::time::Instant::now() + BATCH_GATHER_WINDOW;
+                    loop {
+                        let expected = worker_registered
+                            .load(std::sync::atomic::Ordering::Relaxed)
+                            .clamp(1, MAX_BATCH_SESSIONS);
+                        if batch.len() >= expected {
+                            break;
+                        }
+                        let now = std::time::Instant::now();
+                        if now >= deadline {
+                            break;
+                        }
+                        match receiver.recv_timeout(deadline - now) {
+                            Ok(request) => batch.push(request),
+                            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => break,
+                            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                        }
+                    }
+                    Self::run_batch(&model, begin, batch);
+                }
+            })
+            .expect("failed to spawn the batch frame pump thread");
+        Self {
+            sender: Some(sender),
+            worker: Some(worker),
+            registered,
+        }
+    }
+
+    fn run_batch(
+        model: &RawModelHandle,
+        begin: ModelBatchNextFrameBeginV2,
+        batch: Vec<QueuedFrameRequest>,
+    ) {
+        let count = batch.len().min(MAX_BATCH_SESSIONS);
+        let mut sessions: Vec<SessionHandle> = batch[..count]
+            .iter()
+            .map(|request| request.session)
+            .collect();
+        let trailing: Vec<i32> = batch[..count]
+            .iter()
+            .map(|request| request.trailing_text_token)
+            .collect();
+        let talker: Vec<NativeSamplingConfig> = batch[..count]
+            .iter()
+            .map(|request| request.talker_sampling)
+            .collect();
+        let predictor: Vec<NativeSamplingConfig> = batch[..count]
+            .iter()
+            .map(|request| request.predictor_sampling)
+            .collect();
+        let mut views = vec![NativeDeviceFrameViewV2::default(); count];
+        let mut error = [0 as c_char; ERROR_CAPACITY];
+        let status = unsafe {
+            begin(
+                model.0,
+                sessions.as_mut_ptr(),
+                count as i32,
+                trailing.as_ptr(),
+                talker.as_ptr(),
+                predictor.as_ptr(),
+                views.as_mut_ptr(),
+                error.as_mut_ptr(),
+                error.len(),
+            )
+        };
+        if status == 0 {
+            for (request, view) in batch.into_iter().zip(views) {
+                let _ = request.responder.send(Ok(view));
+            }
+        } else {
+            let message = format!("status {status}: {}", native_error_string(&error));
+            for request in batch {
+                let _ = request.responder.send(Err(message.clone()));
+            }
+        }
+    }
+
+    fn submit(
+        &self,
+        request: QueuedFrameRequest,
+    ) -> Result<(), std::sync::mpsc::SendError<QueuedFrameRequest>> {
+        self.sender
+            .as_ref()
+            .expect("batch pump sender is present until drop")
+            .send(request)
+    }
+
+    fn register(&self) -> BatchRegistration {
+        self.registered
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        BatchRegistration {
+            registered: Arc::clone(&self.registered),
+        }
+    }
+}
+
+impl Drop for BatchFramePump {
+    fn drop(&mut self) {
+        drop(self.sender.take());
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+/// RAII participation marker for the batch pump's rendezvous count.
+pub struct BatchRegistration {
+    registered: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl Drop for BatchRegistration {
+    fn drop(&mut self) {
+        self.registered
+            .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -522,6 +703,7 @@ pub struct GenerationOutput {
 }
 
 pub struct NativeTalkerModel {
+    batch_pump: Option<BatchFramePump>,
     library: Library,
     handle: ModelHandle,
     talker_abi_version: u32,
@@ -628,7 +810,17 @@ impl NativeTalkerModel {
             .context("missing qwen3_tts_model_create symbol")?;
         let status = unsafe { create(device_index, &mut handle, error.as_mut_ptr(), error.len()) };
         ensure_native_success(status, &error)?;
+        let batch_pump = if talker_abi_version >= 3 {
+            let begin: Symbol<'_, ModelBatchNextFrameBeginV2> =
+                unsafe { library.get(b"qwen3_tts_model_batch_next_frame_begin_v2\0") }.context(
+                    "talker ABI v3 is missing qwen3_tts_model_batch_next_frame_begin_v2",
+                )?;
+            Some(BatchFramePump::start(handle, *begin))
+        } else {
+            None
+        };
         let mut model = Self {
+            batch_pump,
             library,
             handle,
             talker_abi_version,
@@ -658,6 +850,16 @@ impl NativeTalkerModel {
 
     pub fn supports_device_frames(&self) -> bool {
         self.device_frame_api.is_some()
+    }
+
+    pub fn supports_batch_frames(&self) -> bool {
+        self.batch_pump.is_some()
+    }
+
+    /// Marks a decode-active participant for the lockstep batch rendezvous.
+    /// Returns `None` when the loaded library predates the batch ABI.
+    pub fn register_batch_participant(&self) -> Option<BatchRegistration> {
+        self.batch_pump.as_ref().map(BatchFramePump::register)
     }
 
     pub fn generate(self: &Arc<Self>, request: VoiceDesignRequest) -> Result<GenerationOutput> {
@@ -1214,6 +1416,98 @@ impl NativeTalkerSession {
         }))
     }
 
+    /// Begins the next device frame through the model's lockstep batch pump so
+    /// concurrent sessions share one native batch call. Falls back to the
+    /// unbatched device path when the loaded library predates the batch ABI.
+    pub fn begin_device_frame_batched(&mut self) -> Result<Option<PendingTalkerFrame<'_>>> {
+        if self.model.batch_pump.is_none() {
+            return self.begin_device_frame();
+        }
+        if self.end_reason.is_some() {
+            return Ok(None);
+        }
+        if self.frames_emitted >= self.max_frames {
+            self.end_reason = Some(SessionEndReason::MaxFrames);
+            return Ok(None);
+        }
+        if self.current_semantic == self.codec_eos_token {
+            self.end_reason = Some(SessionEndReason::CodecEos);
+            return Ok(None);
+        }
+
+        let text = self
+            .trailing_text
+            .get(self.frames_emitted)
+            .copied()
+            .unwrap_or(TextSource::TtsPad);
+        let text_id = self.model.text_source_id(text)?;
+        let (responder, response) = std::sync::mpsc::channel();
+        let request = QueuedFrameRequest {
+            session: self.handle,
+            trailing_text_token: text_id,
+            talker_sampling: self.talker_sampling,
+            predictor_sampling: self.predictor_sampling,
+            responder,
+        };
+        let pump = self
+            .model
+            .batch_pump
+            .as_ref()
+            .expect("batch pump presence was checked above");
+        if pump.submit(request).is_err() {
+            self.recyclable = false;
+            bail!("the batch frame pump has shut down");
+        }
+        let view = match response.recv() {
+            Ok(Ok(view)) => view,
+            Ok(Err(message)) => {
+                self.recyclable = false;
+                bail!("failed to begin a native batched device frame: {message}");
+            }
+            Err(_) => {
+                self.recyclable = false;
+                bail!("the batch frame pump dropped a pending frame request");
+            }
+        };
+        let validation = (|| -> Result<()> {
+            ensure!(
+                view.struct_size as usize == std::mem::size_of::<NativeDeviceFrameViewV2>(),
+                "native device-frame view has an invalid size"
+            );
+            ensure!(
+                view.code_count as usize == CODEBOOKS,
+                "native device-frame view has an invalid code count"
+            );
+            ensure!(
+                !view.device_codes.is_null() && !view.ready_event.is_null(),
+                "native device-frame view returned a null CUDA value"
+            );
+            ensure!(
+                view.lease_id != 0,
+                "native device-frame view returned lease zero"
+            );
+            ensure!(
+                view.device_index == self.model.memory.device_index,
+                "native device-frame view returned the wrong CUDA device"
+            );
+            ensure!(
+                view.reserved == 0,
+                "native device-frame view returned a nonzero reserved field"
+            );
+            Ok(())
+        })();
+        if let Err(error) = validation {
+            self.recyclable = false;
+            return Err(error);
+        }
+        Ok(Some(PendingTalkerFrame {
+            session: self,
+            view,
+            finished: false,
+            not_send_or_sync: PhantomData,
+        }))
+    }
+
     fn finish_device_native_raw(
         &mut self,
         lease_id: u64,
@@ -1349,6 +1643,7 @@ impl Drop for NativeTalkerSession {
 
 impl Drop for NativeTalkerModel {
     fn drop(&mut self) {
+        drop(self.batch_pump.take());
         let pool = self
             .session_pool
             .get_mut()
@@ -1400,10 +1695,17 @@ fn ensure_native_success(status: i32, error: &[c_char]) -> Result<()> {
     if status == 0 {
         return Ok(());
     }
-    let message = unsafe { CStr::from_ptr(error.as_ptr()) }
+    Err(NativeTalkerStatusError {
+        status,
+        message: native_error_string(error),
+    }
+    .into())
+}
+
+fn native_error_string(error: &[c_char]) -> String {
+    unsafe { CStr::from_ptr(error.as_ptr()) }
         .to_string_lossy()
-        .into_owned();
-    Err(NativeTalkerStatusError { status, message }.into())
+        .into_owned()
 }
 
 #[cfg(test)]

@@ -182,7 +182,7 @@ dependencies = [
 
 [[package]]
 name = "qwen3-tts-native"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "fancy-regex",
@@ -196,7 +196,7 @@ dependencies = [
 
 [[package]]
 name = "qwen3-tts-native-codec"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "libloading",
  "serde_json",
@@ -204,7 +204,7 @@ dependencies = [
 
 [[package]]
 name = "qwen3-tts-runtime"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "libc",
