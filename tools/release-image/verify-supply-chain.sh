@@ -65,13 +65,11 @@ docker buildx imagetools inspect "$REFERENCE" --format '{{json .Provenance}}' \
   >"$EVIDENCE_DIR/buildkit-provenance.json"
 jq -e '.SPDX.spdxVersion | startswith("SPDX-")' \
   "$EVIDENCE_DIR/buildkit-sbom.json" >/dev/null || release_die "BuildKit SPDX SBOM is absent or invalid"
-jq -e '
-  .SLSA.buildType == "https://mobyproject.org/buildkit@v1"
-  and (.SLSA.invocation.parameters | type == "object")
-  and .SLSA.metadata.completeness.parameters == true
-  and .SLSA.metadata.completeness.environment == true
-' "$EVIDENCE_DIR/buildkit-provenance.json" >/dev/null || release_die "maximum BuildKit provenance is absent or incomplete"
-jq '.SLSA.invocation.parameters' "$EVIDENCE_DIR/buildkit-provenance.json" \
+jq -e -f "$SCRIPT_DIR/max-provenance.jq" \
+  "$EVIDENCE_DIR/buildkit-provenance.json" >/dev/null || \
+  release_die "maximum BuildKit provenance is absent or incomplete"
+jq -f "$SCRIPT_DIR/normalize-provenance.jq" \
+  "$EVIDENCE_DIR/buildkit-provenance.json" \
   >"$EVIDENCE_DIR/provenance-parameters.json"
 if jq -e '
   [paths(scalars) as $p
