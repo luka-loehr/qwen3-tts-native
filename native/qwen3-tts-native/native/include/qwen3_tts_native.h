@@ -13,7 +13,8 @@
 extern "C" {
 #endif
 
-#define QWEN3_TTS_TALKER_ABI_VERSION 2U
+#define QWEN3_TTS_TALKER_ABI_VERSION 3U
+#define QWEN3_TTS_MAX_BATCH_SESSIONS 8
 #define QWEN3_TTS_CODEC_CODEBOOKS 16U
 
 enum {
@@ -337,6 +338,27 @@ QWEN3_TTS_API int32_t qwen3_tts_session_next_frame_finish_v2(
     Qwen3TtsCudaEventHandle consumer_done_event,
     uint16_t* next_semantic_token,
     Qwen3TtsCodecFrameInfo* frame_info,
+    char* error,
+    size_t error_capacity
+);
+
+/* Enqueue one predictor+talker frame for every session in a single lockstep
+ * batch so shared weight reads are paid once per frame instead of once per
+ * session. Each output view must be initialized with struct_size and a zero
+ * reserved field. Every session is completed individually through
+ * qwen3_tts_session_next_frame_finish_v2 with its returned lease. All
+ * sessions must belong to the given model, be prefilled, hold no in-flight
+ * lease, and not have reached EOS. On failure every batched session is
+ * poisoned. In batch mode the per-session GPU timing fields report
+ * batch-aggregate times. */
+QWEN3_TTS_API int32_t qwen3_tts_model_batch_next_frame_begin_v2(
+    Qwen3TtsModelHandle model_handle,
+    Qwen3TtsSessionHandle* sessions,
+    int32_t session_count,
+    const int32_t* trailing_text_token_ids,
+    const Qwen3TtsSamplingConfig* talker_sampling,
+    const Qwen3TtsSamplingConfig* predictor_sampling,
+    Qwen3TtsDeviceFrameViewV2* outputs,
     char* error,
     size_t error_capacity
 );

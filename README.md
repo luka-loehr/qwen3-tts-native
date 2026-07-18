@@ -11,9 +11,9 @@ handoff, the neural speech decoder, scheduling, and HTTP delivery—runs in
 native Rust and CUDA. Python, Node.js, PyTorch, SGLang, and vLLM are not part of
 the runtime or production image.
 
-> **Release `v0.2.0`:** source, the native service, and the hardened image are
+> **Release `v0.3.0`:** source, the native service, and the hardened image are
 > published in the
-> [`v0.2.0` GitHub release](https://github.com/luka-loehr/qwen3-tts-native/releases/tag/v0.2.0).
+> [`v0.3.0` GitHub release](https://github.com/luka-loehr/qwen3-tts-native/releases/tag/v0.3.0).
 > The controlled benchmark report and research paper derive from the
 > [`v0.1.0` release](https://github.com/luka-loehr/qwen3-tts-native/releases/tag/v0.1.0)
 > evidence bundle.
@@ -95,14 +95,14 @@ The production image targets NVIDIA DGX Spark (`linux/arm64`, GB10,
 `sm_121`). It is not a portable CPU image and is not qualified for x86-64 or a
 different GPU architecture.
 
-Copy the complete immutable image reference from the `v0.1.0` GitHub release,
+Copy the complete immutable image reference from the current GitHub release,
 then pull and run it by digest. The validation below intentionally fails for a
 missing value, a mutable tag, or an image from another repository:
 
 ```bash
-: "${QWEN3_TTS_IMAGE:?Set QWEN3_TTS_IMAGE from the v0.1.0 release notes}"
+: "${QWEN3_TTS_IMAGE:?Set QWEN3_TTS_IMAGE from the release notes}"
 if [[ ! "$QWEN3_TTS_IMAGE" =~ ^ghcr.io/luka-loehr/qwen3-tts-native@sha256:[0-9a-f]{64}$ ]]; then
-  printf 'Expected the immutable v0.1.0 GHCR reference, got: %s\n' \
+  printf 'Expected the immutable GHCR reference, got: %s\n' \
     "$QWEN3_TTS_IMAGE" >&2
   exit 1
 fi

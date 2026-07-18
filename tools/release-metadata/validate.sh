@@ -60,10 +60,10 @@ grep -Fq '<section class="license"' "$LICENSE_REPORT" || \
 grep -Fq 'data-source="registry+' "$LICENSE_REPORT" || \
     die 'license report contains no registry-sourced third-party crates'
 for first_party in \
-    'qwen3-tts-native 0.2.0' \
-    'qwen3-tts-native-codec 0.2.0' \
-    'qwen3-tts-runtime 0.2.0' \
-    'qwen3-tts-server 0.2.0'
+    'qwen3-tts-native 0.3.0' \
+    'qwen3-tts-native-codec 0.3.0' \
+    'qwen3-tts-runtime 0.3.0' \
+    'qwen3-tts-server 0.3.0'
 do
     if grep -Fq "$first_party" "$LICENSE_REPORT"; then
         die "first-party package was listed as a third party: $first_party"
@@ -73,7 +73,7 @@ done
 if grep -Fq '.release-metadata.work.' "$SBOM"; then
     die 'RUST-SBOM.cdx.json leaks its temporary generation path'
 fi
-grep -Fq 'path+file:///source/native/qwen3-tts-server#0.2.0' "$SBOM" || \
+grep -Fq 'path+file:///source/native/qwen3-tts-server#0.3.0' "$SBOM" || \
     die 'RUST-SBOM.cdx.json is missing its canonical local root reference'
 
 jq -e --arg spec "$CYCLONEDX_SPEC_VERSION" '
@@ -85,7 +85,7 @@ jq -e --arg spec "$CYCLONEDX_SPEC_VERSION" '
     and (.metadata | type == "object")
     and (.metadata.timestamp | type == "string" and length > 0)
     and (.metadata.component.name == "qwen3-tts-server")
-    and (.metadata.component.version == "0.2.0")
+    and (.metadata.component.version == "0.3.0")
     and (.components | type == "array" and length > 0)
     and ([.components[] | select(
         (.type | type) != "string"
