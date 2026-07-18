@@ -148,8 +148,8 @@ rules.
 This is the speech-tokenizer **decoder**, not the 1.7B text/talker model. It
 cannot turn text or a voice description into codec frames by itself. The talker
 and code-predictor runtime must provide correctly ordered `[frame][16]` tokens.
-This research branch does not modify or connect to the Ephraim backend,
-frontend, or production containers.
+This research branch does not modify or connect to unrelated production
+services or containers.
 
 ## Primary references
 

@@ -182,7 +182,7 @@ must treat a request that reaches the ceiling as truncated.
 ## Current boundaries
 
 - This crate is a library, not an HTTP or gRPC service.
-- It is not connected to the Ephraim backend, frontend, or production TTS
+- It is not connected to any unrelated production backend, frontend, or TTS
   container.
 - There is no production runtime image yet.
 - Talker generation and codec decoding still execute sequentially within one

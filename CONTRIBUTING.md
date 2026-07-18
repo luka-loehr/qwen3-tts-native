@@ -25,7 +25,7 @@ The following are outside the current project scope:
 - Python, Node.js, PyTorch, SGLang, vLLM, TensorRT, or another model framework
   in the inference runtime or final image;
 - x86-64, a GPU architecture other than `sm_121`, or CPU-only inference;
-- Ephraim backend or frontend integration;
+- integration with unrelated production services;
 - languages not exposed by the pinned VoiceDesign checkpoint.
 
 Offline reference tooling may use a language appropriate to the task, but it

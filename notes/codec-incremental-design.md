@@ -4,7 +4,7 @@
 
 This note records the isolated native codec work for Qwen3-TTS 1.7B on the DGX
 Spark. The implementation lives in `native/qwen3-tts-native-codec`. It does not
-change the Ephraim backend, frontend, API, or production containers.
+change any unrelated production backend, frontend, API, or containers.
 
 The current executable path is a deterministic CUDA fixture. It validates the
 incremental contract and exact state capacity without claiming to execute the

@@ -137,8 +137,8 @@ memory using the equivalent relationship
 `post_free - pre_free * (1 - mem_fraction_static)`. A large unrelated GPU
 process changes both the admission result and the amount of memory available to
 the engine. The pinned Qwen3-TTS stage config sets the stock value to `0.85`.
-On the target Spark, diagnostic starts with an approximately 98 GB Ephraim
-process still resident failed even at explicit override fractions `0.05`,
+On the target Spark, diagnostic starts with an approximately 98 GB unrelated resident
+GPU process failed even at explicit override fractions `0.05`,
 `0.08`, and `0.10`. Those lower values are not the stock profile, and their
 failures describe a contaminated machine state rather than SGLang capacity or
 performance.
