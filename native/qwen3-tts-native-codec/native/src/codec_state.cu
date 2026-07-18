@@ -8,6 +8,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <new>
 #include <mutex>
@@ -430,6 +431,36 @@ __global__ void rms_norm_kernel(
     }
 }
 
+// QWEN3_TTS_CODEC_FAST: block-parallel RMS norm. Default path keeps the exact
+// single-thread reduction above so the parity gates stay bit-identical.
+__global__ void rms_norm_fast_kernel(
+    const float* input,
+    const float* weight,
+    size_t width,
+    float epsilon,
+    float* output
+) {
+    __shared__ float shared[256];
+    const unsigned tid = threadIdx.x;
+    float partial = 0.0F;
+    for (size_t index = tid; index < width; index += blockDim.x) {
+        const float value = input[index];
+        partial = fmaf(value, value, partial);
+    }
+    shared[tid] = partial;
+    __syncthreads();
+    for (unsigned stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
+        if (tid < stride) {
+            shared[tid] += shared[tid + stride];
+        }
+        __syncthreads();
+    }
+    const float scale = rsqrtf(shared[0] / static_cast<float>(width) + epsilon);
+    for (size_t index = tid; index < width; index += blockDim.x) {
+        output[index] = input[index] * scale * weight[index];
+    }
+}
+
 __global__ void apply_rope_kernel(
     float* query,
     float* key,
@@ -667,6 +698,57 @@ __global__ void layer_norm_kernel(
     }
 }
 
+// QWEN3_TTS_CODEC_FAST: one block per position, block-parallel channel reduction.
+__global__ void layer_norm_fast_kernel(
+    const float* input,
+    size_t positions,
+    size_t channels,
+    const float* weight,
+    const float* bias,
+    float epsilon,
+    float* output
+) {
+    const size_t position = blockIdx.x;
+    if (position >= positions) {
+        return;
+    }
+    __shared__ float shared[256];
+    const unsigned tid = threadIdx.x;
+    const float* row = input + position * channels;
+    float sum = 0.0F;
+    for (size_t channel = tid; channel < channels; channel += blockDim.x) {
+        sum += row[channel];
+    }
+    shared[tid] = sum;
+    __syncthreads();
+    for (unsigned stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
+        if (tid < stride) {
+            shared[tid] += shared[tid + stride];
+        }
+        __syncthreads();
+    }
+    const float mean = shared[0] / static_cast<float>(channels);
+    __syncthreads();
+    float variance = 0.0F;
+    for (size_t channel = tid; channel < channels; channel += blockDim.x) {
+        const float centered = row[channel] - mean;
+        variance = fmaf(centered, centered, variance);
+    }
+    shared[tid] = variance;
+    __syncthreads();
+    for (unsigned stride = blockDim.x >> 1; stride > 0; stride >>= 1) {
+        if (tid < stride) {
+            shared[tid] += shared[tid + stride];
+        }
+        __syncthreads();
+    }
+    const float scale = rsqrtf(shared[0] / static_cast<float>(channels) + epsilon);
+    float* out_row = output + position * channels;
+    for (size_t channel = tid; channel < channels; channel += blockDim.x) {
+        out_row[channel] = (row[channel] - mean) * scale * weight[channel] + bias[channel];
+    }
+}
+
 __global__ void gelu_kernel(float* values, size_t count) {
     const size_t item = blockIdx.x * blockDim.x + threadIdx.x;
     if (item < count) {
@@ -787,6 +869,111 @@ __global__ void transpose_overlap_neural_kernel(
     output[item] = result;
 }
 
+/* Repacked transposed-conv weights are immutable and shared by every session
+ * of the process, so they are built exactly once per source weight tensor and
+ * cached globally. Per-session allocation would issue device-synchronizing
+ * cudaMalloc/cudaFree on every request and stall all concurrent streams. */
+std::mutex g_repacked_transpose_mutex;
+std::unordered_map<const float*, float*> g_repacked_transpose_cache;
+
+// QWEN3_TTS_CODEC_FAST: repack transposed-conv weights so consecutive output
+// channels are contiguous in memory, making the weight loads fully coalesced.
+// Values are copied unchanged, so the fast transpose kernels below are
+// numerically identical to the default kernel (same fmaf operands and order).
+__global__ void repack_transpose_weight_kernel(
+    const float* weight,
+    size_t input_channels,
+    size_t output_channels,
+    size_t stride,
+    float* packed
+) {
+    const size_t span = 2 * stride;
+    const size_t total = input_channels * output_channels * span;
+    const size_t item = blockIdx.x * blockDim.x + threadIdx.x;
+    if (item >= total) {
+        return;
+    }
+    const size_t seg = item % span;
+    const size_t output_channel = (item / span) % output_channels;
+    const size_t input_channel = item / (span * output_channels);
+    packed[(input_channel * span + seg) * output_channels + output_channel] = weight[item];
+}
+
+__global__ void transpose_overlap_neural_fast_kernel(
+    const float* input,
+    size_t input_positions,
+    size_t input_channels,
+    size_t output_channels,
+    size_t stride,
+    const float* weight,
+    const float* bias,
+    const float* prior_tail,
+    float* output
+) {
+    const size_t output_positions = input_positions * stride;
+    const size_t item = blockIdx.x * blockDim.x + threadIdx.x;
+    const size_t total = output_positions * output_channels;
+    if (item >= total) {
+        return;
+    }
+    const size_t output_position = item / output_channels;
+    const size_t output_channel = item % output_channels;
+    const size_t input_position = output_position / stride;
+    const size_t phase = output_position % stride;
+    const size_t span = 2 * stride;
+    float result = bias[output_channel];
+    if (input_position == 0) {
+        result += prior_tail[phase * output_channels + output_channel];
+    } else {
+        for (size_t input_channel = 0; input_channel < input_channels; ++input_channel) {
+            const size_t weight_index =
+                (input_channel * span + stride + phase) * output_channels + output_channel;
+            result = fmaf(
+                input[(input_position - 1) * input_channels + input_channel],
+                weight[weight_index],
+                result);
+        }
+    }
+    for (size_t input_channel = 0; input_channel < input_channels; ++input_channel) {
+        const size_t weight_index =
+            (input_channel * span + phase) * output_channels + output_channel;
+        result = fmaf(
+            input[input_position * input_channels + input_channel],
+            weight[weight_index],
+            result);
+    }
+    output[item] = result;
+}
+
+__global__ void update_transpose_tail_neural_fast_kernel(
+    const float* input,
+    size_t input_positions,
+    size_t input_channels,
+    size_t output_channels,
+    size_t stride,
+    const float* weight,
+    float* tail
+) {
+    const size_t item = blockIdx.x * blockDim.x + threadIdx.x;
+    const size_t total = stride * output_channels;
+    if (item >= total) {
+        return;
+    }
+    const size_t span = 2 * stride;
+    const size_t phase = item / output_channels;
+    const size_t output_channel = item % output_channels;
+    float result = 0.0F;
+    for (size_t input_channel = 0; input_channel < input_channels; ++input_channel) {
+        const size_t weight_index =
+            (input_channel * span + stride + phase) * output_channels + output_channel;
+        result = fmaf(
+            input[(input_positions - 1) * input_channels + input_channel],
+            weight[weight_index],
+            result);
+    }
+    tail[item] = result;
+}
+
 __global__ void update_transpose_tail_neural_kernel(
     const float* input,
     size_t input_positions,
@@ -867,6 +1054,42 @@ size_t blocks_for(size_t items) noexcept {
     return (items + 255) / 256;
 }
 
+void launch_rms_norm(
+    cudaStream_t stream,
+    bool fast_mode,
+    const float* input,
+    const float* weight,
+    size_t width,
+    float epsilon,
+    float* output
+) noexcept {
+    if (fast_mode) {
+        rms_norm_fast_kernel<<<1, 256, 0, stream>>>(input, weight, width, epsilon, output);
+    } else {
+        rms_norm_kernel<<<1, 1, 0, stream>>>(input, weight, width, epsilon, output);
+    }
+}
+
+void launch_layer_norm(
+    cudaStream_t stream,
+    bool fast_mode,
+    const float* input,
+    size_t positions,
+    size_t channels,
+    const float* weight,
+    const float* bias,
+    float epsilon,
+    float* output
+) noexcept {
+    if (fast_mode) {
+        layer_norm_fast_kernel<<<positions, 256, 0, stream>>>(
+            input, positions, channels, weight, bias, epsilon, output);
+    } else {
+        layer_norm_kernel<<<blocks_for(positions), 256, 0, stream>>>(
+            input, positions, channels, weight, bias, epsilon, output);
+    }
+}
+
 }  // namespace
 
 struct DeviceTensor {
@@ -938,6 +1161,8 @@ struct Qwen3TtsCodecContextV1 {
     bool cancelled = false;
     bool device_packet_pending = false;
     bool counts_as_shared_session = false;
+    bool fast_mode = false;
+    float* repacked_transpose[4] = {nullptr, nullptr, nullptr, nullptr};
     Qwen3TtsCodecModelV1* model = nullptr;
 };
 
@@ -1155,7 +1380,7 @@ int32_t run_convnext_stage(
     if (norm_weight == nullptr || norm_bias == nullptr) {
         return kStatusModel;
     }
-    layer_norm_kernel<<<blocks_for(positions), 256, 0, context->stream>>>(
+    launch_layer_norm(context->stream, context->fast_mode,
         output, positions, 1024, norm_weight, norm_bias, 1.0e-6F, output
     );
     status = cudaGetLastError();
@@ -1477,36 +1702,59 @@ int32_t run_decoder_transpose(
     }
     float* tail = context->decoder_history + decoder_transpose_tail_offset(stage);
     const size_t output_count = positions * stride * output_channels;
-    transpose_overlap_neural_kernel<<<
-        blocks_for(output_count),
-        256,
-        0,
-        context->stream>>>(
-        input,
-        positions,
-        input_channels,
-        output_channels,
-        stride,
-        weight,
-        bias,
-        tail,
-        output
-    );
+    if (context->fast_mode) {
+        if (context->repacked_transpose[stage] == nullptr) {
+            std::lock_guard<std::mutex> lock(g_repacked_transpose_mutex);
+            const auto cached = g_repacked_transpose_cache.find(weight);
+            if (cached != g_repacked_transpose_cache.end()) {
+                context->repacked_transpose[stage] = cached->second;
+            } else {
+                const size_t weight_elements =
+                    input_channels * output_channels * (2 * stride);
+                float* packed = nullptr;
+                if (allocate_device(&packed, weight_elements) != cudaSuccess) {
+                    return cuda_error(
+                        error, error_capacity, "allocate repacked transpose weight",
+                        cudaErrorMemoryAllocation);
+                }
+                repack_transpose_weight_kernel<<<
+                    blocks_for(weight_elements), 256, 0, context->stream>>>(
+                    weight, input_channels, output_channels, stride, packed);
+                const cudaError_t repack_status =
+                    cudaStreamSynchronize(context->stream);
+                if (repack_status != cudaSuccess) {
+                    cudaFree(packed);
+                    return cuda_error(
+                        error, error_capacity, "repack transpose weight",
+                        repack_status);
+                }
+                g_repacked_transpose_cache.emplace(weight, packed);
+                context->repacked_transpose[stage] = packed;
+            }
+        }
+        transpose_overlap_neural_fast_kernel<<<
+            blocks_for(output_count), 256, 0, context->stream>>>(
+            input, positions, input_channels, output_channels, stride,
+            context->repacked_transpose[stage], bias, tail, output);
+    } else {
+        transpose_overlap_neural_kernel<<<
+            blocks_for(output_count), 256, 0, context->stream>>>(
+            input, positions, input_channels, output_channels, stride,
+            weight, bias, tail, output);
+    }
     cudaError_t status = cudaGetLastError();
     if (status == cudaSuccess) {
-        update_transpose_tail_neural_kernel<<<
-            blocks_for(stride * output_channels),
-            256,
-            0,
-            context->stream>>>(
-            input,
-            positions,
-            input_channels,
-            output_channels,
-            stride,
-            weight,
-            tail
-        );
+        if (context->fast_mode) {
+            update_transpose_tail_neural_fast_kernel<<<
+                blocks_for(stride * output_channels), 256, 0, context->stream>>>(
+                input, positions, input_channels, output_channels, stride,
+                context->repacked_transpose[stage], tail);
+        } else {
+            update_transpose_tail_neural_kernel<<<
+                blocks_for(stride * output_channels), 256, 0, context->stream>>>(
+                input, positions, input_channels, output_channels, stride,
+                weight, tail);
+        }
         status = cudaGetLastError();
     }
     return status == cudaSuccess
@@ -1957,7 +2205,7 @@ int32_t run_transformer_frame(
         if (norm_weight == nullptr) {
             return kStatusModel;
         }
-        rms_norm_kernel<<<1, 1, 0, context->stream>>>(
+        launch_rms_norm(context->stream, context->fast_mode,
             hidden_a, norm_weight, 512, 1.0e-5F, normalized
         );
         cudaError_t status = cudaGetLastError();
@@ -2058,7 +2306,7 @@ int32_t run_transformer_frame(
         if (norm_weight == nullptr) {
             return kStatusModel;
         }
-        rms_norm_kernel<<<1, 1, 0, context->stream>>>(
+        launch_rms_norm(context->stream, context->fast_mode,
             hidden_b, norm_weight, 512, 1.0e-5F, normalized
         );
         status = cudaGetLastError();
@@ -2144,7 +2392,7 @@ int32_t run_transformer_frame(
     if (final_norm == nullptr) {
         return kStatusModel;
     }
-    rms_norm_kernel<<<1, 1, 0, context->stream>>>(
+    launch_rms_norm(context->stream, context->fast_mode,
         hidden_a, final_norm, 512, 1.0e-5F, normalized
     );
     cudaError_t status = cudaGetLastError();
@@ -2240,6 +2488,8 @@ void release_context(Qwen3TtsCodecContextV1* context) noexcept {
     cudaFree(context->latent_expanded);
     cudaFree(context->latent_b);
     cudaFree(context->latent_a);
+    /* Repacked transpose weights are owned by the process-global cache and
+     * intentionally outlive every session. */
     cudaFree(context->decoder_history);
     cudaFree(context->decoder_im2col);
     cudaFree(context->decoder_b);
@@ -2482,6 +2732,19 @@ extern "C" QWEN3_TTS_CODEC_API int32_t qwen3_tts_codec_create_v1(
     if (status == cudaSuccess &&
         cublasSetStream(context->cublas, context->stream) != CUBLAS_STATUS_SUCCESS) {
         status = cudaErrorInitializationError;
+    }
+    if (status == cudaSuccess) {
+        const char* fast_env = std::getenv("QWEN3_TTS_CODEC_FAST");
+        context->fast_mode =
+            fast_env != nullptr && fast_env[0] == 49 && fast_env[1] == 0;
+        if (context->fast_mode) {
+            // TF32 is opt-in: it buys only ~5 percent over the exact fast path
+            // while raising peak waveform deviation from 3.2e-6 to 9.2e-4.
+            const char* tf32_env = std::getenv("QWEN3_TTS_CODEC_TF32");
+            if (tf32_env != nullptr && tf32_env[0] == '1' && tf32_env[1] == '\0') {
+                cublasSetMathMode(context->cublas, CUBLAS_TF32_TENSOR_OP_MATH);
+            }
+        }
     }
     if (status == cudaSuccess) {
         status = cudaEventCreate(&context->start_event);
