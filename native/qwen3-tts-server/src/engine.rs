@@ -302,9 +302,10 @@ impl SpeechRequest for NativeSpeechRequest {
         match self.handle.poll(timeout) {
             Ok(PollOutcome::Packet(packet)) => {
                 let descriptor = packet.descriptor;
-                let mut pcm_s16le = Vec::with_capacity(size_of_val(packet.pcm()));
-                for sample in packet.pcm() {
-                    pcm_s16le.extend_from_slice(&sample.to_le_bytes());
+                let pcm = packet.pcm();
+                let mut pcm_s16le = vec![0u8; size_of_val(pcm)];
+                for (bytes, sample) in pcm_s16le.chunks_exact_mut(2).zip(pcm) {
+                    bytes.copy_from_slice(&sample.to_le_bytes());
                 }
                 Ok(EnginePoll::Packet(EnginePacket {
                     sequence: descriptor.sequence,
