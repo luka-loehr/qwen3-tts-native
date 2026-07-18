@@ -11,9 +11,9 @@ handoff, the neural speech decoder, scheduling, and HTTP delivery—runs in
 native Rust and CUDA. Python, Node.js, PyTorch, SGLang, and vLLM are not part of
 the runtime or production image.
 
-> **Release `v0.3.0`:** source, the native service, and the hardened image are
+> **Release `v0.4.0`:** source, the native service, and the hardened image are
 > published in the
-> [`v0.3.0` GitHub release](https://github.com/luka-loehr/qwen3-tts-native/releases/tag/v0.3.0).
+> [`v0.4.0` GitHub release](https://github.com/luka-loehr/qwen3-tts-native/releases/tag/v0.4.0).
 > The controlled benchmark report and research paper derive from the
 > [`v0.1.0` release](https://github.com/luka-loehr/qwen3-tts-native/releases/tag/v0.1.0)
 > evidence bundle.

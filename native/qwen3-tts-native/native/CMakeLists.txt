@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(qwen3_tts_cuda VERSION 0.3.0 LANGUAGES CXX CUDA)
+project(qwen3_tts_cuda VERSION 0.4.0 LANGUAGES CXX CUDA)
 
 find_package(CUDAToolkit 13.0 REQUIRED)
 

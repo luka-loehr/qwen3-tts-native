@@ -10,6 +10,37 @@ for published releases.
 
 No changes yet.
 
+## [0.4.0] - 2026-07-18
+
+### Added
+
+- Fast research vocoder mode (`QWEN3_TTS_CODEC_FAST=1`): numerically exact
+  coalesced weight repack for the transposed-conv upsampler (cached once per
+  process), block-parallel norms, per-(session, frame-count) CUDA-graph
+  capture of the packet decode, and opt-in TF32 GEMMs
+  (`QWEN3_TTS_CODEC_TF32=1`). The default codec path is untouched and its
+  parity gates are unchanged.
+- Flash-style decode attention and INT8 epilogue fusion (residual adds and a
+  fused gate/up/SiLU kernel) in the INT8 research mode.
+- Exact-parity parallel sampling kernel: bit-identical selected tokens and
+  RNG state versus the previous kernel across 1.2 million randomized cases,
+  20-30x faster on sampled configurations.
+
+### Evidence-backed negative results
+
+- RTN INT4 talker weights: ~12 percent output error on real matrices versus
+  INT8's 0.9 percent, at most 1.6x at M=1 and slower than INT8 at M=6.
+  Rejected.
+- Codec INT8: exceeds the 1e-3 waveform-deviation budget by 10-3600x in
+  every subset; the continuous vocoder output has no token-quantization
+  cushion. Rejected.
+
+### Measured on an idle DGX Spark (all 24 workload languages, natural EOS)
+
+- INT8 + fast codec: single-stream RTF 0.287 with TTFA p50 55 ms; aggregate
+  RTF 0.139 (B3) and 0.107 (B6); per-request wall RTF 0.37 (B3) and 0.54
+  (B6).
+
 ## [0.3.0] - 2026-07-18
 
 ### Added
