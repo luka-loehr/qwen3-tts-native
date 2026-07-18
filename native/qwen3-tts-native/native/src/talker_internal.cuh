@@ -187,6 +187,30 @@ cudaError_t launch_store_sampled_token(
     cudaStream_t stream
 );
 
+cudaError_t launch_store_sampled_token_at(
+    int* tokens,
+    const int* index,
+    const int* sampled_token,
+    cudaStream_t stream
+);
+
+cudaError_t launch_sample_logits_at(
+    const __nv_bfloat16* logits,
+    int vocabulary,
+    bool suppress_talker_reserved,
+    int codec_eos_token,
+    const int* semantic_history,
+    const int* semantic_history_count,
+    int do_sample,
+    int top_k,
+    float top_p,
+    float temperature,
+    float repetition_penalty,
+    uint64_t* random_state,
+    int* selected_token,
+    cudaStream_t stream
+);
+
 cudaError_t launch_pack_frame_codes(
     const int* tokens,
     uint16_t* codes,
@@ -218,6 +242,20 @@ cudaError_t launch_rope_rows_at(
     int head_dimension,
     const int* positions,
     float theta,
+    cudaStream_t stream
+);
+
+cudaError_t launch_batch_causal_gqa_attention(
+    const __nv_bfloat16* query,
+    __nv_bfloat16* const* key_bases,
+    __nv_bfloat16* const* value_bases,
+    const int* positions,
+    __nv_bfloat16* output,
+    int rows,
+    int query_heads,
+    int key_value_heads,
+    int head_dimension,
+    int max_sequence_length,
     cudaStream_t stream
 );
 
@@ -257,6 +295,26 @@ cudaError_t launch_add_embedding_rows(
     const int* const* tokens,
     int token_offset,
     __nv_bfloat16* output,
+    int rows,
+    cudaStream_t stream
+);
+
+cudaError_t launch_quantize_weight_rows(
+    const __nv_bfloat16* weight,
+    int8_t* quantized,
+    float* scales,
+    int in_features,
+    int out_features,
+    cudaStream_t stream
+);
+
+cudaError_t launch_int8_gemm_rows(
+    const int8_t* weight,
+    const float* scales,
+    const __nv_bfloat16* input,
+    __nv_bfloat16* output,
+    int in_features,
+    int out_features,
     int rows,
     cudaStream_t stream
 );

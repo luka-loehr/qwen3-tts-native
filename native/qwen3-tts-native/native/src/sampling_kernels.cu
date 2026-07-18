@@ -71,7 +71,8 @@ __global__ void sample_logits_kernel(
     bool suppress_talker_reserved,
     int codec_eos_token,
     const int* semantic_history,
-    int semantic_history_count,
+    const int* semantic_history_count_ptr,
+    int semantic_history_count_fallback,
     int do_sample,
     int top_k,
     float top_p,
@@ -85,6 +86,9 @@ __global__ void sample_logits_kernel(
     __shared__ float selected_logits[kMaximumVocabulary];
     __shared__ float reduced_values[kThreads];
     __shared__ int reduced_indices[kThreads];
+    const int semantic_history_count = semantic_history_count_ptr != nullptr
+        ? *semantic_history_count_ptr
+        : semantic_history_count_fallback;
 
     for (int token = threadIdx.x; token < vocabulary; token += blockDim.x) {
         candidates[token] = adjusted_logit(
@@ -221,10 +225,12 @@ __global__ void store_token_kernel(int* tokens, int index, int value) {
 
 __global__ void store_sampled_token_kernel(
     int* tokens,
-    int index,
+    const int* index_ptr,
+    int index_fallback,
     const int* sampled_token
 ) {
     if (threadIdx.x == 0) {
+        const int index = index_ptr != nullptr ? *index_ptr : index_fallback;
         tokens[index] = *sampled_token;
     }
 }
@@ -293,7 +299,46 @@ cudaError_t launch_sample_logits(
         suppress_talker_reserved,
         codec_eos_token,
         semantic_history,
+        nullptr,
         semantic_history_count,
+        do_sample,
+        top_k,
+        top_p,
+        temperature,
+        repetition_penalty,
+        random_state,
+        selected_token
+    );
+    return cudaGetLastError();
+}
+
+cudaError_t launch_sample_logits_at(
+    const __nv_bfloat16* logits,
+    int vocabulary,
+    bool suppress_talker_reserved,
+    int codec_eos_token,
+    const int* semantic_history,
+    const int* semantic_history_count,
+    int do_sample,
+    int top_k,
+    float top_p,
+    float temperature,
+    float repetition_penalty,
+    uint64_t* random_state,
+    int* selected_token,
+    cudaStream_t stream
+) {
+    if (vocabulary <= 0 || vocabulary > kMaximumVocabulary) {
+        return cudaErrorInvalidValue;
+    }
+    sample_logits_kernel<<<1, kThreads, 0, stream>>>(
+        logits,
+        vocabulary,
+        suppress_talker_reserved,
+        codec_eos_token,
+        semantic_history,
+        semantic_history_count,
+        0,
         do_sample,
         top_k,
         top_p,
@@ -321,7 +366,17 @@ cudaError_t launch_store_sampled_token(
     const int* sampled_token,
     cudaStream_t stream
 ) {
-    store_sampled_token_kernel<<<1, 1, 0, stream>>>(tokens, index, sampled_token);
+    store_sampled_token_kernel<<<1, 1, 0, stream>>>(tokens, nullptr, index, sampled_token);
+    return cudaGetLastError();
+}
+
+cudaError_t launch_store_sampled_token_at(
+    int* tokens,
+    const int* index,
+    const int* sampled_token,
+    cudaStream_t stream
+) {
+    store_sampled_token_kernel<<<1, 1, 0, stream>>>(tokens, index, 0, sampled_token);
     return cudaGetLastError();
 }
 

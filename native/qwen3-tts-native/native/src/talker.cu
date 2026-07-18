@@ -227,6 +227,9 @@ struct BatchWorkspace {
                 static_cast<size_t>(kKvPointerCount) * sizeof(__nv_bfloat16*)
             );
             device_token_bases = DeviceBuffer(kCapacity * sizeof(const int*));
+            device_trailing = DeviceBuffer(kCapacity * sizeof(int));
+            device_trailing_ptrs = DeviceBuffer(kCapacity * sizeof(const int*));
+            device_counts = DeviceBuffer(kCapacity * sizeof(int));
             check_cuda(
                 cudaMallocHost(
                     reinterpret_cast<void**>(&pinned_positions),
@@ -248,6 +251,35 @@ struct BatchWorkspace {
                 ),
                 "cudaMallocHost(batch token bases)"
             );
+            check_cuda(
+                cudaMallocHost(
+                    reinterpret_cast<void**>(&pinned_trailing),
+                    kCapacity * sizeof(int)
+                ),
+                "cudaMallocHost(batch trailing tokens)"
+            );
+            check_cuda(
+                cudaMallocHost(
+                    reinterpret_cast<void**>(&pinned_counts),
+                    kCapacity * sizeof(int)
+                ),
+                "cudaMallocHost(batch history counts)"
+            );
+            {
+                const int* trailing_ptrs[kCapacity];
+                for (int slot = 0; slot < kCapacity; ++slot) {
+                    trailing_ptrs[slot] = device_trailing.as<int>() + slot;
+                }
+                check_cuda(
+                    cudaMemcpy(
+                        device_trailing_ptrs.as<const int*>(),
+                        trailing_ptrs,
+                        kCapacity * sizeof(const int*),
+                        cudaMemcpyHostToDevice
+                    ),
+                    "upload batch trailing pointers"
+                );
+            }
             for (int slot = 0; slot < kCapacity; ++slot) {
                 check_cuda(
                     cudaEventCreateWithFlags(&join_events[slot], cudaEventDisableTiming),
@@ -272,11 +304,20 @@ struct BatchWorkspace {
     BatchWorkspace& operator=(const BatchWorkspace&) = delete;
 
     void release() noexcept {
+        destroy_graph();
         for (int slot = 0; slot < kCapacity; ++slot) {
             if (join_events[slot] != nullptr) {
                 cudaEventDestroy(join_events[slot]);
                 join_events[slot] = nullptr;
             }
+        }
+        if (pinned_counts != nullptr) {
+            cudaFreeHost(pinned_counts);
+            pinned_counts = nullptr;
+        }
+        if (pinned_trailing != nullptr) {
+            cudaFreeHost(pinned_trailing);
+            pinned_trailing = nullptr;
         }
         if (pinned_token_bases != nullptr) {
             cudaFreeHost(pinned_token_bases);
@@ -320,7 +361,32 @@ struct BatchWorkspace {
     int* pinned_positions = nullptr;
     __nv_bfloat16** pinned_kv_bases = nullptr;
     const int** pinned_token_bases = nullptr;
+    int* pinned_trailing = nullptr;
+    int* pinned_counts = nullptr;
     std::array<cudaEvent_t, kCapacity> join_events{};
+    DeviceBuffer device_trailing;
+    DeviceBuffer device_trailing_ptrs;
+    DeviceBuffer device_counts;
+
+    /* Captured lockstep frame. Valid while the session tuple, sampling
+     * configurations, and capacities in graph_key are unchanged. */
+    cudaGraph_t graph = nullptr;
+    cudaGraphExec_t graph_exec = nullptr;
+    std::vector<uint64_t> graph_key;
+    int uncaptured_runs = 0;
+
+    void destroy_graph() noexcept {
+        if (graph_exec != nullptr) {
+            cudaGraphExecDestroy(graph_exec);
+            graph_exec = nullptr;
+        }
+        if (graph != nullptr) {
+            cudaGraphDestroy(graph);
+            graph = nullptr;
+        }
+        graph_key.clear();
+        uncaptured_runs = 0;
+    }
 };
 
 class TalkerModel {
@@ -1208,47 +1274,82 @@ public:
             c->pending_talker_position_ = static_cast<uint32_t>(c->position_);
         }
 
-        try {
-            // Order the batch stream after each session's prior work.
+        // Host-visible pinned tables. The captured upload nodes read these at
+        // every replay, so refreshing them re-parameterizes the graph without
+        // re-instantiation.
+        for (int slot = 0; slot < kPredictorSequence; ++slot) {
             for (int i = 0; i < n; ++i) {
-                check_cuda(
-                    cudaEventRecord(w.join_events[i], s[i]->stream_),
-                    "cudaEventRecord(batch join)"
-                );
-                check_cuda(
-                    cudaStreamWaitEvent(w.stream, w.join_events[i], 0),
-                    "cudaStreamWaitEvent(batch join)"
-                );
+                w.pinned_positions[slot * BatchWorkspace::kCapacity + i] = slot;
             }
+        }
+        for (int i = 0; i < n; ++i) {
+            w.pinned_positions[kPredictorSequence * BatchWorkspace::kCapacity + i] =
+                s[i]->position_;
+            w.pinned_token_bases[i] = s[i]->frame_tokens_.as<int>();
+            w.pinned_trailing[i] = trailing_text_tokens[i];
+            w.pinned_counts[i] = s[i]->generated_semantic_count_;
+        }
+        for (int layer = 0; layer < kTalkerLayers; ++layer) {
+            for (int i = 0; i < n; ++i) {
+                w.pinned_kv_bases[(layer * 2) * BatchWorkspace::kCapacity + i] =
+                    s[i]->talker_cache_[layer].key.as<__nv_bfloat16>();
+                w.pinned_kv_bases[(layer * 2 + 1) * BatchWorkspace::kCapacity + i] =
+                    s[i]->talker_cache_[layer].value.as<__nv_bfloat16>();
+            }
+        }
+        for (int layer = 0; layer < kPredictorLayers; ++layer) {
+            const int slot = kTalkerLayers + layer;
+            for (int i = 0; i < n; ++i) {
+                w.pinned_kv_bases[(slot * 2) * BatchWorkspace::kCapacity + i] =
+                    s[i]->predictor_cache_[layer].key.as<__nv_bfloat16>();
+                w.pinned_kv_bases[(slot * 2 + 1) * BatchWorkspace::kCapacity + i] =
+                    s[i]->predictor_cache_[layer].value.as<__nv_bfloat16>();
+            }
+        }
 
-            // Upload per-batch pointer and position tables once per frame.
-            for (int slot = 0; slot < kPredictorSequence; ++slot) {
-                for (int i = 0; i < n; ++i) {
-                    w.pinned_positions[slot * BatchWorkspace::kCapacity + i] = slot;
-                }
+        // The graph stays valid while the session tuple, per-session sampling
+        // configuration, and KV capacities are unchanged. Everything that
+        // varies per frame flows through device memory or the pinned tables.
+        int max_capacity = kPredictorSequence;
+        std::vector<uint64_t> key;
+        key.reserve(1 + static_cast<size_t>(n) * 12);
+        key.push_back(static_cast<uint64_t>(n));
+        for (int i = 0; i < n; ++i) {
+            max_capacity = std::max(max_capacity, s[i]->max_sequence_length_);
+            key.push_back(reinterpret_cast<uint64_t>(s[i]));
+            key.push_back(static_cast<uint64_t>(s[i]->max_sequence_length_));
+            for (const Qwen3TtsSamplingConfig* config :
+                 {&talker_sampling[i], &predictor_sampling[i]}) {
+                uint32_t top_p_bits = 0;
+                uint32_t temperature_bits = 0;
+                uint32_t penalty_bits = 0;
+                std::memcpy(&top_p_bits, &config->top_p, sizeof(top_p_bits));
+                std::memcpy(&temperature_bits, &config->temperature, sizeof(temperature_bits));
+                std::memcpy(&penalty_bits, &config->repetition_penalty, sizeof(penalty_bits));
+                key.push_back(static_cast<uint64_t>(config->do_sample));
+                key.push_back(static_cast<uint64_t>(config->top_k));
+                key.push_back(top_p_bits);
+                key.push_back(temperature_bits);
+                key.push_back(penalty_bits);
             }
-            for (int i = 0; i < n; ++i) {
-                w.pinned_positions[kPredictorSequence * BatchWorkspace::kCapacity + i] =
-                    s[i]->position_;
-                w.pinned_token_bases[i] = s[i]->frame_tokens_.as<int>();
+        }
+
+        TalkerContext* c0 = s[0];
+        const int* const* token_bases = w.device_token_bases.as<const int*>();
+        const int* const* trailing_ptrs = w.device_trailing_ptrs.as<const int*>();
+
+        const auto record_event = [&w](cudaEvent_t event, bool capturing) {
+            if (capturing) {
+                check_cuda(
+                    cudaEventRecordWithFlags(event, w.stream, cudaEventRecordExternal),
+                    "cudaEventRecordWithFlags(batch)"
+                );
+            } else {
+                check_cuda(cudaEventRecord(event, w.stream), "cudaEventRecord(batch)");
             }
-            for (int layer = 0; layer < kTalkerLayers; ++layer) {
-                for (int i = 0; i < n; ++i) {
-                    w.pinned_kv_bases[(layer * 2) * BatchWorkspace::kCapacity + i] =
-                        s[i]->talker_cache_[layer].key.as<__nv_bfloat16>();
-                    w.pinned_kv_bases[(layer * 2 + 1) * BatchWorkspace::kCapacity + i] =
-                        s[i]->talker_cache_[layer].value.as<__nv_bfloat16>();
-                }
-            }
-            for (int layer = 0; layer < kPredictorLayers; ++layer) {
-                const int slot = kTalkerLayers + layer;
-                for (int i = 0; i < n; ++i) {
-                    w.pinned_kv_bases[(slot * 2) * BatchWorkspace::kCapacity + i] =
-                        s[i]->predictor_cache_[layer].key.as<__nv_bfloat16>();
-                    w.pinned_kv_bases[(slot * 2 + 1) * BatchWorkspace::kCapacity + i] =
-                        s[i]->predictor_cache_[layer].value.as<__nv_bfloat16>();
-                }
-            }
+        };
+
+        const auto enqueue_frame = [&](bool capturing) {
             check_cuda(
                 cudaMemcpyAsync(
                     w.device_positions.as<int>(),
@@ -1281,25 +1382,40 @@ public:
                 ),
                 "upload batch token bases"
             );
+            check_cuda(
+                cudaMemcpyAsync(
+                    w.device_trailing.as<int>(),
+                    w.pinned_trailing,
+                    BatchWorkspace::kCapacity * sizeof(int),
+                    cudaMemcpyHostToDevice,
+                    w.stream
+                ),
+                "upload batch trailing tokens"
+            );
+            check_cuda(
+                cudaMemcpyAsync(
+                    w.device_counts.as<int>(),
+                    w.pinned_counts,
+                    BatchWorkspace::kCapacity * sizeof(int),
+                    cudaMemcpyHostToDevice,
+                    w.stream
+                ),
+                "upload batch history counts"
+            );
 
-            TalkerContext* c0 = s[0];
-            const int* const* token_bases = w.device_token_bases.as<const int*>();
-
-            // frame_tokens[0] = current semantic token, per session.
+            // frame_tokens[0] = current semantic token, taken from each
+            // session's device-resident last sampled token.
             for (int i = 0; i < n; ++i) {
                 check_cuda(
-                    qwen3_tts::launch_store_token(
+                    qwen3_tts::launch_store_sampled_token(
                         s[i]->frame_tokens_.as<int>(),
                         0,
-                        s[i]->current_semantic_token_,
+                        s[i]->sampled_token_.as<int>(),
                         w.stream
                     ),
                     "store semantic frame token"
                 );
-                check_cuda(
-                    cudaEventRecord(s[i]->predictor_start_, w.stream),
-                    "cudaEventRecord(predictor start)"
-                );
+                record_event(s[i]->predictor_start_, capturing);
             }
 
             // ---- Predictor: 16 lockstep positions ----
@@ -1369,7 +1485,7 @@ public:
                     "predictor input projection bias"
                 );
                 batch_run_decoder(w, s, n, c0->predictor_layers_, true,
-                                  kPredictorDimensions, position);
+                                  kPredictorDimensions, position, kPredictorSequence);
                 const int head = position - 1;
                 if (head >= 0) {
                     check_cuda(
@@ -1395,14 +1511,14 @@ public:
                     );
                     for (int i = 0; i < n; ++i) {
                         check_cuda(
-                            qwen3_tts::launch_sample_logits(
+                            qwen3_tts::launch_sample_logits_at(
                                 w.logits.as<__nv_bfloat16>()
                                     + static_cast<size_t>(i) * kPredictorVocabulary,
                                 kPredictorVocabulary,
                                 false,
                                 kCodecEos,
                                 s[i]->semantic_history_.as<int>(),
-                                s[i]->generated_semantic_count_,
+                                w.device_counts.as<int>() + i,
                                 predictor_sampling[i].do_sample,
                                 predictor_sampling[i].top_k,
                                 predictor_sampling[i].top_p,
@@ -1423,15 +1539,11 @@ public:
                             ),
                             "store predictor codebook token"
                         );
-                        ++s[i]->device_sample_count_;
                     }
                 }
             }
             for (int i = 0; i < n; ++i) {
-                check_cuda(
-                    cudaEventRecord(s[i]->predictor_stop_, w.stream),
-                    "cudaEventRecord(predictor stop)"
-                );
+                record_event(s[i]->predictor_stop_, capturing);
                 check_cuda(
                     qwen3_tts::launch_pack_frame_codes(
                         s[i]->frame_tokens_.as<int>(),
@@ -1440,10 +1552,7 @@ public:
                     ),
                     "pack codec frame"
                 );
-                check_cuda(
-                    cudaEventRecord(s[i]->frame_codes_ready_, w.stream),
-                    "cudaEventRecord(frame codes ready)"
-                );
+                record_event(s[i]->frame_codes_ready_, capturing);
             }
 
             // ---- Next talker embedding: codes + trailing text ----
@@ -1475,20 +1584,19 @@ public:
                     "add residual codec embedding"
                 );
             }
-            for (int i = 0; i < n; ++i) {
-                check_cuda(
-                    cudaMemcpyAsync(
-                        w.text_input.as<__nv_bfloat16>()
-                            + static_cast<size_t>(i) * kTalkerHidden,
-                        c0->text_embedding_
-                            + static_cast<size_t>(trailing_text_tokens[i]) * kTalkerHidden,
-                        kTalkerHidden * sizeof(__nv_bfloat16),
-                        cudaMemcpyDeviceToDevice,
-                        w.stream
-                    ),
-                    "gather trailing text embedding"
-                );
-            }
+            check_cuda(
+                qwen3_tts::launch_gather_embedding_rows(
+                    c0->text_embedding_,
+                    kTextVocabulary,
+                    kTalkerHidden,
+                    trailing_ptrs,
+                    0,
+                    w.text_input.as<__nv_bfloat16>(),
+                    n,
+                    w.stream
+                ),
+                "gather trailing text embedding"
+            );
             batch_gemm(
                 w,
                 c0->text_fc1_,
@@ -1541,13 +1649,10 @@ public:
 
             // ---- Talker step at each session's own position ----
             for (int i = 0; i < n; ++i) {
-                check_cuda(
-                    cudaEventRecord(s[i]->start_, w.stream),
-                    "cudaEventRecord(talker start)"
-                );
+                record_event(s[i]->start_, capturing);
             }
             batch_run_decoder(w, s, n, c0->talker_layers_, false,
-                              kTalkerDimensions, kPredictorSequence);
+                              kTalkerDimensions, kPredictorSequence, max_capacity);
             check_cuda(
                 qwen3_tts::launch_rms_norm_rows(
                     w.hidden.as<__nv_bfloat16>(),
@@ -1583,19 +1688,16 @@ public:
                 n
             );
             for (int i = 0; i < n; ++i) {
+                record_event(s[i]->stop_, capturing);
                 check_cuda(
-                    cudaEventRecord(s[i]->stop_, w.stream),
-                    "cudaEventRecord(talker stop)"
-                );
-                check_cuda(
-                    qwen3_tts::launch_sample_logits(
+                    qwen3_tts::launch_sample_logits_at(
                         w.logits.as<__nv_bfloat16>()
                             + static_cast<size_t>(i) * kTalkerVocabulary,
                         kTalkerVocabulary,
                         true,
                         kCodecEos,
                         s[i]->semantic_history_.as<int>(),
-                        s[i]->generated_semantic_count_,
+                        w.device_counts.as<int>() + i,
                         talker_sampling[i].do_sample,
                         talker_sampling[i].top_k,
                         talker_sampling[i].top_p,
@@ -1608,17 +1710,14 @@ public:
                     "sample talker logits"
                 );
                 check_cuda(
-                    qwen3_tts::launch_store_sampled_token(
+                    qwen3_tts::launch_store_sampled_token_at(
                         s[i]->semantic_history_.as<int>(),
-                        s[i]->generated_semantic_count_,
+                        w.device_counts.as<int>() + i,
                         s[i]->sampled_token_.as<int>(),
                         w.stream
                     ),
                     "append sampled semantic token"
                 );
-                ++s[i]->device_sample_count_;
-                ++s[i]->generated_semantic_count_;
-                ++s[i]->position_;
                 check_cuda(
                     cudaMemcpyAsync(
                         s[i]->host_sampled_token_,
@@ -1629,10 +1728,68 @@ public:
                     ),
                     "copy sampled token to pinned host memory"
                 );
+                record_event(s[i]->semantic_ready_, capturing);
+            }
+        };
+
+        try {
+            // Order the batch stream after each session's prior work. These
+            // waits stay outside the captured graph.
+            for (int i = 0; i < n; ++i) {
                 check_cuda(
-                    cudaEventRecord(s[i]->semantic_ready_, w.stream),
-                    "cudaEventRecord(semantic ready)"
+                    cudaEventRecord(w.join_events[i], s[i]->stream_),
+                    "cudaEventRecord(batch join)"
                 );
+                check_cuda(
+                    cudaStreamWaitEvent(w.stream, w.join_events[i], 0),
+                    "cudaStreamWaitEvent(batch join)"
+                );
+            }
+
+            if (w.graph_key != key) {
+                w.destroy_graph();
+                w.graph_key = key;
+            }
+            if (w.graph_exec != nullptr) {
+                check_cuda(cudaGraphLaunch(w.graph_exec, w.stream), "cudaGraphLaunch(batch frame)");
+            } else if (w.uncaptured_runs < 1) {
+                // First run for this tuple executes uncaptured so cuBLAS can
+                // finish heuristic and workspace setup outside capture.
+                enqueue_frame(false);
+                ++w.uncaptured_runs;
+            } else {
+                check_cuda(
+                    cudaStreamBeginCapture(w.stream, cudaStreamCaptureModeThreadLocal),
+                    "cudaStreamBeginCapture(batch frame)"
+                );
+                try {
+                    enqueue_frame(true);
+                } catch (...) {
+                    cudaGraph_t aborted = nullptr;
+                    cudaStreamEndCapture(w.stream, &aborted);
+                    if (aborted != nullptr) {
+                        cudaGraphDestroy(aborted);
+                    }
+                    throw;
+                }
+                check_cuda(
+                    cudaStreamEndCapture(w.stream, &w.graph),
+                    "cudaStreamEndCapture(batch frame)"
+                );
+                check_cuda(
+                    cudaGraphInstantiate(&w.graph_exec, w.graph, 0),
+                    "cudaGraphInstantiate(batch frame)"
+                );
+                check_cuda(
+                    cudaGraphLaunch(w.graph_exec, w.stream),
+                    "cudaGraphLaunch(first batch frame)"
+                );
+            }
+
+            for (int i = 0; i < n; ++i) {
+                s[i]->device_sample_count_ += static_cast<uint64_t>(kPredictorSequence);
+                ++s[i]->generated_semantic_count_;
+                ++s[i]->position_;
                 check_cuda(
                     cudaStreamWaitEvent(s[i]->stream_, s[i]->semantic_ready_, 0),
                     "cudaStreamWaitEvent(session rejoin)"
@@ -1645,6 +1802,7 @@ public:
                 s[i]->pending_host_code_copy_ = false;
                 s[i]->pending_lease_id_ = 0;
             }
+            w.destroy_graph();
             cudaStreamSynchronize(w.stream);
             throw;
         }
@@ -1707,8 +1865,10 @@ private:
         const std::vector<DecoderWeights>& layers,
         bool predictor,
         const ModelDimensions& dims,
-        int position_slot
+        int position_slot,
+        int span_capacity
     ) {
+        (void)s;
         const int* positions = w.device_positions.as<int>()
             + static_cast<size_t>(position_slot) * BatchWorkspace::kCapacity;
         const int layer_slot_base = predictor ? kTalkerLayers : 0;
@@ -1801,59 +1961,49 @@ private:
                 ),
                 "key RoPE"
             );
-            {
-                __nv_bfloat16* const* key_bases = w.device_kv_bases.as<__nv_bfloat16*>()
-                    + static_cast<size_t>(layer_slot_base + layer_index) * 2
-                        * BatchWorkspace::kCapacity;
-                __nv_bfloat16* const* value_bases =
-                    key_bases + BatchWorkspace::kCapacity;
-                check_cuda(
-                    qwen3_tts::launch_kv_scatter_rows(
-                        w.key.as<__nv_bfloat16>(),
-                        key_bases,
-                        positions,
-                        n,
-                        dims.key_value_width,
-                        w.stream
-                    ),
-                    "append key cache"
-                );
-                check_cuda(
-                    qwen3_tts::launch_kv_scatter_rows(
-                        w.value.as<__nv_bfloat16>(),
-                        value_bases,
-                        positions,
-                        n,
-                        dims.key_value_width,
-                        w.stream
-                    ),
-                    "append value cache"
-                );
-            }
-            for (int i = 0; i < n; ++i) {
-                LayerCache& cache = predictor
-                    ? s[i]->predictor_cache_[layer_index]
-                    : s[i]->talker_cache_[layer_index];
-                const int span = predictor
-                    ? position_slot + 1
-                    : s[i]->position_ + 1;
-                check_cuda(
-                    qwen3_tts::launch_causal_gqa_attention(
-                        w.query.as<__nv_bfloat16>()
-                            + static_cast<size_t>(i) * dims.query_width,
-                        cache.key.as<__nv_bfloat16>(),
-                        cache.value.as<__nv_bfloat16>(),
-                        w.attention.as<__nv_bfloat16>()
-                            + static_cast<size_t>(i) * dims.query_width,
-                        dims.query_heads,
-                        dims.key_value_heads,
-                        dims.head_dimension,
-                        span,
-                        w.stream
-                    ),
-                    "causal GQA attention"
-                );
-            }
+            __nv_bfloat16* const* key_bases = w.device_kv_bases.as<__nv_bfloat16*>()
+                + static_cast<size_t>(layer_slot_base + layer_index) * 2
+                    * BatchWorkspace::kCapacity;
+            __nv_bfloat16* const* value_bases =
+                key_bases + BatchWorkspace::kCapacity;
+            check_cuda(
+                qwen3_tts::launch_kv_scatter_rows(
+                    w.key.as<__nv_bfloat16>(),
+                    key_bases,
+                    positions,
+                    n,
+                    dims.key_value_width,
+                    w.stream
+                ),
+                "append key cache"
+            );
+            check_cuda(
+                qwen3_tts::launch_kv_scatter_rows(
+                    w.value.as<__nv_bfloat16>(),
+                    value_bases,
+                    positions,
+                    n,
+                    dims.key_value_width,
+                    w.stream
+                ),
+                "append value cache"
+            );
+            check_cuda(
+                qwen3_tts::launch_batch_causal_gqa_attention(
+                    w.query.as<__nv_bfloat16>(),
+                    key_bases,
+                    value_bases,
+                    positions,
+                    w.attention.as<__nv_bfloat16>(),
+                    n,
+                    dims.query_heads,
+                    dims.key_value_heads,
+                    dims.head_dimension,
+                    span_capacity,
+                    w.stream
+                ),
+                "causal GQA attention"
+            );
             batch_gemm(
                 w,
                 layer.output_projection,
