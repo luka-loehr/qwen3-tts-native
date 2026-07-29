@@ -1,0 +1,52 @@
+name  = "qwen3-tts-native"
+image = "universal"
+
+# No single root Cargo workspace — six independent crates under native/,
+# each with its own Cargo.toml + Cargo.lock (see tools/verify-repository.sh).
+# One target per crate, matching how this repo already builds/tests itself.
+
+[target.native]
+# Native artifact packer/loader: weight/tensor layer for the VoiceDesign model.
+dir       = "native/qwen3-tts-native"
+build     = "cargo build --release"
+test      = "cargo test --all-targets --all-features --locked"
+artifacts = "target/release"
+
+[target.native-codec]
+# Neural codec (PCM decode) FFI crate.
+dir       = "native/qwen3-tts-native-codec"
+build     = "cargo build --release"
+test      = "cargo test --all-targets --all-features --locked"
+artifacts = "target/release"
+
+[target.runtime]
+# Public C ABI runtime: connects the talker model to the codec decoder.
+dir       = "native/qwen3-tts-runtime"
+build     = "cargo build --release"
+test      = "cargo test --all-targets --all-features --locked"
+artifacts = "target/release"
+
+[target.server]
+# HTTP transport (axum). Needs QWEN3_TTS_MODEL_ROOT/TALKER_LIBRARY/CODEC_LIBRARY
+# and real model weights + native .so libraries at runtime, none of which live
+# in this repo, so only build/test are wired here (no dev/start).
+dir       = "native/qwen3-tts-server"
+build     = "cargo build --release"
+test      = "cargo test --all-targets --all-features --locked"
+artifacts = "target/release"
+port      = 8080
+health    = "/health/live"
+
+[target.bench]
+# In-process ABI qualification harness.
+dir       = "native/qwen3-tts-bench"
+build     = "cargo build --release"
+test      = "cargo test --all-targets --all-features --locked"
+artifacts = "target/release"
+
+[target.http-bench]
+# External HTTP benchmark client for the server's public API.
+dir       = "native/qwen3-tts-http-bench"
+build     = "cargo build --release"
+test      = "cargo test --all-targets --all-features --locked"
+artifacts = "target/release"
