@@ -22,7 +22,7 @@ the runtime or production image.
 
 Controlled two-round comparison against stock SGLang on one DGX Spark,
 single-stream profile B1 (details, evidence, and multi-stream profiles in
-[Verified performance](#verified-performance)):
+[Performance](#performance)):
 
 |  | native | stock SGLang |
 | --- | ---: | ---: |
@@ -113,7 +113,7 @@ TensorRT, cuDNN, NPP, cuSPARSE, and NCCL. See the
 [container documentation](containers/README.md) for the exact inputs, hashes,
 labels, and build gates.
 
-## Run the published image
+## Quickstart
 
 The production image targets NVIDIA DGX Spark (`linux/arm64`, GB10,
 `sm_121`). It is not a portable CPU image and is not qualified for x86-64 or a
@@ -250,7 +250,7 @@ and disabling payload logging throughout the surrounding stack. Do not send
 sensitive text to a deployment whose transport and observability controls you
 have not verified.
 
-## Verified performance
+## Performance
 
 ### Controlled Native-versus-stock-SGLang comparison
 
