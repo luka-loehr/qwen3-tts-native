@@ -1,4 +1,13 @@
+![qwen3-tts-native banner](docs/assets/banner.svg)
+
 # Qwen3-TTS Native
+
+[![Language](https://img.shields.io/badge/Rust-1.97-B7410E?style=flat&logo=rust&logoColor=white)](https://www.rust-lang.org)
+[![CUDA](https://img.shields.io/badge/CUDA-13.0-76B900?style=flat&logo=nvidia&logoColor=white)](https://developer.nvidia.com/cuda-toolkit)
+[![Target](https://img.shields.io/badge/target-sm__121%20(DGX%20Spark%20GB10)-1f6feb?style=flat)](docs/ARCHITECTURE.md)
+[![Release](https://img.shields.io/github/v/release/luka-loehr/qwen3-tts-native?style=flat&color=f97316)](https://github.com/luka-loehr/qwen3-tts-native/releases)
+[![Paper](https://img.shields.io/badge/research-paper%20(PDF)-8957e5?style=flat)](research/paper/qwen3-tts-native-paper.pdf)
+[![License](https://img.shields.io/badge/License-Apache--2.0-blue?style=flat)](LICENSE)
 
 Native Rust and CUDA inference for
 [`Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign`](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign),
@@ -10,6 +19,23 @@ the 1.7B VoiceDesign talker, its 15-step code predictor, device-to-device token
 handoff, the neural speech decoder, scheduling, and HTTP delivery—runs in
 native Rust and CUDA. Python, Node.js, PyTorch, SGLang, and vLLM are not part of
 the runtime or production image.
+
+## At a glance
+
+Controlled two-round comparison against stock SGLang on one DGX Spark,
+single-stream profile B1 (details, evidence, and multi-stream profiles in
+[Verified performance](#verified-performance)):
+
+|  | native | stock SGLang |
+| --- | ---: | ---: |
+| Time to first audio, p95 | **94–96 ms** | 2.69–2.70 s |
+| Peak GPU unified memory | **5.68 GB** | 108.90 GB |
+| Aggregate RTF (compute ÷ audio, lower is better) | 0.80 | **0.50** |
+
+Native's measured advantages are progressive time to first audio (~28×) and
+~19× lower peak memory; stock SGLang keeps the better aggregate throughput in
+every profile. Single-stream natural-EOS endurance: 200/200 requests, TTFA
+p95 76.95 ms, aggregate RTF 0.734.
 
 > **Release `v0.4.0`:** source, the native service, and the hardened image are
 > published in the
