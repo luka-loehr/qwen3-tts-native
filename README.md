@@ -1,7 +1,5 @@
 ![qwen3-tts-native banner](docs/assets/banner.svg)
 
-# Qwen3-TTS Native
-
 [![Language](https://img.shields.io/badge/Rust-1.97-B7410E?style=flat&logo=rust&logoColor=white)](https://www.rust-lang.org)
 [![CUDA](https://img.shields.io/badge/CUDA-13.0-76B900?style=flat&logo=nvidia&logoColor=white)](https://developer.nvidia.com/cuda-toolkit)
 [![Target](https://img.shields.io/badge/target-sm__121%20(DGX%20Spark%20GB10)-1f6feb?style=flat)](docs/ARCHITECTURE.md)
