@@ -1,4 +1,4 @@
-FROM lmsysorg/sglang:v0.5.12.post1-cu130-runtime@sha256:8df56b542526f4fffd5372f7f65a583c7852e50442c1f43c9c3feddfd93944a4
+FROM lmsysorg/sglang:v0.5.18-cu130-runtime@sha256:d89bf566cec87e4beed8ee4068b409552eef1f83d3d9c9efb94a6e98753a70cd
 
 ARG TARGETARCH
 ARG SGLANG_OMNI_COMMIT=8e272bcb8832ef1a3865ec48255d36f4871ec885
