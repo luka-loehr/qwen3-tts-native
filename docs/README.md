@@ -9,16 +9,16 @@ contract.
 The inference path is implemented in Rust and CUDA. It does not use Python,
 Node.js, PyTorch, SGLang, or vLLM at runtime.
 
-> **Publication boundary:** deployment examples consume the complete
-> digest-pinned `QWEN3_TTS_IMAGE` reference recorded in the `v0.1.0` GitHub
-> release. They deliberately reject missing values and mutable tags. A local
-> or candidate image is not a published release, even if it starts correctly.
+> Deployment examples use the digest-pinned `QWEN3_TTS_IMAGE` reference from
+> the latest GitHub release.
 
 ## Documentation map
 
 | Document | Purpose |
 | --- | --- |
 | [Project README](../README.md) | Scope, capabilities, published image, verified performance, and repository map. |
+| [Project overview](PROJECT.md) | Scope, languages, endpoints, build, repository layout, and citation. |
+| [Performance](BENCHMARKS.md) | Controlled SGLang comparison and historical native baselines. |
 | [Quickstart](QUICKSTART.md) | Pull, run, verify, and call the digest-pinned container. |
 | [API](API.md) | Human-readable HTTP and multipart streaming contract. |
 | [OpenAPI](openapi.yaml) | Machine-readable OpenAPI 3.1 description of the HTTP surface. |

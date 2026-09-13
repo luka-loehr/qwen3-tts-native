@@ -15,13 +15,13 @@ download a model separately and do not mount model files into the container.
 
 ## 1. Select the immutable image
 
-Copy the complete image reference from the `v0.1.0` GitHub release. Do not
+Copy the complete image reference from the latest GitHub release. Do not
 derive a digest from a candidate tag or copy one from a benchmark run.
 
 ```bash
-: "${QWEN3_TTS_IMAGE:?Set QWEN3_TTS_IMAGE from the v0.1.0 release notes}"
+: "${QWEN3_TTS_IMAGE:?Set QWEN3_TTS_IMAGE from the release notes}"
 if [[ ! "$QWEN3_TTS_IMAGE" =~ ^ghcr.io/luka-loehr/qwen3-tts-native@sha256:[0-9a-f]{64}$ ]]; then
-  printf 'Expected the immutable v0.1.0 GHCR reference, got: %s\n' \
+  printf 'Expected the immutable GHCR reference, got: %s\n' \
     "$QWEN3_TTS_IMAGE" >&2
   exit 1
 fi
