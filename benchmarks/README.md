@@ -46,10 +46,10 @@ name are the final tensor-index implementation. Temporary F32 and repeat
 artifacts are deleted after validation; their small JSON and `time -v` reports
 remain as provenance. Host-specific command paths in those text reports are
 normalized to `/workspace` and `/models` for publication; every measured
-GNU-time field remains unchanged. Hash-bound historical JSON evidence retains
-its original generic `<home>` capture paths so that its
-provenance is not silently rewritten; those paths contain neither a personal
-name nor a credential and are not runtime configuration.
+GNU-time field remains unchanged. Host paths in historical JSON evidence are
+likewise normalized to `<artifacts>/`, `<worktree>/`, and `<home>/`
+placeholders; measurements are unchanged, and the SHA-256 values in the
+affected manifests were updated to match.
 
 Weight loading is not neural inference. Artifact pack, mmap-open, file-hash, and
 host-to-device copy timings must never be described as TTFA, RTF, streaming, or

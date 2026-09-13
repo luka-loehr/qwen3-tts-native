@@ -29,7 +29,7 @@
     },
     "report": {
       "path_in_repository": "benchmarks/results/native-multilingual-natural-eos-ff061b6.json",
-      "sha256": "feed352bdf6955db6cbc595dd2b1eff717faf3ce2898717ed084899424cdd052"
+      "sha256": "5ee57f2e2eeea7625b4a50387c9d23edf8ad095470e43094b320b71e385a2af8"
     },
     "audio_hash_manifest": {
       "path_in_repository": "benchmarks/results/native-multilingual-natural-eos-ff061b6-audio.sha256",

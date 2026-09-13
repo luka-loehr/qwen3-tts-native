@@ -15,7 +15,7 @@
   "artifacts": {
     "report": {
       "path_in_repository": "benchmarks/results/native-server-startup-warmup-ce46acb.json",
-      "sha256": "dcab3cc835412335f48d8aa395fcff6d70b4290b9cf43b7f74f089a2f46241b1"
+      "sha256": "3b1c8fc1663f4f43cf424da77f63d95a134b64ef9459e5c1924b039dd72a9742"
     },
     "server_sha256": "253a7b5f95a82b0f06295248f0fecd337d23b4feeb22ff659c1bcf9443125c7d",
     "healthcheck_sha256": "48e2ea44c018a0621f94c7bee9f37421add0196613b61281be09eff33a87f907",
