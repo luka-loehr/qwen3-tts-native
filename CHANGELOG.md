@@ -8,7 +8,23 @@ for published releases.
 
 ## [Unreleased]
 
-No changes yet.
+### Security
+
+- Server lockfile: h2 0.4.15 -> 0.4.20 for RUSTSEC-2026-0258
+  (GHSA-q83h-524g-xf6h, unbounded empty HTTP/2 DATA frames).
+- Report tooling: `reports/requirements-report.txt` requires Pillow 12.3.0 or
+  newer, so environments cannot keep Pillow releases with known high and
+  critical advisories.
+
+### Changed
+
+- Dependency updates: fancy-regex 0.19.2 (native, runtime, server), tokio
+  1.53 and thiserror 2.0.20/2.0.21 (server, HTTP bench), clap 4.6.6 (HTTP
+  bench), libc 0.2.189 (runtime). A model-free unit test now pins the Qwen2
+  pre-tokenizer splits so a regex engine upgrade cannot silently change BPE
+  input.
+- Fixed-size chunk loops use `slice::as_chunks`, keeping
+  `tools/verify-repository.sh` clean on Rust 1.99 clippy. No behavior change.
 
 ## [0.4.0] - 2026-07-18
 
