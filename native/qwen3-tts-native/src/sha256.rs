@@ -60,13 +60,11 @@ impl Sha256 {
             }
         }
 
-        let mut chunks = input.chunks_exact(64);
-        for chunk in &mut chunks {
-            let block: &[u8; 64] = chunk.try_into().expect("exact chunk size");
+        let (blocks, remainder) = input.as_chunks::<64>();
+        for block in blocks {
             self.compress(block);
         }
 
-        let remainder = chunks.remainder();
         self.block[..remainder.len()].copy_from_slice(remainder);
         self.block_len = remainder.len();
     }
@@ -93,16 +91,16 @@ impl Sha256 {
         self.compress(&block);
 
         let mut digest = [0_u8; 32];
-        for (word, destination) in self.state.iter().zip(digest.chunks_exact_mut(4)) {
-            destination.copy_from_slice(&word.to_be_bytes());
+        for (word, destination) in self.state.iter().zip(digest.as_chunks_mut::<4>().0) {
+            *destination = word.to_be_bytes();
         }
         digest
     }
 
     fn compress(&mut self, block: &[u8; 64]) {
         let mut schedule = [0_u32; 64];
-        for (index, bytes) in block.chunks_exact(4).enumerate() {
-            schedule[index] = u32::from_be_bytes(bytes.try_into().expect("four bytes"));
+        for (index, bytes) in block.as_chunks::<4>().0.iter().enumerate() {
+            schedule[index] = u32::from_be_bytes(*bytes);
         }
         for index in 16..64 {
             let s0 = schedule[index - 15].rotate_right(7)

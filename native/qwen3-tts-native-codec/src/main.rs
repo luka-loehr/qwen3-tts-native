@@ -141,10 +141,7 @@ fn shared_session_parity(
     if codes.len() % ffi::CODEBOOKS != 0 {
         return Err(io::Error::other("fixture code count is not divisible by 16").into());
     }
-    let base_frames = codes
-        .chunks_exact(ffi::CODEBOOKS)
-        .map(|values| values.try_into().expect("chunk contains exactly 16 codes"))
-        .collect::<Vec<[u16; ffi::CODEBOOKS]>>();
+    let base_frames = codes.as_chunks::<{ ffi::CODEBOOKS }>().0.to_vec();
     if base_frames.len() != 4 {
         return Err(io::Error::other("shared-session fixture must contain four frames").into());
     }
@@ -614,10 +611,7 @@ fn batch_parity(
     if codes.len() % ffi::CODEBOOKS != 0 {
         return Err(io::Error::other("fixture code count is not divisible by 16").into());
     }
-    let base_frames = codes
-        .chunks_exact(ffi::CODEBOOKS)
-        .map(|values| values.try_into().expect("chunk contains exactly 16 codes"))
-        .collect::<Vec<[u16; ffi::CODEBOOKS]>>();
+    let base_frames = codes.as_chunks::<{ ffi::CODEBOOKS }>().0.to_vec();
     if base_frames.len() != 4 {
         return Err(io::Error::other("batch fixture must contain four frames").into());
     }
@@ -841,10 +835,7 @@ fn neural_parity(
     if codes.len() % ffi::CODEBOOKS != 0 {
         return Err(io::Error::other("fixture code count is not divisible by 16").into());
     }
-    let frames = codes
-        .chunks_exact(ffi::CODEBOOKS)
-        .map(|values| values.try_into().expect("chunk contains exactly 16 codes"))
-        .collect::<Vec<[u16; ffi::CODEBOOKS]>>();
+    let frames = codes.as_chunks::<{ ffi::CODEBOOKS }>().0.to_vec();
     let expected = read_i16_le(&fixture_path.join("reference-pcm.s16le"))?;
     if expected.len() != frames.len() * ffi::SAMPLES_PER_FRAME {
         return Err(io::Error::other("official PCM fixture has an invalid length").into());
@@ -995,10 +986,7 @@ fn decoder_parity(
     if codes.len() % ffi::CODEBOOKS != 0 {
         return Err(io::Error::other("fixture code count is not divisible by 16").into());
     }
-    let frames = codes
-        .chunks_exact(ffi::CODEBOOKS)
-        .map(|values| values.try_into().expect("chunk contains exactly 16 codes"))
-        .collect::<Vec<[u16; ffi::CODEBOOKS]>>();
+    let frames = codes.as_chunks::<{ ffi::CODEBOOKS }>().0.to_vec();
     let specifications = [
         (6_u32, "06-decoder-pre-conv.f32le", 5.0e-5_f64, 4, 1536),
         (7, "07-decoder-block-1.f32le", 5.0e-5, 32, 768),
@@ -1094,10 +1082,7 @@ fn latent_parity(
     if codes.len() % ffi::CODEBOOKS != 0 {
         return Err(io::Error::other("fixture code count is not divisible by 16").into());
     }
-    let frames = codes
-        .chunks_exact(ffi::CODEBOOKS)
-        .map(|values| values.try_into().expect("chunk contains exactly 16 codes"))
-        .collect::<Vec<[u16; ffi::CODEBOOKS]>>();
+    let frames = codes.as_chunks::<{ ffi::CODEBOOKS }>().0.to_vec();
     let expected_one = read_f32_le(&fixture_path.join("04-latent-upsample-1.f32le"))?;
     let expected_two = read_f32_le(&fixture_path.join("05-latent-upsample-2.f32le"))?;
     let api = Api::load(library_path)?;
@@ -1197,10 +1182,7 @@ fn transformer_parity(
     if codes.len() % ffi::CODEBOOKS != 0 {
         return Err(io::Error::other("fixture code count is not divisible by 16").into());
     }
-    let frames = codes
-        .chunks_exact(ffi::CODEBOOKS)
-        .map(|values| values.try_into().expect("chunk contains exactly 16 codes"))
-        .collect::<Vec<[u16; ffi::CODEBOOKS]>>();
+    let frames = codes.as_chunks::<{ ffi::CODEBOOKS }>().0.to_vec();
     let expected = read_f32_le(&fixture_path.join("03-transformer.f32le"))?;
     let api = Api::load(library_path)?;
     let model = model::SafetensorsFile::open(model_path)?;
@@ -1253,10 +1235,7 @@ fn frontend_parity(
     if codes.len() % ffi::CODEBOOKS != 0 {
         return Err(io::Error::other("fixture code count is not divisible by 16").into());
     }
-    let frames = codes
-        .chunks_exact(ffi::CODEBOOKS)
-        .map(|values| values.try_into().expect("chunk contains exactly 16 codes"))
-        .collect::<Vec<[u16; ffi::CODEBOOKS]>>();
+    let frames = codes.as_chunks::<{ ffi::CODEBOOKS }>().0.to_vec();
     let expected_rvq = read_f32_le(&fixture_path.join("01-rvq.f32le"))?;
     let expected_preconv = read_f32_le(&fixture_path.join("02-pre-conv.f32le"))?;
 
@@ -1391,8 +1370,10 @@ fn read_u16_le(path: &Path) -> Result<Vec<u16>, Box<dyn Error>> {
         return Err(io::Error::other("u16 fixture has a partial scalar").into());
     }
     Ok(bytes
-        .chunks_exact(2)
-        .map(|chunk| u16::from_le_bytes(chunk.try_into().expect("two bytes")))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|chunk| u16::from_le_bytes(*chunk))
         .collect())
 }
 
@@ -1402,8 +1383,10 @@ fn read_i16_le(path: &Path) -> Result<Vec<i16>, Box<dyn Error>> {
         return Err(io::Error::other("i16 fixture has a partial scalar").into());
     }
     Ok(bytes
-        .chunks_exact(2)
-        .map(|chunk| i16::from_le_bytes(chunk.try_into().expect("two bytes")))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|chunk| i16::from_le_bytes(*chunk))
         .collect())
 }
 
@@ -1413,8 +1396,10 @@ fn read_f32_le(path: &Path) -> Result<Vec<f32>, Box<dyn Error>> {
         return Err(io::Error::other("f32 fixture has a partial scalar").into());
     }
     Ok(bytes
-        .chunks_exact(4)
-        .map(|chunk| f32::from_le_bytes(chunk.try_into().expect("four bytes")))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|chunk| f32::from_le_bytes(*chunk))
         .collect())
 }
 
