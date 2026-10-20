@@ -688,7 +688,7 @@ mod tests {
         assert!(body.get("subtalker_top_k").is_none());
         let audit = entry.sampling_audit();
         assert!(audit.parity_qualifying);
-        assert!(audit.non_qualifying_reasons.is_empty());
+        assert_eq!(audit.non_qualifying_reasons, Vec::<String>::new());
     }
 
     #[test]

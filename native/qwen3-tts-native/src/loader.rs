@@ -690,7 +690,7 @@ fn parse_sha256(encoded: &str) -> Result<[u8; 32]> {
         bail!("SHA-256 must be exactly 64 lowercase hexadecimal characters");
     }
     let mut digest = [0_u8; 32];
-    for (destination, pair) in digest.iter_mut().zip(encoded.as_bytes().chunks_exact(2)) {
+    for (destination, pair) in digest.iter_mut().zip(encoded.as_bytes().as_chunks::<2>().0) {
         let pair = std::str::from_utf8(pair).expect("validated ASCII hexadecimal");
         *destination = u8::from_str_radix(pair, 16).expect("validated hexadecimal byte");
     }

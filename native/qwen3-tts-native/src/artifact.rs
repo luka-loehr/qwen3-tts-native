@@ -375,16 +375,14 @@ fn validate_decoder_finite(
         let tensor = source
             .tensor(name)
             .with_context(|| format!("source speech tokenizer is missing {name}"))?;
-        let mut values = tensor.data().chunks_exact(4);
-        for (index, bytes) in values.by_ref().enumerate() {
-            let value = f32::from_bits(u32::from_le_bytes(
-                bytes.try_into().expect("four-byte chunk"),
-            ));
+        let (values, remainder) = tensor.data().as_chunks::<4>();
+        for (index, bytes) in values.iter().enumerate() {
+            let value = f32::from_bits(u32::from_le_bytes(*bytes));
             if !value.is_finite() {
                 bail!("source decoder tensor {name} contains non-finite value at index {index}");
             }
         }
-        if !values.remainder().is_empty() {
+        if !remainder.is_empty() {
             bail!("source decoder tensor {name} has a truncated F32 payload");
         }
     }
@@ -394,8 +392,8 @@ fn validate_decoder_finite(
 fn f32_bytes_to_bf16(source: &[u8]) -> Vec<u8> {
     debug_assert_eq!(source.len() % 4, 0);
     let mut output = Vec::with_capacity(source.len() / 2);
-    for bytes in source.chunks_exact(4) {
-        let bits = u32::from_le_bytes(bytes.try_into().expect("four-byte chunk"));
+    for bytes in source.as_chunks::<4>().0 {
+        let bits = u32::from_le_bytes(*bytes);
         let rounded = bits.wrapping_add(0x7fff + ((bits >> 16) & 1));
         output.extend_from_slice(&((rounded >> 16) as u16).to_le_bytes());
     }
@@ -746,8 +744,10 @@ mod tests {
             .collect::<Vec<_>>();
         let converted = f32_bytes_to_bf16(&source);
         let actual = converted
-            .chunks_exact(2)
-            .map(|bytes| u16::from_le_bytes(bytes.try_into().unwrap()))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|bytes| u16::from_le_bytes(*bytes))
             .collect::<Vec<_>>();
         assert_eq!(actual, [0x3f80, 0x3f80, 0x3f80, 0x3f82, 0xbf80]);
     }
