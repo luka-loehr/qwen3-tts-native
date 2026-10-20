@@ -225,4 +225,37 @@ mod tests {
         values.dedup();
         assert_eq!(values.len(), 256);
     }
+
+    /// Pins the Qwen2 pre-tokenizer splits without model files, so a regex
+    /// engine upgrade cannot silently change BPE input boundaries. The
+    /// expected pieces were produced by fancy-regex 0.16.2, the version that
+    /// passed the real-model parity tests.
+    #[test]
+    fn pretokenizer_splits_match_reference_pieces() {
+        let pattern = Regex::new(PRETOKENIZE_REGEX).unwrap();
+        let cases: [(&str, &[&str]); 3] = [
+            (
+                "I'm sure they'LL see 2026 voices!",
+                &[
+                    "I", "'m", " sure", " they", "'LL", " see", " ", "2", "0", "2", "6", " voices",
+                    "!",
+                ],
+            ),
+            (
+                "line one\n\n  indented\ttab  ",
+                &["line", " one", "\n\n", " ", " indented", "\ttab", "  "],
+            ),
+            (
+                "Français — déjà vu, 日本語。",
+                &["Français", " —", " déjà", " vu", ",", " 日本語", "。"],
+            ),
+        ];
+        for (text, expected) in cases {
+            let pieces = pattern
+                .find_iter(text)
+                .map(|piece| piece.unwrap().as_str())
+                .collect::<Vec<_>>();
+            assert_eq!(pieces, expected, "pre-tokenizer pieces for {text:?}");
+        }
+    }
 }
