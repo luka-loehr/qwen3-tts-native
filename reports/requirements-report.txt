@@ -1,1 +1,4 @@
 reportlab==4.4.9
+# Pillow is a ReportLab dependency; this floor keeps old, vulnerable Pillow
+# releases (fixed in 12.3.0) out of report environments.
+pillow>=12.3.0
