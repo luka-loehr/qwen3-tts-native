@@ -55,7 +55,7 @@ RUN python3 -m pip install \
       --force-reinstall \
       --require-hashes \
       --requirement /tmp/requirements-build.txt \
-    && test "$(uv --version)" = "uv 0.11.16 (aarch64-unknown-linux-gnu)"
+    && test "$(uv --version)" = "uv 0.13.4 (aarch64-unknown-linux-gnu)"
 
 # Install the complete stock dependency declaration after applying the sole
 # ARM64 packaging patch. Compute-critical versions are pinned by upstream and
@@ -78,7 +78,7 @@ RUN python3 -m pip install \
 
 COPY qwen3_tts_1_7b_voicedesign.yaml /opt/baseline/qwen3_tts_1_7b_voicedesign.yaml
 
-RUN python3 -c 'import platform; from importlib.metadata import version; from sglang_omni.models.qwen3_tts.compat import apply_qwen_tts_transformers_compatibility_patches; apply_qwen_tts_transformers_compatibility_patches(); import librosa, qwen_tts, sglang_omni, torch, transformers; assert platform.machine() in {"aarch64", "arm64"}; assert version("uv") == "0.11.16"; assert version("sglang") == "0.5.12.post1"; assert version("sglang-omni") == "0.1.0"; assert version("qwen-tts") == "0.1.1"; assert version("transformers") == "5.6.0"; assert version("torch").split("+")[0] == "2.11.0"'
+RUN python3 -c 'import platform; from importlib.metadata import version; from sglang_omni.models.qwen3_tts.compat import apply_qwen_tts_transformers_compatibility_patches; apply_qwen_tts_transformers_compatibility_patches(); import librosa, qwen_tts, sglang_omni, torch, transformers; assert platform.machine() in {"aarch64", "arm64"}; assert version("uv") == "0.13.4"; assert version("sglang") == "0.5.12.post1"; assert version("sglang-omni") == "0.1.0"; assert version("qwen-tts") == "0.1.1"; assert version("transformers") == "5.6.0"; assert version("torch").split("+")[0] == "2.11.0"'
 
 EXPOSE 8000
 CMD ["sgl-omni", "--help"]

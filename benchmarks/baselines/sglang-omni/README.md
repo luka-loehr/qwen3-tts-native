@@ -19,7 +19,7 @@ captured on the target Spark.
 | Linux ARM64 manifest | `sha256:f9860e7a07845585ccf082ec97bba712086bf10ef9ddaa317085a4a0316a4b8e` |
 | SGLang build | `0.5.12.post1`, source commit `5a15cde858ea09b77116212a39356f2fc51b8584` |
 | PyTorch / Transformers | `2.11.0` / `5.6.0` |
-| Dependency installer | `uv 0.11.16`, ARM64 wheel SHA-256 `cfe1f06fb8f135a735a961065d5ee90f99cccf41749fb1f964edb5b3c3dae19b` |
+| Dependency installer | `uv 0.13.4`, ARM64 wheel SHA-256 `7b3cdf868e5415631fe797b648c0d6945d38d388f23367bdd0b6332e80a1fcb0` |
 | qwen-tts | `0.1.1`, wheel SHA-256 `11a290d8dabc7ef91a90c54478c8ab19b3edb1d85c0882313721892bdc4af15d` |
 | System SoX | Ubuntu Noble ARM64 `14.4.2+git20190427-4build4` |
 | VoiceDesign model | revision `5ecdb67327fd37bb2e042aab12ff7391903235d3` |
